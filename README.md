@@ -184,32 +184,32 @@ project-change-router.profile.yml
 
 现成最小模板见：
 
-- [examples/profiles/README.md](E:\_workspace\SaaS\project-change-router\examples\profiles\README.md)
-- [examples/profiles/python-monorepo.project-change-router.yaml](E:\_workspace\SaaS\project-change-router\examples\profiles\python-monorepo.project-change-router.yaml)
-- [examples/profiles/ts-workspace.project-change-router.yaml](E:\_workspace\SaaS\project-change-router\examples\profiles\ts-workspace.project-change-router.yaml)
-- [examples/profiles/mixed-repo.project-change-router.yaml](E:\_workspace\SaaS\project-change-router\examples\profiles\mixed-repo.project-change-router.yaml)
+- [examples/profiles/README.md](./examples/profiles/README.md)
+- [examples/profiles/python-monorepo.project-change-router.yaml](./examples/profiles/python-monorepo.project-change-router.yaml)
+- [examples/profiles/ts-workspace.project-change-router.yaml](./examples/profiles/ts-workspace.project-change-router.yaml)
+- [examples/profiles/mixed-repo.project-change-router.yaml](./examples/profiles/mixed-repo.project-change-router.yaml)
 
 ## Bundle 样例
 
 完整最小样例见：
 
-- [examples/bundle/router-config.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\router-config.yaml)
-- [examples/bundle/references/capability-catalog.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\capability-catalog.yaml)
-- [examples/bundle/references/module-map.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\module-map.yaml)
-- [examples/bundle/references/ownership.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\ownership.yaml)
-- [examples/bundle/references/change-rules.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\change-rules.yaml)
-- [examples/bundle/references/exception-registry.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\exception-registry.yaml)
-- [examples/bundle/references/evaluation-set.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\evaluation-set.yaml)
+- [examples/bundle/router-config.yaml](./examples/bundle/router-config.yaml)
+- [examples/bundle/references/capability-catalog.yaml](./examples/bundle/references/capability-catalog.yaml)
+- [examples/bundle/references/module-map.yaml](./examples/bundle/references/module-map.yaml)
+- [examples/bundle/references/ownership.yaml](./examples/bundle/references/ownership.yaml)
+- [examples/bundle/references/change-rules.yaml](./examples/bundle/references/change-rules.yaml)
+- [examples/bundle/references/exception-registry.yaml](./examples/bundle/references/exception-registry.yaml)
+- [examples/bundle/references/evaluation-set.yaml](./examples/bundle/references/evaluation-set.yaml)
 
 ## 输出样例
 
 真实样例见：
 
-- route report: [examples/outputs/resolve-entry.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\resolve-entry.pass.json)
-- `check_deps.py`: [examples/outputs/check-deps.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\check-deps.pass.json)
-- `check_public_api.py`: [examples/outputs/check-public-api.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\check-public-api.pass.json)
-- `check_reuse.py`: [examples/outputs/check-reuse.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\check-reuse.pass.json)
-- `run_evaluation.py`: [examples/outputs/run-evaluation.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\run-evaluation.pass.json)
+- route report: [examples/outputs/resolve-entry.pass.json](./examples/outputs/resolve-entry.pass.json)
+- `check_deps.py`: [examples/outputs/check-deps.pass.json](./examples/outputs/check-deps.pass.json)
+- `check_public_api.py`: [examples/outputs/check-public-api.pass.json](./examples/outputs/check-public-api.pass.json)
+- `check_reuse.py`: [examples/outputs/check-reuse.pass.json](./examples/outputs/check-reuse.pass.json)
+- `run_evaluation.py`: [examples/outputs/run-evaluation.pass.json](./examples/outputs/run-evaluation.pass.json)
 
 成功输出特征：
 

@@ -2498,10 +2498,18 @@ def freshness_report(repo_root: Path, bundle: dict[str, Any]) -> dict[str, Any]:
         for path in capability.get("owner_modules", []):
             if path != "." and not (repo_root / path).exists():
                 missing_references.append(path)
-        for path in capability.get("public_entries", []):
-            parts = path.split("/")
-            if parts and parts[0] != "." and not (repo_root / parts[0]).exists():
-                missing_references.append(path)
+        owner_roots = capability.get("owner_modules", [])
+        for public_entry in capability.get("public_entries", []):
+            normalized = public_entry.replace("\\", "/")
+            candidate_paths: list[Path] = [repo_root / normalized]
+            for owner_root in owner_roots:
+                owner_normalized = owner_root.replace("\\", "/")
+                if owner_normalized == ".":
+                    candidate_paths.append(repo_root / normalized)
+                elif not normalized.startswith(owner_normalized.rstrip("/") + "/"):
+                    candidate_paths.append(repo_root / owner_normalized / normalized)
+            if not any(candidate.exists() for candidate in candidate_paths):
+                missing_references.append(public_entry)
     return {
         "report_id": f"freshness-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
         "timestamp": iso_now(),
