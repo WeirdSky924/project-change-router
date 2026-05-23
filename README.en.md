@@ -2,7 +2,7 @@
 
 English version. The default Chinese README is [README.md](./README.md).
 
-`project-change-router` is a standalone Codex skill for large repositories. It helps an agent decide whether a change should reuse, extend, extract, introduce, or stop for review before editing code.
+`project-change-router` is a standalone AI coding skill for large repositories, usable from both Codex and Claude Code. It helps an agent decide whether a change should reuse, extend, extract, introduce, or stop for review before editing code.
 
 This skill is global and installable under `~/.codex/skills/project-change-router`.  
 It can also bootstrap a repository-local `project-change-router/` bundle containing:
@@ -45,7 +45,7 @@ project-change-router/
 
 ## Installation
 
-Clone or copy this directory to:
+Codex install path:
 
 ```text
 %USERPROFILE%\.codex\skills\project-change-router
@@ -72,6 +72,19 @@ Or:
 ```powershell
 pip install -e .[dev]
 ```
+
+Install script:
+
+```powershell
+python scripts/install_skill.py --target both --inject-hints
+```
+
+This script will:
+
+- install the skill into Codex at `~/.codex/skills/project-change-router`
+- install the skill into Claude Code at `~/.claude/skills/project-change-router`
+- append a guidance block to Codex `~/.codex/AGENTS.md` so Codex conversations are more likely to explicitly invoke this skill when relevant
+- append a guidance block to Claude Code `~/.claude/CLAUDE.md` so Claude Code conversations are more likely to explicitly invoke this skill when relevant
 
 ## Validation
 
@@ -109,6 +122,17 @@ In Claude Code, invoke it explicitly as:
 - `/project-change-router bootstrap a router bundle for this repository`
 - `/project-change-router resolve the correct capability entry for this change`
 - `/project-change-router validate the repository-local router bundle`
+
+Trigger behavior:
+
+- the current default model is still explicit invocation first
+- that means the conversation should directly include:
+  - Codex: `$project-change-router`
+  - Claude Code: `/project-change-router`
+- if you use `install_skill.py --inject-hints`, the installer appends hint blocks to:
+  - Codex `AGENTS.md`
+  - Claude Code `CLAUDE.md`
+- this acts as a soft enforcement reminder rather than a hidden auto-trigger
 
 Post-install recognition check:
 
@@ -229,6 +253,12 @@ This creates:
 
 with repository-local references, schemas, and reports.
 
+The bootstrap step will also automatically append this entry to the target repository `.gitignore`:
+
+```text
+project-change-router/
+```
+
 Optionally, the target repository root can include one of:
 
 ```text
@@ -346,7 +376,7 @@ Be explicit about these limits:
 
 This skill was validated with:
 
-- Codex skill structure validation
+- skill structure validation
 - skill-local unit tests
 - bootstrap and bundle validation across Java, Python, TypeScript, and mixed-monorepo fixtures
 - profile override tests for capability and owner remapping

@@ -2,7 +2,7 @@
 
 中文默认版。英文版见 [README.en.md](./README.en.md)。
 
-`project-change-router` 是一个面向大型仓库的独立 Codex skill。它用于在真正修改代码之前，判断当前变更应该：
+`project-change-router` 是一个面向大型仓库的独立 AI coding skill，可用于 Codex 和 Claude Code。它用于在真正修改代码之前，判断当前变更应该：
 
 - `reuse`
 - `extend`
@@ -53,7 +53,7 @@ project-change-router/
 
 ## 安装方式
 
-把整个目录复制或 clone 到：
+Codex 安装路径：
 
 ```text
 %USERPROFILE%\.codex\skills\project-change-router
@@ -80,6 +80,19 @@ pip install -r requirements.txt
 ```powershell
 pip install -e .[dev]
 ```
+
+安装脚本：
+
+```powershell
+python scripts/install_skill.py --target both --inject-hints
+```
+
+这个脚本会：
+
+- 安装到 Codex 的 `~/.codex/skills/project-change-router`
+- 安装到 Claude Code 的 `~/.claude/skills/project-change-router`
+- 向 Codex 的 `~/.codex/AGENTS.md` 追加一段提示词，帮助对话时更容易显式触发该 skill
+- 向 Claude Code 的 `~/.claude/CLAUDE.md` 追加一段提示词，帮助对话时更容易显式触发该 skill
 
 ## 安装校验
 
@@ -117,6 +130,17 @@ python scripts/run_evaluation.py --repo <repo-root> --format json
 - `/project-change-router bootstrap a router bundle for this repository`
 - `/project-change-router resolve the correct capability entry for this change`
 - `/project-change-router validate the repository-local router bundle`
+
+触发方式说明：
+
+- 当前默认仍然是“显式触发优先”
+- 也就是在对话中直接写：
+  - Codex：`$project-change-router`
+  - Claude Code：`/project-change-router`
+- 如果你使用 `install_skill.py --inject-hints`，它会：
+  - 在 Codex 的 `AGENTS.md` 里追加一段提示词
+  - 在 Claude Code 的 `CLAUDE.md` 里追加一段提示词
+- 这是一种“伪强制”提醒，但仍然不是后台自动执行
 
 安装后识别验证：
 
@@ -237,6 +261,12 @@ python <codex-home>\skills\project-change-router\scripts\bootstrap_router.py --r
 
 用于保存该仓库自己的引用数据、schema 和报告。
 
+同时会自动把下面这一行追加到目标仓库的 `.gitignore`：
+
+```text
+project-change-router/
+```
+
 可选地，目标仓库根目录还可以放这些覆盖文件之一：
 
 ```text
@@ -354,7 +384,7 @@ project-change-router.profile.yml
 
 这份 skill 已经完成以下验证：
 
-- Codex skill 结构校验
+- skill 结构校验
 - skill 自带单元测试
 - 在 Java、Python、TypeScript、mixed monorepo fixture 上执行 bootstrap 与 bundle 校验
 - 在仓库级 profile 覆盖场景下执行 capability/owner 覆盖验证

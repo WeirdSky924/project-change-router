@@ -3097,6 +3097,21 @@ def clear_core_reference_files(bundle_root: Path) -> None:
             path.unlink()
 
 
+def ensure_gitignore_entry(repo_root: Path, entry: str) -> None:
+    gitignore_path = repo_root / ".gitignore"
+    normalized_entry = entry.replace("\\", "/").strip()
+    if gitignore_path.exists():
+        lines = gitignore_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    else:
+        lines = []
+    existing = {line.strip().replace("\\", "/") for line in lines if line.strip()}
+    if normalized_entry not in existing:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(normalized_entry)
+        gitignore_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
 def bootstrap_bundle(repo_root: Path, write: bool = True) -> dict[str, Any]:
     bundle = build_router_bundle(repo_root)
     bundle_root = resolve_bundle_root(repo_root)
@@ -3106,6 +3121,7 @@ def bootstrap_bundle(repo_root: Path, write: bool = True) -> dict[str, Any]:
         clear_core_reference_files(bundle_root)
         write_bundle(bundle_root, bundle)
         copy_skill_schemas_to_bundle(bundle_root)
+        ensure_gitignore_entry(repo_root, "project-change-router/")
     return bundle
 
 
