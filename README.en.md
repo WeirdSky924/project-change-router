@@ -51,6 +51,28 @@ Clone or copy this directory to:
 %USERPROFILE%\.codex\skills\project-change-router
 ```
 
+Claude Code install path:
+
+```text
+%USERPROFILE%\.claude\skills\project-change-router
+```
+
+Python requirement:
+
+- Python `>= 3.10`
+
+Install dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
+
+Or:
+
+```powershell
+pip install -e .[dev]
+```
+
 ## Validation
 
 Run:
@@ -63,6 +85,15 @@ Expected result:
 
 ```text
 Skill is valid!
+```
+
+Local smoke test:
+
+```powershell
+python -m pytest tests/test_router_core.py -q
+python scripts/bootstrap_router.py --repo <repo-root> --format json
+python scripts/validate_router_bundle.py --repo <repo-root> --format json
+python scripts/run_evaluation.py --repo <repo-root> --format json
 ```
 
 ## How To Use
@@ -79,12 +110,34 @@ In Claude Code, invoke it explicitly as:
 - `/project-change-router resolve the correct capability entry for this change`
 - `/project-change-router validate the repository-local router bundle`
 
+Post-install recognition check:
+
+- In Codex: `Use $project-change-router to resolve the correct capability entry for this change.`
+- In Claude Code: `/project-change-router resolve the correct capability entry for this change`
+
+Expected behavior:
+
+- the agent first checks the repository root and any existing `project-change-router/` bundle
+- if the bundle already exists, it reads it directly
+- if the bundle does not exist, it should only create one when you explicitly ask for bootstrap
+
 ## Execution Modes
 
 - Read-only mode: `resolve_entry.py`, `check_reuse.py`, `check_deps.py`, `check_public_api.py`, `check_index_freshness.py`, `run_evaluation.py`
 - Write mode: `bootstrap_router.py`, `rebuild_index.py`
 
 Default to read-only mode. Only use write mode when the user explicitly wants repository-local routing data to be created or refreshed.
+
+## Lifecycle
+
+Recommended decision table:
+
+- first repository onboarding: `python scripts/bootstrap_router.py --repo <repo-root>`
+- major repository structure change: `python scripts/rebuild_index.py --repo <repo-root>`
+- pre-merge validation: `python scripts/validate_router_bundle.py --repo <repo-root>`
+- routine guardrail checks: `python scripts/check_reuse.py --repo <repo-root>`, `python scripts/check_deps.py --repo <repo-root>`, `python scripts/check_public_api.py --repo <repo-root>`
+- routing quality review: `python scripts/run_evaluation.py --repo <repo-root>`
+- rule improvement suggestions: `python scripts/sync_feedback.py --repo <repo-root>`
 
 ## Repository-Local Bundle
 
@@ -121,6 +174,47 @@ These files can define:
 - risk rules
 - module overrides
 
+Ready-to-copy templates:
+
+- [examples/profiles/README.md](E:\_workspace\SaaS\project-change-router\examples\profiles\README.md)
+- [examples/profiles/python-monorepo.project-change-router.yaml](E:\_workspace\SaaS\project-change-router\examples\profiles\python-monorepo.project-change-router.yaml)
+- [examples/profiles/ts-workspace.project-change-router.yaml](E:\_workspace\SaaS\project-change-router\examples\profiles\ts-workspace.project-change-router.yaml)
+- [examples/profiles/mixed-repo.project-change-router.yaml](E:\_workspace\SaaS\project-change-router\examples\profiles\mixed-repo.project-change-router.yaml)
+
+## Bundle Sample
+
+Minimal bundle samples:
+
+- [examples/bundle/router-config.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\router-config.yaml)
+- [examples/bundle/references/capability-catalog.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\capability-catalog.yaml)
+- [examples/bundle/references/module-map.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\module-map.yaml)
+- [examples/bundle/references/ownership.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\ownership.yaml)
+- [examples/bundle/references/change-rules.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\change-rules.yaml)
+- [examples/bundle/references/exception-registry.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\exception-registry.yaml)
+- [examples/bundle/references/evaluation-set.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\evaluation-set.yaml)
+
+## Output Samples
+
+Real sample outputs:
+
+- route report: [examples/outputs/resolve-entry.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\resolve-entry.pass.json)
+- `check_deps.py`: [examples/outputs/check-deps.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\check-deps.pass.json)
+- `check_public_api.py`: [examples/outputs/check-public-api.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\check-public-api.pass.json)
+- `check_reuse.py`: [examples/outputs/check-reuse.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\check-reuse.pass.json)
+- `run_evaluation.py`: [examples/outputs/run-evaluation.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\run-evaluation.pass.json)
+
+Typical success signals:
+
+- `status: pass`
+- or a route report `action` of `reuse`, `extend`, `new`, or `review`
+
+Typical failure signals:
+
+- `status: fail`
+- guardrail report `blocking: true`
+- route report `review_required: true`
+- validation report with non-empty `errors`
+
 ## Main Scripts
 
 - `scripts/bootstrap_router.py`
@@ -142,6 +236,18 @@ These files can define:
 - high-risk shared capabilities intentionally route conservatively
 - generated bundles should still be curated by repository owners
 
+## Limits and Misclassification Boundaries
+
+This skill is a heuristic and profile-driven router, not a perfect architecture facts database.
+
+Be explicit about these limits:
+
+- the first bootstrap is only a first pass
+- capability ownership and public API surfaces still need human calibration
+- `route=review` is a safety mechanism, not a failure state
+- without a profile, the router intentionally behaves more conservatively
+- a passing evaluation does not eliminate the need for architecture review
+
 ## Verification Performed
 
 This skill was validated with:
@@ -150,6 +256,7 @@ This skill was validated with:
 - skill-local unit tests
 - bootstrap and bundle validation across Java, Python, TypeScript, and mixed-monorepo fixtures
 - profile override tests for capability and owner remapping
+- CI smoke validation for dependency install, tests, bootstrap, validate, and evaluation
 
 ## Chinese Version
 

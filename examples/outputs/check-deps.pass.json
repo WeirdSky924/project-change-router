@@ -1,0 +1,11 @@
+{
+  "report_id": "check-deps",
+  "timestamp": "2026-05-23T13:57:18Z",
+  "script": "check_deps.py",
+  "status": "pass",
+  "blocking": false,
+  "summary": {
+    "finding_count": 0
+  },
+  "findings": []
+}

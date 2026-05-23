@@ -1,0 +1,33 @@
+schema_version: 1
+generated_at: "2026-05-23T13:57:18Z"
+generated_by: bootstrap_router
+source_repository: sample-repo
+source_commit: null
+modules:
+  - id: module-services-billing
+    path: services/billing
+    layer: shared-capability
+    domain: billing
+    purpose: Python module at services/billing
+    public_api: __init__.py
+    source_of_truth: generated
+    key_files:
+      - __init__.py
+      - service.py
+    depends_on: []
+    allowed_inbound_from: []
+    allowed_outbound_to: []
+    generated: true
+    index_sources:
+      - services/billing
+    owner: billing-team
+    status: active
+    lifecycle:
+      language: python
+      import_names:
+        - billing
+      source_roots:
+        - .
+      allowed_outbound_layers:
+        - shared-capability
+        - infra

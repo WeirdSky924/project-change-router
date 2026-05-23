@@ -1,0 +1,6 @@
+schema_version: 1
+generated_at: "2026-05-23T13:57:18Z"
+generated_by: bootstrap_router
+source_repository: sample-repo
+source_commit: null
+exceptions: []

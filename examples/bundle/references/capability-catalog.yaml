@@ -1,0 +1,32 @@
+schema_version: 1
+generated_at: "2026-05-23T13:57:18Z"
+generated_by: bootstrap_router
+source_repository: sample-repo
+source_commit: null
+capabilities:
+  - id: billing
+    name: Billing Capability
+    status: stable
+    maturity: stable
+    source_of_truth: generated
+    intent_keywords: ["billing", "invoice", "payment"]
+    aliases: ["billing"]
+    business_intents: ["billing-change", "billing-reuse", "billing-extension"]
+    scope:
+      domains: ["billing"]
+      layers: ["shared-capability"]
+      paths: ["services/billing"]
+    owner_modules: ["services/billing"]
+    public_entries: ["services/billing/__init__.py"]
+    extension_points: []
+    route_defaults:
+      preferred_action: reuse
+    contracts: []
+    related_tests: []
+    test_bindings: []
+    forbidden_patterns: []
+    dependent_modules: []
+    anti_patterns: []
+    lifecycle:
+      generated_from: ["services/billing"]
+    last_verified_at: "2026-05-23"

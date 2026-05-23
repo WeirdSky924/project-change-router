@@ -1,0 +1,11 @@
+{
+  "report_id": "check-public-api",
+  "timestamp": "2026-05-23T13:57:18Z",
+  "script": "check_public_api.py",
+  "status": "pass",
+  "blocking": false,
+  "summary": {
+    "finding_count": 0
+  },
+  "findings": []
+}

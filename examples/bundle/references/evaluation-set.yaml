@@ -1,0 +1,14 @@
+schema_version: 1
+generated_at: "2026-05-23T13:57:18Z"
+generated_by: bootstrap_router
+source_repository: workspace
+source_commit: null
+cases:
+  - id: billing-reuse
+    request: Reuse the existing billing capability entry point without changing its core behavior.
+    expected_action: reuse
+    expected_capabilities: ["billing"]
+    expected_modules: ["services/billing"]
+    expected_reads: ["services/billing/__init__.py"]
+    changed_paths: ["services/billing"]
+    risk_level: medium

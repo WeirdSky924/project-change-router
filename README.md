@@ -59,6 +59,28 @@ project-change-router/
 %USERPROFILE%\.codex\skills\project-change-router
 ```
 
+Claude Code 安装路径：
+
+```text
+%USERPROFILE%\.claude\skills\project-change-router
+```
+
+Python 要求：
+
+- Python `>= 3.10`
+
+安装依赖：
+
+```powershell
+pip install -r requirements.txt
+```
+
+或者：
+
+```powershell
+pip install -e .[dev]
+```
+
 ## 安装校验
 
 运行：
@@ -71,6 +93,15 @@ python <codex-home>\skills\.system\skill-creator\scripts\quick_validate.py <code
 
 ```text
 Skill is valid!
+```
+
+本地最小 smoke test：
+
+```powershell
+python -m pytest tests/test_router_core.py -q
+python scripts/bootstrap_router.py --repo <repo-root> --format json
+python scripts/validate_router_bundle.py --repo <repo-root> --format json
+python scripts/run_evaluation.py --repo <repo-root> --format json
 ```
 
 ## 使用方式
@@ -87,12 +118,34 @@ Skill is valid!
 - `/project-change-router resolve the correct capability entry for this change`
 - `/project-change-router validate the repository-local router bundle`
 
+安装后识别验证：
+
+- Codex 中发送：`Use $project-change-router to resolve the correct capability entry for this change.`
+- Claude Code 中发送：`/project-change-router resolve the correct capability entry for this change`
+
+期望现象：
+
+- agent 会先检查仓库根目录和 `project-change-router/` bundle
+- 如果 bundle 已存在，会直接读取
+- 如果 bundle 不存在，只有在你明确要求 bootstrap 时才创建
+
 ## 运行模式
 
 - 只读模式：`resolve_entry.py`、`check_reuse.py`、`check_deps.py`、`check_public_api.py`、`check_index_freshness.py`、`run_evaluation.py`
 - 写入模式：`bootstrap_router.py`、`rebuild_index.py`
 
 建议默认使用只读模式；只有在用户明确要求生成或刷新仓库本地 bundle 时，才执行写入模式。
+
+## 生命周期
+
+推荐按下面的决策表使用：
+
+- 初次接入仓库：`python scripts/bootstrap_router.py --repo <repo-root>`
+- 仓库结构大改后：`python scripts/rebuild_index.py --repo <repo-root>`
+- 提交前校验：`python scripts/validate_router_bundle.py --repo <repo-root>`
+- 日常 guardrail 检查：`python scripts/check_reuse.py --repo <repo-root>`、`python scripts/check_deps.py --repo <repo-root>`、`python scripts/check_public_api.py --repo <repo-root>`
+- 路由质量回顾：`python scripts/run_evaluation.py --repo <repo-root>`
+- 规则优化建议汇总：`python scripts/sync_feedback.py --repo <repo-root>`
 
 ## 仓库本地 Bundle
 
@@ -129,6 +182,47 @@ project-change-router.profile.yml
 - 风险规则
 - module 覆盖规则
 
+现成最小模板见：
+
+- [examples/profiles/README.md](E:\_workspace\SaaS\project-change-router\examples\profiles\README.md)
+- [examples/profiles/python-monorepo.project-change-router.yaml](E:\_workspace\SaaS\project-change-router\examples\profiles\python-monorepo.project-change-router.yaml)
+- [examples/profiles/ts-workspace.project-change-router.yaml](E:\_workspace\SaaS\project-change-router\examples\profiles\ts-workspace.project-change-router.yaml)
+- [examples/profiles/mixed-repo.project-change-router.yaml](E:\_workspace\SaaS\project-change-router\examples\profiles\mixed-repo.project-change-router.yaml)
+
+## Bundle 样例
+
+完整最小样例见：
+
+- [examples/bundle/router-config.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\router-config.yaml)
+- [examples/bundle/references/capability-catalog.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\capability-catalog.yaml)
+- [examples/bundle/references/module-map.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\module-map.yaml)
+- [examples/bundle/references/ownership.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\ownership.yaml)
+- [examples/bundle/references/change-rules.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\change-rules.yaml)
+- [examples/bundle/references/exception-registry.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\exception-registry.yaml)
+- [examples/bundle/references/evaluation-set.yaml](E:\_workspace\SaaS\project-change-router\examples\bundle\references\evaluation-set.yaml)
+
+## 输出样例
+
+真实样例见：
+
+- route report: [examples/outputs/resolve-entry.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\resolve-entry.pass.json)
+- `check_deps.py`: [examples/outputs/check-deps.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\check-deps.pass.json)
+- `check_public_api.py`: [examples/outputs/check-public-api.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\check-public-api.pass.json)
+- `check_reuse.py`: [examples/outputs/check-reuse.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\check-reuse.pass.json)
+- `run_evaluation.py`: [examples/outputs/run-evaluation.pass.json](E:\_workspace\SaaS\project-change-router\examples\outputs\run-evaluation.pass.json)
+
+成功输出特征：
+
+- `status: pass`
+- 或 route report 中 `action` 为 `reuse` / `extend` / `new` / `review`
+
+常见失败输出特征：
+
+- `status: fail`
+- guardrail report 中 `blocking: true`
+- route report 中 `review_required: true`
+- validation report 中 `errors` 非空
+
 ## 主要脚本
 
 - `scripts/bootstrap_router.py`
@@ -150,6 +244,18 @@ project-change-router.profile.yml
 - 通用逻辑在全局 skill 中，仓库特例通过 profile 覆盖表达，不再硬编码进脚本
 - 自动生成的 bundle 仍然建议由仓库维护者继续人工整理
 
+## 边界与误判
+
+这个 skill 是“启发式 + profile 驱动”的路由器，不是绝对精确的架构事实系统。
+
+需要明确：
+
+- 首次 bootstrap 只是 first pass
+- capability / ownership / public API 需要人工校准
+- `route=review` 不是失败，而是保护机制
+- 没有 profile 时，结果会偏保守
+- evaluation 通过不代表完全替代人工架构判断
+
 ## 已完成验证
 
 这份 skill 已经完成以下验证：
@@ -158,6 +264,7 @@ project-change-router.profile.yml
 - skill 自带单元测试
 - 在 Java、Python、TypeScript、mixed monorepo fixture 上执行 bootstrap 与 bundle 校验
 - 在仓库级 profile 覆盖场景下执行 capability/owner 覆盖验证
+- 仓库内 CI 执行依赖安装、测试和 smoke test
 
 ## English Version
 

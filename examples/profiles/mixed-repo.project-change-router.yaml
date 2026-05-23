@@ -1,0 +1,25 @@
+profile_id: mixed-repo
+
+capabilities:
+  - id: catalog-domain
+    name: Catalog Domain
+    path_patterns:
+      - "services/catalog/**"
+      - "packages/web/**"
+    keywords:
+      - catalog
+      - item
+      - listing
+    aliases:
+      - catalog
+
+ownership_rules:
+  - path_patterns:
+      - "services/catalog/**"
+      - "packages/web/**"
+    owner: product-platform-team
+
+module_overrides:
+  - path_patterns:
+      - "packages/web/**"
+    layer: ui

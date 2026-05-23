@@ -1,0 +1,16 @@
+schema_version: 1
+generated_at: "2026-05-23T13:57:18Z"
+generated_by: bootstrap_router
+source_repository: workspace
+source_commit: null
+owners:
+  - scope: capability
+    target: billing
+    primary: billing-team
+    reviewers: ["billing-team"]
+    escalation_group: billing-team
+  - scope: module
+    target: services/billing
+    primary: billing-team
+    reviewers: ["billing-team"]
+    escalation_group: billing-team

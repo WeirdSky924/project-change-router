@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate Skill Structure
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          skill = Path("SKILL.md").read_text(encoding="utf-8")
+          assert skill.startswith("---"), "SKILL.md frontmatter missing"
+          assert re.search(r"^name:\s*project-change-router\s*$", skill, re.M), "skill name missing"
+          assert re.search(r"^description:\s*.+$", skill, re.M), "skill description missing"
+          print("Skill structure looks valid")
+          PY
+
+      - name: Run Unit Tests
+        run: pytest -q
+
+      - name: Smoke Test
+        run: |
+          python scripts/bootstrap_router.py --repo . --format json
+          python scripts/validate_router_bundle.py --repo . --format json
+          python scripts/run_evaluation.py --repo . --format json

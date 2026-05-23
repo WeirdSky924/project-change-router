@@ -1,0 +1,13 @@
+{
+  "run_id": "eval-20260523-135803",
+  "timestamp": "2026-05-23T13:58:03Z",
+  "case_count": 12,
+  "top1_action_accuracy": 1.0,
+  "top1_capability_accuracy": 1.0,
+  "review_precision": 1.0,
+  "review_recall": 1.0,
+  "false_positive_count": 0,
+  "false_negative_count": 0,
+  "per_case_results": [],
+  "status": "pass"
+}

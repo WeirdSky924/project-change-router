@@ -1,0 +1,49 @@
+{
+  "decision_id": "route-20260523-135803-cf37f769",
+  "timestamp": "2026-05-23T13:58:03Z",
+  "request_type": "feature-modification",
+  "request_summary": "Extend the existing router capability with repo profile support",
+  "action": "extend",
+  "confidence": 0.45,
+  "overlap_score": 0.3333,
+  "primary_capability": "scripts",
+  "secondary_capabilities": [],
+  "candidate_capabilities": [
+    {
+      "id": "scripts",
+      "name": "Scripts Capability",
+      "status": "stable",
+      "score": 0.45
+    }
+  ],
+  "candidate_modules": [
+    {
+      "path": "scripts",
+      "id": "module-scripts",
+      "layer": "domain-service",
+      "domain": "scripts"
+    }
+  ],
+  "required_reads": [
+    "bootstrap_router.py",
+    "scripts/bootstrap_router.py"
+  ],
+  "required_checks": [
+    "check-reuse",
+    "check-deps",
+    "check-public-api",
+    "check-index-freshness"
+  ],
+  "forbidden_paths": [],
+  "review_required": false,
+  "coordination_required": false,
+  "composite_route_required": false,
+  "reasoning": [
+    "path proximity strongly anchors the request to an existing module surface"
+  ],
+  "source_of_truths": {
+    "capability_catalog": {
+      "generated_by": "bootstrap_router"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+*.pyc
+*.pyo
+*.pyd
+
+project-change-router/
+reports/
+
+.DS_Store
+Thumbs.db

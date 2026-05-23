@@ -1,0 +1,37 @@
+schema_version: 1
+generated_at: "2026-05-23T13:57:18Z"
+generated_by: bootstrap_router
+source_repository: sample-repo
+source_commit: null
+repo_id: sample-repo
+repositories:
+  - id: sample-repo
+    path: .
+    type: python
+protected_branch_patterns:
+  - main
+  - master
+ignore_paths:
+  - "**/.git/**"
+  - "**/node_modules/**"
+supported_languages:
+  - python
+module_discovery:
+  primary_manifest: python
+  strategies:
+    - python
+    - generic
+  profile_id: null
+freshness_windows:
+  capability_catalog_days: 30
+  module_map_days: 30
+  exception_registry_days: 30
+  evaluation_set_days: 30
+evaluation:
+  top1_accuracy_threshold: 0.8
+  review_precision_threshold: 0.9
+  minimum_case_count: 12
+route_reports_dir: reports/route-decisions
+rebuild_reports_dir: reports/index-rebuild
+guardrail_reports_dir: reports/guardrail-results
+evaluation_reports_dir: reports/evaluation

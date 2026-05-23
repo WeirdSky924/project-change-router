@@ -1,0 +1,25 @@
+profile_id: python-monorepo
+
+capabilities:
+  - id: billing-core
+    name: Billing Core
+    path_patterns:
+      - "services/billing/**"
+    keywords:
+      - billing
+      - invoice
+      - payment
+    aliases:
+      - billing
+      - payments
+
+ownership_rules:
+  - path_patterns:
+      - "services/billing/**"
+    owner: billing-team
+
+module_overrides:
+  - path_patterns:
+      - "services/billing/**"
+    layer: shared-capability
+    public_api: "__init__.py"

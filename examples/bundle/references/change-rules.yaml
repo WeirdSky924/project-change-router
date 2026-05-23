@@ -1,0 +1,22 @@
+schema_version: 1
+generated_at: "2026-05-23T13:57:18Z"
+generated_by: bootstrap_router
+source_repository: workspace
+source_commit: null
+confidence:
+  auto_route_threshold: 0.78
+  guarded_route_threshold: 0.58
+high_risk_conditions:
+  - auth-or-payment-change
+  - public-contract-change
+route_rules:
+  - name: prefer-reuse-for-stable-capability
+    when:
+      capability_status: stable
+      matching_intent: true
+    action: reuse
+decision_policy:
+  tie_breaker: review
+  high_risk_override: review
+  human_override_allowed: true
+  human_override_must_record_reason: true

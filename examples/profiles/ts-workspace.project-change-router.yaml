@@ -1,0 +1,23 @@
+profile_id: ts-workspace
+
+capabilities:
+  - id: checkout-flow
+    name: Checkout Flow
+    path_patterns:
+      - "packages/checkout/**"
+    keywords:
+      - checkout
+      - order
+      - cart
+    aliases:
+      - checkout
+
+ownership_rules:
+  - path_patterns:
+      - "packages/checkout/**"
+    owner: checkout-team
+
+module_overrides:
+  - path_patterns:
+      - "packages/checkout/**"
+    layer: feature-module
