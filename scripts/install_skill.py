@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import shutil
+import stat
 from pathlib import Path
 
 
@@ -11,18 +14,34 @@ SKILL_NAME = "project-change-router"
 
 def copy_tree(src: Path, dst: Path) -> None:
     if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(src, dst)
+        shutil.rmtree(dst, onerror=handle_remove_readonly)
+    shutil.copytree(
+        src,
+        dst,
+        ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache", "project-change-router"),
+    )
 
 
-def ensure_text_block(path: Path, block: str) -> None:
+def handle_remove_readonly(func, path, _exc_info) -> None:
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def ensure_marked_block(path: Path, marker_name: str, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = path.read_text(encoding="utf-8") if path.exists() else ""
-    if block.strip() in content:
-        return
-    if content and not content.endswith("\n"):
-        content += "\n"
-    content += ("\n" if content else "") + block.strip() + "\n"
+    begin = f"<!-- {marker_name}:begin -->"
+    end = f"<!-- {marker_name}:end -->"
+    block = f"{begin}\n{body.strip()}\n{end}"
+    pattern = re.compile(
+        rf"(?ms)^\s*{re.escape(begin)}.*?{re.escape(end)}\s*$"
+    )
+    if pattern.search(content):
+        content = pattern.sub(block, content)
+    else:
+        if content and not content.endswith("\n"):
+            content += "\n"
+        content += ("\n" if content else "") + block + "\n"
     path.write_text(content, encoding="utf-8")
 
 
@@ -74,10 +93,10 @@ def main() -> int:
         copy_tree(skill_root, claude_dst)
         installed_paths.append(claude_dst)
         if args.inject_claude_hint or args.inject_hints:
-            ensure_text_block(claude_home / "CLAUDE.md", claude_hint_block())
+            ensure_marked_block(claude_home / "CLAUDE.md", f"{SKILL_NAME}-claude-hint", claude_hint_block())
 
     if args.target in {"codex", "both"} and (args.inject_codex_hint or args.inject_hints):
-        ensure_text_block(codex_home / "AGENTS.md", codex_hint_block())
+        ensure_marked_block(codex_home / "AGENTS.md", f"{SKILL_NAME}-codex-hint", codex_hint_block())
 
     for path in installed_paths:
         print(path)
