@@ -19,6 +19,31 @@
   "review_required": true,
   "coordination_required": false,
   "composite_route_required": false,
+  "recommended_next_action": "request_human_review",
+  "recommended_next_steps": [
+    "Read scripts/bootstrap_router.py",
+    "Add or refine a repository profile before trusting automatic routing",
+    "Confirm the real public entry before enabling stronger guardrails",
+    "Record the final decision with sync_feedback.py after human review",
+    "Keep repository-local routing data provisional until boundaries stabilize",
+    "Reason for caution: repo_stage=seed blocks auto-route into existing boundaries"
+  ],
+  "why_not_actions": {
+    "reuse": [
+      "request asks for behavior change, not just reuse",
+      "seed-stage repositories do not trust existing boundaries enough for auto-reuse"
+    ],
+    "extend": [
+      "early-stage repositories restrict automatic extension",
+      "capability stage is not stable enough for trusted extension"
+    ],
+    "extract": [
+      "early-stage repositories avoid auto-extraction",
+      "not enough repeated changed surfaces to justify extraction"
+    ],
+    "new": [],
+    "review": []
+  },
   "confidence_reasons": [
     "strong path proximity to owner module",
     "public entry is heuristic only",

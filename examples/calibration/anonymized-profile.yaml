@@ -1,0 +1,67 @@
+profile_id: anonymized-real-world
+profile_stage: emerging
+
+ownership_rules:
+  - path_patterns:
+      - "backend/services/context_runtime/**"
+    owner: provisional:context-runtime
+  - path_patterns:
+      - "backend/services/workflow_adapters/**"
+    owner: provisional:workflow-adapters
+  - path_patterns:
+      - "frontend/src/api/**"
+    owner: provisional:frontend-api
+
+module_overrides:
+  - path_patterns:
+      - "backend/services/context_runtime/**"
+    layer: shared-capability
+  - path_patterns:
+      - "backend/services/workflow_adapters/**"
+    layer: adapter
+  - path_patterns:
+      - "frontend/src/api/**"
+    layer: adapter
+  - path_patterns:
+      - "frontend/src/pages/**"
+    layer: ui
+
+capabilities:
+  - id: context-runtime
+    name: Context Runtime
+    stage: candidate
+    status: candidate
+    path_patterns:
+      - "backend/services/context_runtime/**"
+    keywords:
+      - context
+      - packet
+      - retrieval
+      - snapshot
+    aliases:
+      - runtime-context
+
+  - id: workflow-integration
+    name: Workflow Integration
+    stage: candidate
+    status: candidate
+    path_patterns:
+      - "backend/services/workflow_adapters/**"
+    keywords:
+      - workflow
+      - adapter
+      - execution
+    aliases:
+      - orchestration-adapter
+
+evaluation:
+  mode: curated
+  cases:
+    - id: curated-context-review
+      request: Extend the existing context runtime behavior with a new retrieval rule.
+      expected_action: review
+      expected_capabilities: ["context-runtime"]
+      expected_modules: ["backend/services/context_runtime"]
+      expected_reads: ["backend/services/context_runtime/packet_builder.py"]
+      changed_paths: ["backend/services/context_runtime"]
+      risk_level: high

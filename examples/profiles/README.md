@@ -26,3 +26,8 @@
 - 先只写 `ownership_rules`
 - 尽量不要一开始就写完整 `capabilities`
 - 把 owner 写成 `provisional:<name>`，避免误导成正式治理结构
+
+如果你想看“真实项目结构如何匿名抽象成 profile”，再看：
+
+- `../calibration/README.md`
+- `../calibration/anonymized-profile.yaml`

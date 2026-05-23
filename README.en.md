@@ -163,12 +163,21 @@ Route outputs now also include:
 - `positive_signals`
 - `negative_signals`
 - `risk_signals`
+- `recommended_next_action`
+- `recommended_next_steps`
+- `why_not_actions`
 
 Interpretation:
 
 - `high`: strong profile, boundary, and structure evidence
 - `medium`: partial structure evidence, still needs care
 - `low`: insufficient evidence, usually should be treated as `review`
+
+Usage:
+
+- start with `recommended_next_action`
+- then follow `recommended_next_steps`
+- use `why_not_actions` to understand why stronger actions were rejected
 
 ## Lifecycle
 
@@ -244,6 +253,15 @@ Ready-to-copy templates:
 - [examples/profiles/ts-workspace.project-change-router.yaml](./examples/profiles/ts-workspace.project-change-router.yaml)
 - [examples/profiles/mixed-repo.project-change-router.yaml](./examples/profiles/mixed-repo.project-change-router.yaml)
 
+An anonymized real-structure calibration reference is also available:
+
+- [examples/calibration/README.md](./examples/calibration/README.md)
+- [examples/calibration/anonymized-structure.md](./examples/calibration/anonymized-structure.md)
+- [examples/calibration/anonymized-profile.yaml](./examples/calibration/anonymized-profile.yaml)
+- [examples/calibration/anonymized-module-map.yaml](./examples/calibration/anonymized-module-map.yaml)
+- [examples/calibration/anonymized-route-cases.yaml](./examples/calibration/anonymized-route-cases.yaml)
+- [examples/calibration/anonymized-feedback.json](./examples/calibration/anonymized-feedback.json)
+
 ## Bundle Sample
 
 Minimal bundle samples:
@@ -284,6 +302,9 @@ Important fields:
 - `confidence_reasons`
 - `veto_reasons`
 - `primary_capability_stage`
+- `recommended_next_action`
+- `recommended_next_steps`
+- `why_not_actions`
 
 ## Main Scripts
 

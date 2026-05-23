@@ -200,6 +200,9 @@ class RouteDecision:
     review_required: bool
     coordination_required: bool
     composite_route_required: bool
+    recommended_next_action: str
+    recommended_next_steps: list[str]
+    why_not_actions: dict[str, Any]
     confidence_reasons: list[str]
     veto_reasons: list[str]
     positive_signals: dict[str, Any]
@@ -2464,6 +2467,110 @@ def build_route_report(decision: RouteDecision) -> dict[str, Any]:
     return decision.to_dict()
 
 
+def build_why_not_actions(
+    chosen_action: str,
+    repo_stage: str,
+    capability: Optional[CapabilityEntry],
+    confidence_level: str,
+    request_has_change_verb: bool,
+    extract_intent: bool,
+    changed_paths: list[str],
+    duplicate_signal: bool,
+    high_risk: bool,
+    overlap: float,
+    explicit_review: bool,
+    negative_signals: dict[str, Any],
+) -> dict[str, list[str]]:
+    explanations: dict[str, list[str]] = {}
+    for candidate_action in ["reuse", "extend", "extract", "new", "review"]:
+        if candidate_action == chosen_action:
+            continue
+        reasons: list[str] = []
+        if candidate_action == "reuse":
+            if request_has_change_verb:
+                reasons.append("request asks for behavior change, not just reuse")
+            if repo_stage == "seed":
+                reasons.append("seed-stage repositories do not trust existing boundaries enough for auto-reuse")
+            if negative_signals.get("provisional_stage"):
+                reasons.append("target capability is still provisional")
+        elif candidate_action == "extend":
+            if repo_stage in {"seed", "emerging"}:
+                reasons.append("early-stage repositories restrict automatic extension")
+            if not request_has_change_verb:
+                reasons.append("request does not clearly describe an additive change")
+            if capability and capability.stage not in {"stable", "governed-capability"}:
+                reasons.append("capability stage is not stable enough for trusted extension")
+        elif candidate_action == "extract":
+            if repo_stage in {"seed", "emerging"}:
+                reasons.append("early-stage repositories avoid auto-extraction")
+            if not extract_intent and not duplicate_signal:
+                reasons.append("request does not provide strong extraction or duplicate signals")
+            if len(changed_paths) < 2:
+                reasons.append("not enough repeated changed surfaces to justify extraction")
+        elif candidate_action == "new":
+            if repo_stage != "seed" and confidence_level != "low":
+                reasons.append("existing structure evidence is strong enough to avoid creating a brand-new capability")
+            if negative_signals.get("multi_module_span"):
+                reasons.append("cross-module change should be reviewed before creating a new capability")
+        elif candidate_action == "review":
+            if chosen_action in {"reuse", "extend", "extract", "new"} and not (high_risk or explicit_review or overlap >= 0.82):
+                reasons.append("no hard veto condition forced manual review")
+        explanations[candidate_action] = reasons
+    return explanations
+
+
+def build_recommended_next_action(
+    action: str,
+    repo_stage: str,
+    confidence_level: str,
+    required_reads: list[str],
+    required_checks: list[str],
+    negative_signals: dict[str, Any],
+    veto_reasons: list[str],
+) -> tuple[str, list[str]]:
+    steps: list[str] = []
+    if action == "review":
+        next_action = "request_human_review"
+        steps.extend(f"Read {path}" for path in required_reads[:3])
+        if negative_signals.get("profile_missing"):
+            steps.append("Add or refine a repository profile before trusting automatic routing")
+        if negative_signals.get("heuristic_public_entry"):
+            steps.append("Confirm the real public entry before enabling stronger guardrails")
+        steps.append("Record the final decision with sync_feedback.py after human review")
+    elif action == "new":
+        next_action = "create_new_capability_or_module"
+        steps.extend(f"Read {path}" for path in required_reads[:2])
+        steps.append("Create the new capability in an isolated module boundary first")
+        steps.append("Update profile or ownership rules once the boundary is confirmed")
+    elif action == "reuse":
+        next_action = "modify_call_site_only"
+        steps.extend(f"Read {path}" for path in required_reads[:3])
+        steps.extend(f"Run {check}" for check in required_checks[:2])
+        steps.append("Avoid changing the routed capability core unless review says otherwise")
+    elif action == "extend":
+        next_action = "modify_routed_capability"
+        steps.extend(f"Read {path}" for path in required_reads[:3])
+        steps.extend(f"Run {check}" for check in required_checks[:3])
+        steps.append("Apply the change only inside the routed capability boundary")
+    else:
+        next_action = "extract_shared_capability_first"
+        steps.extend(f"Read {path}" for path in required_reads[:3])
+        steps.extend(f"Run {check}" for check in required_checks[:3])
+        steps.append("Extract shared logic before applying downstream feature changes")
+
+    if confidence_level == "low":
+        steps.append("Treat this route as advisory and require manual confirmation before editing")
+    if repo_stage in {"seed", "emerging"}:
+        steps.append("Keep repository-local routing data provisional until boundaries stabilize")
+    for veto_reason in veto_reasons[:2]:
+        steps.append(f"Reason for caution: {veto_reason}")
+    deduped: list[str] = []
+    for step in steps:
+        if step not in deduped:
+            deduped.append(step)
+    return next_action, deduped[:8]
+
+
 def determine_action(
     request_text: str,
     changed_paths: list[str],
@@ -2669,6 +2776,30 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
     positive_signals = best_signals.get("positive_signals", {}) if route_scores else {}
     negative_signals = best_signals.get("negative_signals", {}) if route_scores else {}
     risk_signals = best_signals.get("risk_signals", {}) if route_scores else {}
+    request_has_change_verb = any(word in request_text.lower() for word in CHANGE_VERBS)
+    why_not_actions = build_why_not_actions(
+        action,
+        bundle.get("config", {}).get("repo_stage", "emerging"),
+        primary_capability,
+        confidence_level,
+        request_has_change_verb,
+        request_prefers_extract(request_text),
+        normalized_changed_paths,
+        request_duplicate_signal(request_text, normalized_changed_paths)[0],
+        high_risk,
+        ov,
+        request_requires_review(request_text),
+        negative_signals,
+    )
+    recommended_next_action, recommended_next_steps = build_recommended_next_action(
+        action,
+        bundle.get("config", {}).get("repo_stage", "emerging"),
+        confidence_level,
+        required_reads,
+        required_checks,
+        negative_signals,
+        veto_reasons,
+    )
     return RouteDecision(
         decision_id=decision_id,
         timestamp=iso_now(),
@@ -2690,6 +2821,9 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         review_required=action == "review",
         coordination_required=coordination_required,
         composite_route_required=composite_required,
+        recommended_next_action=recommended_next_action,
+        recommended_next_steps=recommended_next_steps,
+        why_not_actions=why_not_actions,
         confidence_reasons=confidence_reasons,
         veto_reasons=veto_reasons,
         positive_signals=positive_signals,

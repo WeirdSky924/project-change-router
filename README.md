@@ -171,12 +171,24 @@ Route 输出现在还会显式给出：
 - `positive_signals`
 - `negative_signals`
 - `risk_signals`
+- `recommended_next_action`
+- `recommended_next_steps`
+- `why_not_actions`
+- `recommended_next_action`
+- `recommended_next_steps`
+- `why_not_actions`
 
 建议解释：
 
 - `high`：有较强 profile / 边界 / 结构证据
 - `medium`：有部分结构证据，但仍需谨慎
 - `low`：证据不足，默认应理解为 `review`
+
+使用建议：
+
+- 优先看 `recommended_next_action`
+- 再看 `recommended_next_steps`
+- 如果要理解为什么不是别的动作，看 `why_not_actions`
 
 ## 生命周期
 
@@ -252,6 +264,15 @@ project-change-router.profile.yml
 - [examples/profiles/ts-workspace.project-change-router.yaml](./examples/profiles/ts-workspace.project-change-router.yaml)
 - [examples/profiles/mixed-repo.project-change-router.yaml](./examples/profiles/mixed-repo.project-change-router.yaml)
 
+真实结构匿名校准参考见：
+
+- [examples/calibration/README.md](./examples/calibration/README.md)
+- [examples/calibration/anonymized-structure.md](./examples/calibration/anonymized-structure.md)
+- [examples/calibration/anonymized-profile.yaml](./examples/calibration/anonymized-profile.yaml)
+- [examples/calibration/anonymized-module-map.yaml](./examples/calibration/anonymized-module-map.yaml)
+- [examples/calibration/anonymized-route-cases.yaml](./examples/calibration/anonymized-route-cases.yaml)
+- [examples/calibration/anonymized-feedback.json](./examples/calibration/anonymized-feedback.json)
+
 ## Bundle 样例
 
 完整最小样例见：
@@ -292,6 +313,9 @@ project-change-router.profile.yml
 - `confidence_reasons`
 - `veto_reasons`
 - `primary_capability_stage`
+- `recommended_next_action`
+- `recommended_next_steps`
+- `why_not_actions`
 
 ## 主要脚本
 

@@ -1,0 +1,9 @@
+{
+  "decision_id": "route-anonymized-001",
+  "final_action": "review",
+  "final_capability": "context-runtime",
+  "confirmed_public_entry": "backend/services/context_runtime/__init__.py",
+  "confirmed_owner": "platform-runtime-team",
+  "profile_update_recommended": true,
+  "notes": "Anonymized real-world calibration feedback example"
+}

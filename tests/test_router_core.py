@@ -190,6 +190,9 @@ def test_python_repo_root_detection_and_resolution(tmp_path: Path) -> None:
     assert isinstance(decision.positive_signals, dict)
     assert isinstance(decision.negative_signals, dict)
     assert isinstance(decision.risk_signals, dict)
+    assert isinstance(decision.recommended_next_action, str)
+    assert isinstance(decision.recommended_next_steps, list)
+    assert isinstance(decision.why_not_actions, dict)
 
 
 def test_typescript_workspace_dependency_mapping(tmp_path: Path) -> None:
@@ -235,6 +238,7 @@ def test_seed_repo_stage_is_conservative(tmp_path: Path) -> None:
     assert decision.action == "review"
     assert decision.confidence_level == "low"
     assert decision.veto_reasons
+    assert decision.recommended_next_action == "request_human_review"
 
 
 def test_emerging_repo_limits_provisional_capabilities(tmp_path: Path) -> None:
@@ -253,6 +257,7 @@ def test_emerging_repo_limits_provisional_capabilities(tmp_path: Path) -> None:
         assert decision.action == "review"
     else:
         assert decision.action in {"review", "extract"}
+    assert "extract" in decision.why_not_actions
 
 
 def test_validate_bundle(tmp_path: Path) -> None:

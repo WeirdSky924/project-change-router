@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "generated_at", "generated_by", "source_repository", "source_commit", "repo_id", "repositories", "protected_branch_patterns", "ignore_paths", "supported_languages", "module_discovery", "freshness_windows", "evaluation", "route_reports_dir", "rebuild_reports_dir", "guardrail_reports_dir", "evaluation_reports_dir"],
+  "required": ["schema_version", "generated_at", "generated_by", "source_repository", "source_commit", "repo_id", "repositories", "protected_branch_patterns", "ignore_paths", "supported_languages", "module_discovery", "repo_stage", "repo_stage_score", "repo_stage_reasons", "repo_stage_signals", "freshness_windows", "evaluation", "route_reports_dir", "rebuild_reports_dir", "guardrail_reports_dir", "evaluation_reports_dir"],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
     "generated_at": { "type": "string" },
@@ -14,6 +14,10 @@
     "ignore_paths": { "type": "array", "items": { "type": "string" } },
     "supported_languages": { "type": "array", "items": { "type": "string" } },
     "module_discovery": { "type": "object" },
+    "repo_stage": { "type": "string" },
+    "repo_stage_score": { "type": "number" },
+    "repo_stage_reasons": { "type": "array", "items": { "type": "string" } },
+    "repo_stage_signals": { "type": "object" },
     "freshness_windows": { "type": "object" },
     "evaluation": { "type": "object" },
     "route_reports_dir": { "type": "string" },

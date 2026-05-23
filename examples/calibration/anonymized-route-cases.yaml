@@ -1,0 +1,42 @@
+schema_version: 1
+generated_at: "2026-05-24T00:00:00Z"
+generated_by: anonymized-calibration
+source_repository: anonymized-real-world
+source_commit: null
+mode: curated
+cases:
+  - id: real-case-context-review
+    request: Extend the existing context runtime behavior with a new retrieval rule.
+    expected_action: review
+    expected_capabilities:
+      - context-runtime
+    expected_modules:
+      - backend/services/context_runtime
+    expected_reads:
+      - backend/services/context_runtime/packet_builder.py
+    changed_paths:
+      - backend/services/context_runtime
+    risk_level: high
+  - id: real-case-workflow-adapter-extend
+    request: Extend the existing workflow adapter boundary with a new downstream integration.
+    expected_action: review
+    expected_capabilities:
+      - workflow-integration
+    expected_modules:
+      - backend/services/workflow_adapters
+    expected_reads:
+      - backend/services/workflow_adapters/adapter_a.py
+    changed_paths:
+      - backend/services/workflow_adapters
+    risk_level: high
+  - id: real-case-frontend-api-review
+    request: Reuse the existing frontend API boundary without changing backend contracts.
+    expected_action: review
+    expected_capabilities: []
+    expected_modules:
+      - frontend/src/api
+    expected_reads:
+      - frontend/src/api/client.ts
+    changed_paths:
+      - frontend/src/api
+    risk_level: medium

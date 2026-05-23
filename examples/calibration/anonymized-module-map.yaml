@@ -1,0 +1,93 @@
+schema_version: 1
+generated_at: "2026-05-24T00:00:00Z"
+generated_by: anonymized-calibration
+source_repository: anonymized-real-world
+source_commit: null
+modules:
+  - id: module-backend-api
+    path: backend/api
+    layer: adapter
+    domain: api
+    purpose: Backend HTTP routing entry
+    public_api: app.py
+    source_of_truth: calibration
+    key_files:
+      - app.py
+    depends_on:
+      - backend/services/context_runtime
+      - backend/services/workflow_adapters
+    allowed_inbound_from: []
+    allowed_outbound_to:
+      - backend/services/context_runtime
+      - backend/services/workflow_adapters
+    generated: false
+    index_sources:
+      - backend/api/app.py
+    owner: provisional:backend-api
+    status: active
+    lifecycle:
+      language: python
+  - id: module-backend-services-context-runtime
+    path: backend/services/context_runtime
+    layer: shared-capability
+    domain: context-runtime
+    purpose: Context packet assembly and retrieval
+    public_api: __init__.py
+    source_of_truth: calibration
+    key_files:
+      - packet_builder.py
+      - retrieval.py
+      - snapshot_service.py
+    depends_on: []
+    allowed_inbound_from: []
+    allowed_outbound_to: []
+    generated: false
+    index_sources:
+      - backend/services/context_runtime
+    owner: provisional:context-runtime
+    status: active
+    lifecycle:
+      language: python
+  - id: module-backend-services-workflow-adapters
+    path: backend/services/workflow_adapters
+    layer: adapter
+    domain: workflow-adapters
+    purpose: Bridges workflow engine to capability services
+    public_api: __init__.py
+    source_of_truth: calibration
+    key_files:
+      - adapter_a.py
+      - adapter_b.py
+    depends_on:
+      - backend/services/context_runtime
+    allowed_inbound_from: []
+    allowed_outbound_to:
+      - backend/services/context_runtime
+    generated: false
+    index_sources:
+      - backend/services/workflow_adapters
+    owner: provisional:workflow-adapters
+    status: active
+    lifecycle:
+      language: python
+  - id: module-frontend-src-api
+    path: frontend/src/api
+    layer: adapter
+    domain: frontend-api
+    purpose: Frontend API boundary
+    public_api: index.ts
+    source_of_truth: calibration
+    key_files:
+      - client.ts
+      - workflows.ts
+      - contexts.ts
+    depends_on: []
+    allowed_inbound_from: []
+    allowed_outbound_to: []
+    generated: false
+    index_sources:
+      - frontend/src/api
+    owner: provisional:frontend-api
+    status: active
+    lifecycle:
+      language: typescript
