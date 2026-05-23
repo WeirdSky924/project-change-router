@@ -15,6 +15,7 @@ It can also bootstrap a repository-local `project-change-router/` bundle contain
 - exception registry
 - evaluation set
 - validation schemas
+- optional repository profile overrides
 
 ## What It Does
 
@@ -22,6 +23,7 @@ It can also bootstrap a repository-local `project-change-router/` bundle contain
 - reduce duplicate implementations
 - enforce dependency and public API boundaries
 - generate repository-local routing bundles
+- load repository-level `.project-change-router.yaml` overrides for capability and ownership rules
 - validate routing bundles with JSON Schema
 - run evaluation cases against routing logic
 - generate feedback proposals from routing and guardrail reports
@@ -46,13 +48,7 @@ project-change-router/
 Clone or copy this directory to:
 
 ```text
-C:\Users\<your-user>\.codex\skills\project-change-router
-```
-
-On this machine the installed path is:
-
-```text
-C:\Users\dell\.codex\skills\project-change-router
+%USERPROFILE%\.codex\skills\project-change-router
 ```
 
 ## Validation
@@ -60,7 +56,7 @@ C:\Users\dell\.codex\skills\project-change-router
 Run:
 
 ```powershell
-python C:\Users\dell\.codex\skills\.system\skill-creator\scripts\quick_validate.py C:\Users\dell\.codex\skills\project-change-router
+python <codex-home>\skills\.system\skill-creator\scripts\quick_validate.py <codex-home>\skills\project-change-router
 ```
 
 Expected result:
@@ -77,6 +73,19 @@ Invoke the skill explicitly in a Codex request:
 - `Use $project-change-router to resolve the correct capability entry for this change.`
 - `Use $project-change-router to validate the repository-local router bundle.`
 
+In Claude Code, invoke it explicitly as:
+
+- `/project-change-router bootstrap a router bundle for this repository`
+- `/project-change-router resolve the correct capability entry for this change`
+- `/project-change-router validate the repository-local router bundle`
+
+## Execution Modes
+
+- Read-only mode: `resolve_entry.py`, `check_reuse.py`, `check_deps.py`, `check_public_api.py`, `check_index_freshness.py`, `run_evaluation.py`
+- Write mode: `bootstrap_router.py`, `rebuild_index.py`
+
+Default to read-only mode. Only use write mode when the user explicitly wants repository-local routing data to be created or refreshed.
+
 ## Repository-Local Bundle
 
 The skill itself is global.  
@@ -85,7 +94,7 @@ The generated bundle is local to a target repository.
 Bootstrap example:
 
 ```powershell
-python C:\Users\dell\.codex\skills\project-change-router\scripts\bootstrap_router.py --repo E:\_Workspace\SaaS\saas-control-plane --format json
+python <codex-home>\skills\project-change-router\scripts\bootstrap_router.py --repo <repo-root> --format json
 ```
 
 This creates:
@@ -95,6 +104,22 @@ This creates:
 ```
 
 with repository-local references, schemas, and reports.
+
+Optionally, the target repository root can include one of:
+
+```text
+.project-change-router.yaml
+.project-change-router.yml
+project-change-router.profile.yaml
+project-change-router.profile.yml
+```
+
+These files can define:
+
+- capability-to-path mappings
+- ownership rules
+- risk rules
+- module overrides
 
 ## Main Scripts
 
@@ -113,6 +138,7 @@ with repository-local references, schemas, and reports.
 
 - the skill is independent from any single project
 - the repository-local bundle is generated on demand
+- repository-specific behavior belongs in profile overrides, not hardcoded Python logic
 - high-risk shared capabilities intentionally route conservatively
 - generated bundles should still be curated by repository owners
 
@@ -122,7 +148,8 @@ This skill was validated with:
 
 - Codex skill structure validation
 - skill-local unit tests
-- bootstrap and bundle validation against real Java and Python/TypeScript repositories
+- bootstrap and bundle validation across Java, Python, TypeScript, and mixed-monorepo fixtures
+- profile override tests for capability and owner remapping
 
 ## Chinese Version
 

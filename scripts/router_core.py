@@ -11,8 +11,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
-import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -23,45 +21,109 @@ import yaml
 from jsonschema import Draft202012Validator
 
 
-SHEBANG = "#!/usr/bin/env python3"
 DEFAULT_IGNORE_GLOBS = [
     "**/.git/**",
+    "**/.hg/**",
+    "**/.svn/**",
     "**/.idea/**",
-    "**/.mvn/**",
-    "**/.maven/**",
+    "**/.vscode/**",
+    "**/.pytest_cache/**",
+    "**/__pycache__/**",
     "**/node_modules/**",
+    "**/.next/**",
+    "**/.nuxt/**",
     "**/dist/**",
     "**/build/**",
     "**/target/**",
     "**/coverage/**",
-    "**/__pycache__/**",
-    "**/.pytest_cache/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/.mypy_cache/**",
+    "**/*.min.js",
     "**/*.class",
     "**/*.log",
 ]
 
-HIGH_RISK_KEYWORDS = [
+CODE_SUFFIXES = {".py", ".java", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+MANIFEST_FILES = [
+    "pom.xml",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "build.gradle",
+    "build.gradle.kts",
+    "go.mod",
+    "Cargo.toml",
+]
+ROOT_MARKERS = [".git", *MANIFEST_FILES]
+GENERIC_CONTAINER_NAMES = {
+    "src",
+    "app",
+    "apps",
+    "services",
+    "packages",
+    "libs",
+    "modules",
+    "backend",
+    "frontend",
+    "clients",
+    "server",
+}
+GENERIC_PATH_TOKENS = {
+    "src",
+    "app",
+    "apps",
+    "services",
+    "packages",
+    "libs",
+    "modules",
+    "backend",
+    "frontend",
+    "clients",
+    "server",
+    "internal",
+    "pkg",
+    "lib",
+    "main",
+    "java",
+    "python",
+    "ts",
+    "js",
+    "common",
+}
+DEFAULT_HIGH_RISK_KEYWORDS = [
     "auth",
     "authentication",
     "authorization",
-    "jws",
-    "jwks",
-    "security",
+    "identity",
+    "permission",
+    "rbac",
+    "tenant",
+    "workspace",
     "billing",
     "payment",
     "invoice",
+    "refund",
     "subscription",
     "entitlement",
     "quota",
-    "gateway",
-    "tenant",
-    "workspace",
-    "schema",
-    "migration",
-    "webhook",
+    "security",
+    "secret",
     "token",
-    "principal",
+    "credential",
+    "crypto",
+    "migration",
+    "schema",
+    "webhook",
+    "gateway",
 ]
+PRIVATE_SEGMENTS = {"internal", "private", "impl", "_internal", "_private"}
+EXTENSION_FILE_MARKERS = ("plugin", "registry", "hook", "extension", "adapter", "interface", "port")
+CHANGE_VERBS = ("add", "change", "extend", "modify", "update", "introduce", "create", "implement", "fix", "refactor", "增加", "变更", "扩展", "修改", "新增", "实现", "修复", "重构")
 
 
 @dataclass
@@ -145,6 +207,14 @@ def project_root_from_file() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def profile_dir(skill_root: Optional[Path] = None) -> Path:
+    return (skill_root or project_root_from_file()) / "profiles"
+
+
+def schema_dir(skill_root: Optional[Path] = None) -> Path:
+    return (skill_root or project_root_from_file()) / "schemas"
+
+
 def load_yaml_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -187,61 +257,76 @@ def safe_parse_date(value: Optional[str]) -> Optional[dt.date]:
 
 
 def normalize_rel_path(root: Path, path: Path | str) -> str:
-    return Path(path).resolve().relative_to(root.resolve()).as_posix()
+    root = root.resolve()
+    value = Path(path).resolve()
+    try:
+        return value.relative_to(root).as_posix()
+    except ValueError:
+        return value.as_posix()
 
 
-def glob_match(patterns: Iterable[str], value: str) -> bool:
-    normalized = value.replace("\\", "/")
-    return any(fnmatch.fnmatchcase(normalized, pattern.replace("\\", "/")) for pattern in patterns)
+def stable_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower())
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug or "item"
+
+
+def title_from_slug(value: str) -> str:
+    return " ".join(part.capitalize() for part in stable_slug(value).split("-") if part) or "Capability"
 
 
 def text_tokens(text: str) -> list[str]:
     return [token for token in re.split(r"[^0-9A-Za-z_\u4e00-\u9fff]+", text.lower()) if token]
 
 
-def text_contains_any(text: str, keywords: Iterable[str]) -> bool:
-    haystack = text.lower()
-    return any(keyword.lower() in haystack for keyword in keywords)
-
-
 def match_strength(text: str, keywords: Iterable[str]) -> float:
     lower = text.lower()
-    score = 0.0
+    best = 0.0
     for keyword in keywords:
-        k = keyword.lower()
-        if not k:
+        candidate = keyword.lower().strip()
+        if not candidate:
             continue
-        if k in lower:
+        if candidate in lower:
             return 1.0
-        if any(part and part in lower for part in re.split(r"[^0-9A-Za-z\u4e00-\u9fff]+", k)):
-            score = max(score, 0.5)
-    return score
+        parts = [part for part in re.split(r"[^0-9A-Za-z_\u4e00-\u9fff]+", candidate) if part]
+        if parts and any(part in lower for part in parts):
+            best = max(best, 0.5)
+    return best
 
 
-def stable_slug(value: str) -> str:
-    value = value.lower()
-    value = re.sub(r"[^a-z0-9]+", "-", value)
-    value = re.sub(r"-+", "-", value).strip("-")
-    return value or "item"
+def glob_match(patterns: Iterable[str], value: str) -> bool:
+    normalized = value.replace("\\", "/")
+    for pattern in patterns:
+        normalized_pattern = pattern.replace("\\", "/")
+        if fnmatch.fnmatchcase(normalized, normalized_pattern):
+            return True
+        if normalized_pattern.endswith("/**"):
+            root = normalized_pattern[:-3].rstrip("/")
+            if normalized == root or normalized.startswith(root + "/"):
+                return True
+    return False
 
 
-def file_suffix_kind(path: Path) -> str:
-    suffix = path.suffix.lower()
-    if suffix == ".py":
-        return "python"
-    if suffix in {".ts", ".tsx"}:
-        return "typescript"
-    if suffix in {".js", ".jsx", ".mjs", ".cjs"}:
-        return "javascript"
-    if suffix == ".java":
-        return "java"
-    return "text"
+def current_git_commit(repo_root: Path) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def default_ignore_patterns(config: dict[str, Any]) -> list[str]:
     patterns = list(DEFAULT_IGNORE_GLOBS)
     patterns.extend(config.get("ignore_paths", []))
-    return patterns
+    return list(dict.fromkeys(patterns))
 
 
 def should_ignore_path(path: Path, ignore_patterns: Iterable[str], root: Path) -> bool:
@@ -253,24 +338,87 @@ def iter_source_files(root: Path, ignore_patterns: Iterable[str]) -> Iterator[Pa
     for base, dirs, files in os.walk(root):
         base_path = Path(base)
         dirs[:] = [
-            d for d in dirs if not should_ignore_path(base_path / d, ignore_patterns, root)
+            name for name in dirs if not should_ignore_path(base_path / name, ignore_patterns, root)
         ]
         for filename in files:
             path = base_path / filename
             if should_ignore_path(path, ignore_patterns, root):
                 continue
-            if path.suffix.lower() in {".py", ".java", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".yaml", ".yml", ".xml"}:
+            if path.suffix.lower() in CODE_SUFFIXES | {".json", ".yaml", ".yml", ".xml", ".toml"}:
                 yield path
+
+
+def contains_code(path: Path, suffixes: Optional[set[str]] = None) -> bool:
+    suffixes = suffixes or CODE_SUFFIXES
+    if path.is_file():
+        return path.suffix.lower() in suffixes
+    for candidate in path.rglob("*"):
+        if candidate.is_file() and candidate.suffix.lower() in suffixes:
+            return True
+    return False
 
 
 def repo_root_from(start: Path | str | None = None) -> Path:
     current = Path(start or Path.cwd()).resolve()
+    bundle_marker = Path("project-change-router") / "router-config.yaml"
+    best: Optional[Path] = None
+    best_score = -1
     for candidate in [current, *current.parents]:
-        if (candidate / "project-change-router" / "router-config.yaml").exists():
+        if (candidate / bundle_marker).exists():
             return candidate
-        if (candidate / "pom.xml").exists() or (candidate / "package.json").exists() or (candidate / "app").exists():
-            return candidate
-    return current
+        score = 0
+        if (candidate / ".git").exists():
+            score += 100
+        score += sum(10 for marker in MANIFEST_FILES if (candidate / marker).exists())
+        if any((candidate / child).exists() for child in ("src", "app", "services", "packages", "libs")):
+            score += 3
+        if score > best_score:
+            best = candidate
+            best_score = score
+    return best or current
+
+
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        elif key in result and isinstance(result[key], list) and isinstance(value, list):
+            merged = list(result[key])
+            for item in value:
+                if item not in merged:
+                    merged.append(item)
+            result[key] = merged
+        else:
+            result[key] = value
+    return result
+
+
+def profile_candidates(repo_root: Path) -> list[Path]:
+    candidates = [
+        repo_root / ".project-change-router.yaml",
+        repo_root / ".project-change-router.yml",
+        repo_root / "project-change-router.profile.yaml",
+        repo_root / "project-change-router.profile.yml",
+    ]
+    skill_profiles = profile_dir()
+    if skill_profiles.exists():
+        candidates.extend(
+            [
+                skill_profiles / f"{repo_root.name}.yaml",
+                skill_profiles / f"{repo_root.name}.yml",
+            ]
+        )
+    return [path for path in candidates if path.exists()]
+
+
+def load_active_profile(repo_root: Path) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for path in profile_candidates(repo_root):
+        data = load_yaml_file(path)
+        if data:
+            merged = deep_merge(merged, data)
+    return merged
 
 
 def load_bundle(bundle_root: Path) -> dict[str, Any]:
@@ -295,11 +443,6 @@ def resolve_bundle_root(repo_root: Path) -> Path:
     return repo_root / "project-change-router"
 
 
-def schema_dir(skill_root: Optional[Path] = None) -> Path:
-    skill_root = skill_root or project_root_from_file()
-    return skill_root / "schemas"
-
-
 def validate_against_schema(data: dict[str, Any], schema_path: Path) -> list[str]:
     schema = load_json_file(schema_path)
     validator = Draft202012Validator(schema)
@@ -309,10 +452,8 @@ def validate_against_schema(data: dict[str, Any], schema_path: Path) -> list[str
 
 def validate_bundle(bundle_root: Path, skill_root: Optional[Path] = None) -> list[str]:
     errors: list[str] = []
-    skill_root = skill_root or project_root_from_file()
     schema_root = schema_dir(skill_root)
     refs = bundle_root / "references"
-
     files_and_schemas = [
         (bundle_root / "router-config.yaml", schema_root / "router-config.schema.json"),
         (refs / "capability-catalog.yaml", schema_root / "capability-catalog.schema.json"),
@@ -329,98 +470,195 @@ def validate_bundle(bundle_root: Path, skill_root: Optional[Path] = None) -> lis
         if not schema_path.exists():
             errors.append(f"missing schema: {schema_path}")
             continue
-        errors.extend([f"{file_path.name}: {msg}" for msg in validate_against_schema(load_yaml_file(file_path), schema_path)])
-
+        prefix = f"{file_path.name}: "
+        errors.extend([prefix + item for item in validate_against_schema(load_yaml_file(file_path), schema_path)])
     return errors
 
 
-def java_package_prefix(module_path: str) -> str:
-    tail = Path(module_path).name
-    tail = tail.replace("-", ".")
-    if tail.startswith("sdk."):
-        return "com.saas.sdk"
-    if tail == "saas-app":
-        return "com.saas.app"
-    if tail.startswith("saas-"):
-        tail = tail[len("saas-") :]
-    return f"com.saas.{tail.replace('-', '.')}"
+def validate_bundle_files(bundle_root: Path) -> list[str]:
+    return validate_bundle(bundle_root)
 
 
-def classify_layer(path: str) -> str:
-    path_lower = path.lower().replace("\\", "/")
-    if "/frontend" in path_lower or path_lower.endswith("admin-ui"):
-        return "ui"
-    if "/sdk-" in path_lower:
-        return "adapter"
-    if "/gateway" in path_lower or "/ops/" in path_lower or path_lower.endswith("/ops"):
-        return "infra"
-    if any(token in path_lower for token in ["/security", "/billing", "/tenant", "/entitlement", "/audit", "/application", "/workflow", "/outline", "/lore", "/character", "/skill", "saas-security", "saas-billing", "saas-tenant", "saas-entitlement", "saas-audit", "saas-application"]):
-        return "shared-capability"
-    if "/app" in path_lower or "/demo" in path_lower:
-        return "feature-module"
-    return "domain-service"
+def schema_files() -> list[str]:
+    return sorted(path.name for path in schema_dir().glob("*.json"))
 
 
-def classify_domain(path: str) -> str:
-    path_lower = path.lower().replace("\\", "/")
-    for keyword in [
-        "security",
-        "tenant",
-        "billing",
-        "entitlement",
-        "gateway",
-        "audit",
-        "developer",
-        "application",
-        "workflow",
-        "outline",
-        "lore",
-        "character",
-        "skill",
-        "context",
-        "frontend",
-        "api",
-        "model",
-        "database",
-        "agent",
-    ]:
-        if keyword in path_lower:
-            return keyword
-    return Path(path).name
-
-
-def detect_repo_manifest_kind(repo_root: Path) -> str:
-    if (repo_root / "pom.xml").exists():
-        return "maven"
-    if (repo_root / "package.json").exists():
-        return "node"
-    if (repo_root / "requirements.txt").exists() or (repo_root / "pyproject.toml").exists() or (repo_root / "app").exists():
+def file_suffix_kind(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".py":
         return "python"
-    return "generic"
+    if suffix == ".java":
+        return "java"
+    if suffix in {".ts", ".tsx"}:
+        return "typescript"
+    if suffix in {".js", ".jsx", ".mjs", ".cjs"}:
+        return "javascript"
+    return "text"
 
 
 def parse_xml_modules(pom_path: Path) -> list[str]:
     tree = ET.parse(pom_path)
     root = tree.getroot()
     ns = {"m": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {}
-    modules = []
-    for module in root.findall(".//m:modules/m:module", ns) if ns else root.findall(".//modules/module"):
-        text = (module.text or "").strip()
+    query = ".//m:modules/m:module" if ns else ".//modules/module"
+    result = []
+    for node in root.findall(query, ns):
+        text = (node.text or "").strip()
         if text:
-            modules.append(text)
-    return modules
+            result.append(text.replace("\\", "/"))
+    return result
 
 
 def parse_xml_dependencies(pom_path: Path) -> list[str]:
     tree = ET.parse(pom_path)
     root = tree.getroot()
     ns = {"m": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {}
-    deps = []
-    for dep in root.findall(".//m:dependencies/m:dependency", ns) if ns else root.findall(".//dependencies/dependency"):
-        artifact = dep.findtext("m:artifactId", default="", namespaces=ns) if ns else dep.findtext("artifactId", default="")
+    query = ".//m:dependencies/m:dependency" if ns else ".//dependencies/dependency"
+    deps: list[str] = []
+    for node in root.findall(query, ns):
+        artifact = node.findtext("m:artifactId", default="", namespaces=ns) if ns else node.findtext("artifactId", default="")
         if artifact:
             deps.append(artifact.strip())
     return deps
+
+
+def parse_package_json(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def detect_repo_manifest_kind(repo_root: Path) -> str:
+    if (repo_root / "pom.xml").exists():
+        return "maven"
+    if (repo_root / "pnpm-workspace.yaml").exists() or (repo_root / "package.json").exists():
+        return "node"
+    if (repo_root / "pyproject.toml").exists() or (repo_root / "requirements.txt").exists() or (repo_root / "setup.py").exists():
+        return "python"
+    if (repo_root / "settings.gradle").exists() or (repo_root / "settings.gradle.kts").exists():
+        return "gradle"
+    return "generic"
+
+
+def codeowners_candidates(repo_root: Path) -> list[Path]:
+    return [
+        repo_root / ".github" / "CODEOWNERS",
+        repo_root / ".gitlab" / "CODEOWNERS",
+        repo_root / "CODEOWNERS",
+    ]
+
+
+def load_codeowners(repo_root: Path) -> list[tuple[str, list[str]]]:
+    for path in codeowners_candidates(repo_root):
+        if not path.exists():
+            continue
+        rules: list[tuple[str, list[str]]] = []
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = stripped.split()
+            if len(parts) < 2:
+                continue
+            rules.append((parts[0], parts[1:]))
+        return rules
+    return []
+
+
+def codeowner_for_path(rel_path: str, rules: list[tuple[str, list[str]]]) -> Optional[str]:
+    winner: Optional[str] = None
+    normalized = rel_path.replace("\\", "/")
+    for pattern, owners in rules:
+        normalized_pattern = pattern.lstrip("/").replace("\\", "/")
+        if normalized_pattern.endswith("/"):
+            normalized_pattern += "*"
+        if fnmatch.fnmatchcase(normalized, normalized_pattern) or fnmatch.fnmatchcase("/" + normalized, pattern.replace("\\", "/")):
+            if owners:
+                winner = ",".join(owners)
+    return winner
+
+
+def derive_path_tokens(path: str) -> list[str]:
+    return [token for token in re.split(r"[^0-9A-Za-z]+", path.lower().replace("\\", "/")) if token]
+
+
+def extract_domain_from_path(path: str) -> str:
+    tokens = [token for token in derive_path_tokens(path) if token not in GENERIC_PATH_TOKENS]
+    return tokens[-1] if tokens else Path(path).name.lower()
+
+
+def classify_layer(path: str, package_name: Optional[str] = None) -> str:
+    haystack = " ".join([path.lower().replace("\\", "/"), package_name or ""])
+    if any(token in haystack for token in ("frontend", "web", "ui", "admin", "mobile", "client")):
+        return "ui"
+    if any(token in haystack for token in ("infra", "ops", "deploy", "database", "migration", "storage", "queue", "broker", "config")):
+        return "infra"
+    if any(token in haystack for token in ("sdk", "adapter", "integration", "transport", "api", "gateway", "cli")):
+        return "adapter"
+    if any(token in haystack for token in ("shared", "common", "core", "platform", "security", "billing", "tenant", "auth", "identity")):
+        return "shared-capability"
+    if any(token in haystack for token in ("feature", "experience", "product", "workflow", "story")):
+        return "feature-module"
+    return "domain-service"
+
+
+def infer_allowed_layers(layer: str) -> list[str]:
+    matrix = {
+        "ui": ["adapter", "domain-service", "shared-capability", "infra", "feature-module"],
+        "feature-module": ["adapter", "domain-service", "shared-capability", "infra"],
+        "adapter": ["domain-service", "shared-capability", "infra", "adapter"],
+        "domain-service": ["domain-service", "shared-capability", "infra"],
+        "shared-capability": ["shared-capability", "infra"],
+        "infra": ["infra", "shared-capability", "domain-service"],
+    }
+    return matrix.get(layer, ["domain-service", "shared-capability", "infra"])
+
+
+def directory_code_files(path: Path, suffixes: Optional[set[str]] = None) -> list[Path]:
+    suffixes = suffixes or CODE_SUFFIXES
+    files: list[Path] = []
+    for candidate in path.rglob("*"):
+        if candidate.is_file() and candidate.suffix.lower() in suffixes:
+            files.append(candidate)
+    return files
+
+
+def choose_key_files(module_root: Path, preferred: list[str]) -> list[str]:
+    selected: list[str] = []
+    for rel in preferred:
+        candidate = module_root / rel
+        if candidate.exists():
+            selected.append(rel.replace("\\", "/"))
+    if selected:
+        return selected[:6]
+    fallback = []
+    for candidate in directory_code_files(module_root)[:6]:
+        fallback.append(candidate.relative_to(module_root).as_posix())
+    return fallback
+
+
+def java_source_roots(module_root: Path) -> list[str]:
+    roots = []
+    for rel in ("src/main/java", "src/main/kotlin", "src/test/java"):
+        if (module_root / rel).exists():
+            roots.append(rel)
+    return roots
+
+
+def infer_java_packages(module_root: Path) -> list[str]:
+    packages: set[str] = set()
+    for source_root in java_source_roots(module_root):
+        for file in (module_root / source_root).rglob("*.java"):
+            text = file.read_text(encoding="utf-8", errors="ignore")
+            match = re.search(r"^\s*package\s+([\w\.]+)\s*;", text, flags=re.M)
+            if match:
+                package = match.group(1)
+                parts = package.split(".")
+                if len(parts) >= 2:
+                    packages.add(".".join(parts[:2]))
+                packages.add(package)
+    return sorted(packages)
 
 
 def maven_modules(repo_root: Path, ignore_patterns: Iterable[str]) -> list[ModuleEntry]:
@@ -428,209 +666,173 @@ def maven_modules(repo_root: Path, ignore_patterns: Iterable[str]) -> list[Modul
     if not root_pom.exists():
         return []
     declared = parse_xml_modules(root_pom)
+    if not declared:
+        declared = ["."]
+    artifact_lookup: dict[str, str] = {}
     entries: list[ModuleEntry] = []
     for rel in declared:
-        mod_root = (repo_root / rel).resolve()
-        if not mod_root.exists():
+        module_root = (repo_root / rel).resolve()
+        if not module_root.exists() or should_ignore_path(module_root, ignore_patterns, repo_root):
             continue
-        if should_ignore_path(mod_root, ignore_patterns, repo_root):
-            continue
-        artifact = mod_root.name
-        layer = classify_layer(rel)
-        domain = classify_domain(rel)
-        source_root = mod_root / "src" / "main" / "java"
-        public_api = None
-        if source_root.exists():
-            public_api = source_root.relative_to(mod_root).as_posix()
-        elif (mod_root / "src").exists():
-            public_api = "src"
-        key_files = []
-        for candidate in [
-            mod_root / "src" / "main" / "java",
-            mod_root / "src" / "main" / "resources",
-            mod_root / "src" / "test" / "java",
-        ]:
-            if candidate.exists():
-                key_files.append(candidate.relative_to(mod_root).as_posix())
-        deps = []
-        pom = mod_root / "pom.xml"
-        if pom.exists():
-            for dep in parse_xml_dependencies(pom):
-                for rel_other in declared:
-                    if Path(rel_other).name == dep:
-                        deps.append((repo_root / rel_other).resolve().relative_to(repo_root).as_posix())
-                        break
+        pom_path = module_root / "pom.xml"
+        deps = parse_xml_dependencies(pom_path) if pom_path.exists() else []
+        package_prefixes = infer_java_packages(module_root)
+        manifest_sources = ["pom.xml"]
+        key_files = choose_key_files(module_root, ["pom.xml", "src/main/java", "src/main/resources", "src/test/java"])
+        module_path = rel.replace("\\", "/")
+        if module_path == ".":
+            module_path = "."
+        artifact_lookup[module_root.name] = module_path
         entries.append(
             ModuleEntry(
-                id=module_id_for_path(rel),
-                path=rel.replace("\\", "/"),
-                layer=layer,
-                domain=domain,
-                purpose=f"{domain} module",
-                public_api=public_api,
-                source_of_truth="generated",
+                id=f"module-{stable_slug(module_path if module_path != '.' else repo_root.name)}",
+                path=module_path,
+                layer=classify_layer(module_path),
+                domain=extract_domain_from_path(module_path if module_path != "." else repo_root.name),
+                purpose=f"Java module at {module_path}",
+                public_api=java_source_roots(module_root)[0] if java_source_roots(module_root) else None,
                 key_files=key_files,
-                depends_on=sorted(set(deps)),
-                allowed_inbound_from=[],
-                allowed_outbound_to=[],
-                generated=True,
-                index_sources=["pom.xml"],
-                owner="unassigned",
-                status="active",
-                lifecycle={"introduced_at": today_date(), "deprecated_at": None, "replaced_by": None},
+                depends_on=deps,
+                index_sources=manifest_sources,
+                lifecycle={
+                    "language": "java",
+                    "manifest": normalize_rel_path(repo_root, pom_path) if pom_path.exists() else None,
+                    "artifact_name": module_root.name,
+                    "package_prefixes": package_prefixes,
+                    "source_roots": java_source_roots(module_root),
+                    "import_names": package_prefixes or [module_root.name],
+                    "allowed_outbound_layers": infer_allowed_layers(classify_layer(module_path)),
+                },
             )
         )
+    for entry in entries:
+        entry.depends_on = sorted({artifact_lookup.get(dep, dep) for dep in entry.depends_on if artifact_lookup.get(dep, dep) != entry.path and artifact_lookup.get(dep, dep) in {item.path for item in entries}})
     return entries
 
 
 def node_modules(repo_root: Path, ignore_patterns: Iterable[str]) -> list[ModuleEntry]:
     entries: list[ModuleEntry] = []
-    for package_json in repo_root.rglob("package.json"):
-        if should_ignore_path(package_json, ignore_patterns, repo_root):
-            continue
-        pkg_root = package_json.parent
-        if should_ignore_path(pkg_root, ignore_patterns, repo_root):
-            continue
-        try:
-            data = json.loads(package_json.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        name = data.get("name") or pkg_root.name
-        rel = normalize_rel_path(repo_root, pkg_root)
-        layer = classify_layer(rel)
-        domain = classify_domain(rel)
-        key_files = []
-        for candidate in [pkg_root / "src" / "index.ts", pkg_root / "src" / "index.js", pkg_root / "src" / "App.tsx", pkg_root / "src" / "main.tsx"]:
-            if candidate.exists():
-                key_files.append(candidate.relative_to(pkg_root).as_posix())
+    package_files = [path for path in repo_root.rglob("package.json") if not should_ignore_path(path, ignore_patterns, repo_root)]
+    manifest_to_name: dict[Path, str] = {}
+    for package_file in package_files:
+        data = parse_package_json(package_file)
+        name = str(data.get("name") or package_file.parent.name)
+        manifest_to_name[package_file.parent.resolve()] = name
+    path_lookup = {name: normalize_rel_path(repo_root, path) for path, name in manifest_to_name.items()}
+    for package_file in package_files:
+        module_root = package_file.parent
+        data = parse_package_json(package_file)
+        module_path = normalize_rel_path(repo_root, module_root)
+        package_name = str(data.get("name") or module_root.name)
         public_api = None
-        if (pkg_root / "src" / "index.ts").exists():
-            public_api = "src/index.ts"
-        elif (pkg_root / "src" / "index.js").exists():
-            public_api = "src/index.js"
-        elif "exports" in data:
+        for candidate in ("src/index.ts", "src/index.tsx", "src/index.js", "src/index.jsx", "index.ts", "index.js"):
+            if (module_root / candidate).exists():
+                public_api = candidate
+                break
+        if public_api is None and data.get("exports"):
             public_api = "package.json"
+        deps: set[str] = set()
+        for section in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+            for dep_name in (data.get(section) or {}).keys():
+                target = path_lookup.get(dep_name)
+                if target and target != module_path:
+                    deps.add(target)
         entries.append(
             ModuleEntry(
-                id=module_id_for_path(rel),
-                path=rel,
-                layer=layer,
-                domain=domain,
-                purpose=str(data.get("description") or name),
+                id=f"module-{stable_slug(module_path)}",
+                path=module_path,
+                layer=classify_layer(module_path, package_name),
+                domain=extract_domain_from_path(module_path),
+                purpose=str(data.get("description") or f"Node package {package_name}"),
                 public_api=public_api,
-                source_of_truth="generated",
-                key_files=key_files,
-                depends_on=[],
-                allowed_inbound_from=[],
-                allowed_outbound_to=[],
-                generated=True,
-                index_sources=["package.json"],
-                owner="unassigned",
-                status="active",
-                lifecycle={"introduced_at": today_date(), "deprecated_at": None, "replaced_by": None},
+                key_files=choose_key_files(module_root, ["package.json", "src/index.ts", "src/index.js", "src/main.ts", "src/App.tsx"]),
+                depends_on=sorted(deps),
+                index_sources=[normalize_rel_path(repo_root, package_file)],
+                lifecycle={
+                    "language": "node",
+                    "manifest": normalize_rel_path(repo_root, package_file),
+                    "package_name": package_name,
+                    "import_names": [package_name, module_root.name],
+                    "source_roots": ["src"] if (module_root / "src").exists() else ["."],
+                    "allowed_outbound_layers": infer_allowed_layers(classify_layer(module_path, package_name)),
+                },
             )
         )
     return entries
 
 
+def candidate_python_dirs(repo_root: Path, ignore_patterns: Iterable[str]) -> list[Path]:
+    candidates: set[Path] = set()
+    src_root = repo_root / "src"
+    if src_root.exists():
+        for child in src_root.iterdir():
+            if child.is_dir() and not should_ignore_path(child, ignore_patterns, repo_root) and contains_code(child, {".py"}):
+                candidates.add(child)
+    for child in repo_root.iterdir():
+        if not child.is_dir() or should_ignore_path(child, ignore_patterns, repo_root):
+            continue
+        if child.name.startswith("."):
+            continue
+        if (child / "__init__.py").exists():
+            candidates.add(child)
+            continue
+        py_files = list(child.glob("*.py"))
+        if py_files:
+            candidates.add(child)
+            continue
+        if child.name in GENERIC_CONTAINER_NAMES and contains_code(child, {".py"}):
+            for grandchild in child.iterdir():
+                if grandchild.is_dir() and contains_code(grandchild, {".py"}):
+                    candidates.add(grandchild)
+            if not any(item.parent == child for item in candidates) and contains_code(child, {".py"}):
+                candidates.add(child)
+    if not candidates and any((repo_root / marker).exists() for marker in ("pyproject.toml", "requirements.txt", "setup.py")) and contains_code(repo_root, {".py"}):
+        candidates.add(repo_root)
+    return sorted(candidates)
+
+
+def python_import_roots(module_root: Path) -> list[str]:
+    roots: list[str] = []
+    if module_root == module_root.parent / module_root.name and (module_root / "__init__.py").exists():
+        roots.append(module_root.name)
+    for candidate in module_root.iterdir() if module_root.is_dir() else []:
+        if candidate.is_dir() and (candidate / "__init__.py").exists():
+            roots.append(candidate.name)
+    if (module_root / "__init__.py").exists():
+        roots.append(module_root.name)
+    return sorted(set(roots))
+
+
 def python_modules(repo_root: Path, ignore_patterns: Iterable[str]) -> list[ModuleEntry]:
     entries: list[ModuleEntry] = []
-    candidates = [
-        "app",
-        "app/api",
-        "app/agents",
-        "app/database",
-        "app/models",
-        "app/services",
-        "app/services/workflow_engine.py",
-        "app/services/plot_outline_service.py",
-        "app/services/setting_agent_service.py",
-        "app/services/character_depth_service.py",
-        "app/services/skill_service.py",
-        "app/services/assistant_context",
-        "app/services/workflow_adapters",
-        "frontend",
-        "skills",
-    ]
-    for rel_candidate in candidates:
-        root_dir = repo_root / rel_candidate
-        if not root_dir.exists():
-            continue
-        rel = normalize_rel_path(repo_root, root_dir)
-        layer = classify_layer(rel)
-        domain = classify_domain(rel)
-        key_files: list[str] = []
-        if root_dir.is_file():
-            key_files.append(root_dir.name)
-        else:
-            if rel_candidate in {"app", "frontend", "skills"}:
-                for candidate in root_dir.glob("*.py"):
-                    key_files.append(candidate.name)
-            if rel_candidate == "app/api":
-                for candidate in (root_dir / "routes").glob("*.py") if (root_dir / "routes").exists() else []:
-                    key_files.append(f"routes/{candidate.name}")
-            elif rel_candidate == "app/agents":
-                for candidate in root_dir.glob("*.py"):
-                    key_files.append(candidate.name)
-                for candidate in (root_dir / "director").glob("*.py") if (root_dir / "director").exists() else []:
-                    key_files.append(f"director/{candidate.name}")
-            elif rel_candidate == "app/database":
-                for candidate in root_dir.glob("*.py"):
-                    key_files.append(candidate.name)
-            elif rel_candidate == "app/models":
-                for candidate in root_dir.glob("*.py"):
-                    key_files.append(candidate.name)
-            elif rel_candidate == "app/services":
-                for candidate in root_dir.glob("*.py"):
-                    key_files.append(candidate.name)
-                for candidate in (root_dir / "assistant_context").glob("*.py") if (root_dir / "assistant_context").exists() else []:
-                    key_files.append(f"assistant_context/{candidate.name}")
-                for candidate in (root_dir / "workflow_adapters").glob("*.py") if (root_dir / "workflow_adapters").exists() else []:
-                    key_files.append(f"workflow_adapters/{candidate.name}")
-            elif rel_candidate.startswith("app/services/") and root_dir.is_file():
-                key_files.append(root_dir.name)
-            elif rel_candidate == "frontend":
-                for candidate in root_dir.rglob("*.tsx"):
-                    if candidate.name in {"main.tsx", "App.tsx"}:
-                        key_files.append(candidate.relative_to(root_dir).as_posix())
-            elif rel_candidate == "skills":
-                for candidate in root_dir.rglob("*.md"):
-                    key_files.append(candidate.relative_to(root_dir).as_posix())
-        public_api = None
-        if rel_candidate == "app/api":
-            public_api = "routes"
-        elif rel_candidate == "app/agents":
-            public_api = "__init__.py" if (root_dir / "__init__.py").exists() else None
-        elif rel_candidate == "app/database":
-            public_api = "__init__.py" if (root_dir / "__init__.py").exists() else None
-        elif rel_candidate == "app/models":
-            public_api = "__init__.py" if (root_dir / "__init__.py").exists() else None
-        elif rel_candidate == "app/services":
-            public_api = "__init__.py" if (root_dir / "__init__.py").exists() else None
-        elif rel_candidate.startswith("app/services/") and root_dir.is_file():
-            public_api = root_dir.name
-        elif rel_candidate == "frontend":
-            public_api = "src/main.tsx" if (root_dir / "src" / "main.tsx").exists() else "src/App.tsx" if (root_dir / "src" / "App.tsx").exists() else None
-        elif rel_candidate == "skills":
-            public_api = "core"
+    for module_root in candidate_python_dirs(repo_root, ignore_patterns):
+        module_path = normalize_rel_path(repo_root, module_root)
+        if module_path == ".":
+            module_path = "."
+        import_names = python_import_roots(module_root)
+        public_api = "__init__.py" if (module_root / "__init__.py").exists() else None
+        if public_api is None:
+            for candidate in ("main.py", "app.py", "service.py", "api.py"):
+                if (module_root / candidate).exists():
+                    public_api = candidate
+                    break
+        layer = classify_layer(module_path)
         entries.append(
             ModuleEntry(
-                id=module_id_for_path(rel),
-                path=rel,
+                id=f"module-{stable_slug(module_path if module_path != '.' else repo_root.name)}",
+                path=module_path,
                 layer=layer,
-                domain=domain,
-                purpose=f"{domain} package",
+                domain=extract_domain_from_path(module_path if module_path != "." else repo_root.name),
+                purpose=f"Python module at {module_path}",
                 public_api=public_api,
-                source_of_truth="generated",
-                key_files=sorted(set(key_files)),
-                depends_on=[],
-                allowed_inbound_from=[],
-                allowed_outbound_to=[],
-                generated=True,
-                index_sources=["filesystem"],
-                owner="unassigned",
-                status="active",
-                lifecycle={"introduced_at": today_date(), "deprecated_at": None, "replaced_by": None},
+                key_files=choose_key_files(module_root, ["__init__.py", "main.py", "app.py", "service.py", "api.py"]),
+                index_sources=[module_path],
+                lifecycle={
+                    "language": "python",
+                    "import_names": import_names or [module_root.name],
+                    "source_roots": ["."],
+                    "allowed_outbound_layers": infer_allowed_layers(layer),
+                },
             )
         )
     return entries
@@ -638,448 +840,1094 @@ def python_modules(repo_root: Path, ignore_patterns: Iterable[str]) -> list[Modu
 
 def generic_modules(repo_root: Path, ignore_patterns: Iterable[str]) -> list[ModuleEntry]:
     entries: list[ModuleEntry] = []
-    for candidate in repo_root.iterdir():
-        if candidate.is_dir() and not should_ignore_path(candidate, ignore_patterns, repo_root):
-            rel = normalize_rel_path(repo_root, candidate)
-            if rel.startswith("."):
-                continue
-            layer = classify_layer(rel)
-            domain = classify_domain(rel)
-            if any(key in rel.lower() for key in ["src", "app", "backend", "frontend", "sdk", "ops", "services", "api", "database", "models", "agents"]):
-                entries.append(
-                    ModuleEntry(
-                        id=module_id_for_path(rel),
-                        path=rel,
-                        layer=layer,
-                        domain=domain,
-                        purpose=f"{domain} module",
-                        public_api=None,
-                        source_of_truth="generated",
-                        key_files=[],
-                        depends_on=[],
-                        allowed_inbound_from=[],
-                        allowed_outbound_to=[],
-                        generated=True,
-                        index_sources=["filesystem"],
-                        owner="unassigned",
-                        status="active",
-                        lifecycle={"introduced_at": today_date(), "deprecated_at": None, "replaced_by": None},
-                    )
-                )
+    top_level_code_dirs = []
+    for child in repo_root.iterdir():
+        if not child.is_dir() or should_ignore_path(child, ignore_patterns, repo_root):
+            continue
+        if child.name.startswith(".") or child.name in {"project-change-router"}:
+            continue
+        if contains_code(child):
+            top_level_code_dirs.append(child)
+    for module_root in top_level_code_dirs:
+        module_path = normalize_rel_path(repo_root, module_root)
+        layer = classify_layer(module_path)
+        entries.append(
+            ModuleEntry(
+                id=f"module-{stable_slug(module_path)}",
+                path=module_path,
+                layer=layer,
+                domain=extract_domain_from_path(module_path),
+                purpose=f"Source module at {module_path}",
+                public_api=None,
+                key_files=choose_key_files(module_root, []),
+                index_sources=[module_path],
+                lifecycle={
+                    "language": "generic",
+                    "import_names": [module_root.name],
+                    "source_roots": ["."],
+                    "allowed_outbound_layers": infer_allowed_layers(layer),
+                },
+            )
+        )
+    if not entries and contains_code(repo_root):
+        entries.append(
+            ModuleEntry(
+                id=f"module-{stable_slug(repo_root.name)}",
+                path=".",
+                layer="domain-service",
+                domain=extract_domain_from_path(repo_root.name),
+                purpose="Root workspace module",
+                public_api=None,
+                key_files=choose_key_files(repo_root, []),
+                index_sources=["."],
+                lifecycle={
+                    "language": "generic",
+                    "import_names": [repo_root.name],
+                    "source_roots": ["."],
+                    "allowed_outbound_layers": infer_allowed_layers("domain-service"),
+                },
+            )
+        )
     return entries
 
 
-def discover_modules(repo_root: Path, config: Optional[dict[str, Any]] = None) -> list[ModuleEntry]:
-    config = config or {}
-    ignore_patterns = default_ignore_patterns(config)
-    entries: list[ModuleEntry] = []
-    entries.extend(maven_modules(repo_root, ignore_patterns))
-    entries.extend(node_modules(repo_root, ignore_patterns))
-    entries.extend(python_modules(repo_root, ignore_patterns))
-    entries.extend(generic_modules(repo_root, ignore_patterns))
+def dedupe_modules(modules: list[ModuleEntry], repo_root: Path) -> list[ModuleEntry]:
+    by_path: dict[str, ModuleEntry] = {}
+    for module in modules:
+        existing = by_path.get(module.path)
+        if not existing:
+            by_path[module.path] = module
+            continue
+        existing_score = len(existing.index_sources) + len(existing.key_files) + len(existing.depends_on)
+        new_score = len(module.index_sources) + len(module.key_files) + len(module.depends_on)
+        if new_score > existing_score:
+            by_path[module.path] = module
+    result = list(by_path.values())
+    drop_paths: set[str] = set()
+    paths = {module.path for module in result}
+    for module in result:
+        if module.path == ".":
+            if len(result) > 1:
+                drop_paths.add(".")
+            continue
+        if Path(module.path).name in GENERIC_CONTAINER_NAMES:
+            prefix = module.path.rstrip("/") + "/"
+            if any(other != module.path and other.startswith(prefix) for other in paths):
+                root = repo_root / module.path
+                direct_code = any(candidate.is_file() and candidate.suffix.lower() in CODE_SUFFIXES for candidate in root.glob("*")) if root.exists() else False
+                if not direct_code:
+                    drop_paths.add(module.path)
+    return sorted([module for module in result if module.path not in drop_paths], key=lambda item: (item.path.count("/"), item.path))
 
-    dedup: dict[str, ModuleEntry] = {}
-    for entry in entries:
-        rel = entry.path.replace("\\", "/")
-        if rel not in dedup or len(entry.key_files) > len(dedup[rel].key_files):
-            dedup[rel] = entry
-    return sorted(dedup.values(), key=lambda item: item.path)
+
+def discover_languages(repo_root: Path, modules: list[ModuleEntry]) -> list[str]:
+    languages: set[str] = set()
+    for file in iter_source_files(repo_root, DEFAULT_IGNORE_GLOBS):
+        kind = file_suffix_kind(file)
+        if kind != "text":
+            languages.add(kind)
+    if not languages:
+        for module in modules:
+            language = str(module.lifecycle.get("language") or "")
+            if language and language != "generic":
+                languages.add(language)
+    return sorted(languages or {"generic"})
 
 
-def module_id_for_path(path: str) -> str:
-    parts = [part for part in Path(path).as_posix().split("/") if part]
-    return ".".join(stable_slug(part).replace("-", ".") for part in parts)
+def discover_repositories(repo_root: Path, modules: list[ModuleEntry]) -> list[dict[str, Any]]:
+    repositories = [{"id": repo_root.name, "path": ".", "type": detect_repo_manifest_kind(repo_root)}]
+    top_level_paths = {module.path.split("/")[0] for module in modules if module.path not in {".", ""}}
+    for item in sorted(top_level_paths):
+        candidate = repo_root / item
+        if candidate.is_dir() and any((candidate / marker).exists() for marker in MANIFEST_FILES):
+            repositories.append({"id": item, "path": item, "type": detect_repo_manifest_kind(candidate)})
+    return repositories
 
 
-def matches_module_path(path: str, module_path: str) -> bool:
-    path_n = Path(path).as_posix().lower().rstrip("/")
-    mod_n = Path(module_path).as_posix().lower().rstrip("/")
-    return path_n == mod_n or path_n.startswith(mod_n + "/")
+def public_import_names(module: ModuleEntry) -> list[str]:
+    names = []
+    names.extend(module.lifecycle.get("import_names", []))
+    package_name = module.lifecycle.get("package_name")
+    if package_name:
+        names.append(str(package_name))
+    domain = module.domain
+    if domain:
+        names.append(domain)
+    return list(dict.fromkeys(name for name in names if name))
 
 
 def module_for_path(path: str, modules: list[ModuleEntry]) -> Optional[ModuleEntry]:
-    path_n = Path(path).as_posix().lower()
-    matches = [m for m in modules if path_n == m.path.lower() or path_n.startswith(m.path.lower().rstrip("/") + "/")]
-    if not matches:
+    normalized = path.replace("\\", "/").strip("./")
+    candidates: list[tuple[int, ModuleEntry]] = []
+    for module in modules:
+        if module.path == ".":
+            candidates.append((0, module))
+            continue
+        prefix = module.path.rstrip("/")
+        if normalized == prefix or normalized.startswith(prefix + "/"):
+            candidates.append((prefix.count("/"), module))
+    if not candidates:
         return None
-    return max(matches, key=lambda m: len(m.path))
+    return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
+
+
+def parse_python_imports(path: Path) -> list[str]:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    imports: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.module:
+                imports.append("." * node.level + node.module)
+            elif node.level:
+                imports.append("." * node.level)
+            elif node.module:
+                imports.append(node.module)
+    return imports
+
+
+def parse_js_imports(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    patterns = [
+        r"""import\s+(?:type\s+)?(?:[\w*\s{},]+\s+from\s+)?["']([^"']+)["']""",
+        r"""export\s+(?:type\s+)?(?:[\w*\s{},]+\s+from\s+)?["']([^"']+)["']""",
+        r"""require\(\s*["']([^"']+)["']\s*\)""",
+    ]
+    imports: list[str] = []
+    for pattern in patterns:
+        imports.extend(re.findall(pattern, text))
+    return imports
+
+
+def parse_java_imports(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    return re.findall(r"^\s*import\s+([\w\.]+)\s*;", text, flags=re.M)
+
+
+def infer_import_reference(name: str, source_module: ModuleEntry, modules: list[ModuleEntry], repo_root: Path, source_file: Path) -> tuple[Optional[ModuleEntry], Optional[str]]:
+    if not name:
+        return None, None
+    normalized = name.replace("\\", "/")
+    if normalized.startswith("."):
+        target = (source_file.parent / normalized).resolve()
+        if target.is_dir():
+            if (target / "__init__.py").exists():
+                target = target / "__init__.py"
+        else:
+            for suffix in (".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
+                if target.with_suffix(suffix).exists():
+                    target = target.with_suffix(suffix)
+                    break
+        rel = normalize_rel_path(repo_root, target)
+        module = module_for_path(rel, modules)
+        return module, rel if module else None
+    lower = name.lower()
+    for module in modules:
+        for import_name in public_import_names(module):
+            if lower == import_name.lower() or lower.startswith(import_name.lower() + ".") or lower.startswith(import_name.lower() + "/"):
+                return module, None
+        for prefix in module.lifecycle.get("package_prefixes", []):
+            if lower == prefix.lower() or lower.startswith(prefix.lower() + "."):
+                return module, None
+        if module.path != ".":
+            basename = Path(module.path).name.lower()
+            if lower == basename or lower.startswith(basename + "/") or f"/{basename}/" in lower:
+                return module, None
+    return None, None
+
+
+def resolve_import_to_module(name: str, source_module: ModuleEntry, modules: list[ModuleEntry], repo_root: Path, source_file: Path) -> Optional[ModuleEntry]:
+    target, _ = infer_import_reference(name, source_module, modules, repo_root, source_file)
+    return target
+
+
+def source_files_for_modules(repo_root: Path, modules: list[ModuleEntry], ignore_patterns: Iterable[str]) -> list[Path]:
+    files: list[Path] = []
+    seen: set[str] = set()
+    for module in modules:
+        root = repo_root / module.path if module.path != "." else repo_root
+        if not root.exists():
+            continue
+        for file in iter_source_files(root, ignore_patterns):
+            if file.suffix.lower() not in CODE_SUFFIXES:
+                continue
+            rel = normalize_rel_path(repo_root, file)
+            if rel not in seen:
+                seen.add(rel)
+                files.append(file)
+    return files
+
+
+def discover_modules(repo_root: Path, config: Optional[dict[str, Any]] = None, profile: Optional[dict[str, Any]] = None) -> list[ModuleEntry]:
+    config = config or {}
+    profile = profile or {}
+    merged_config = deep_merge(config, profile.get("discovery", {}))
+    ignore_patterns = default_ignore_patterns(merged_config)
+    discovered: list[ModuleEntry] = []
+    discovered.extend(maven_modules(repo_root, ignore_patterns))
+    discovered.extend(node_modules(repo_root, ignore_patterns))
+    discovered.extend(python_modules(repo_root, ignore_patterns))
+    discovered.extend(generic_modules(repo_root, ignore_patterns))
+    modules = dedupe_modules(discovered, repo_root)
+    apply_profile_module_overrides(modules, profile)
+    infer_module_dependencies(repo_root, modules, merged_config)
+    assign_module_ownership(repo_root, modules, profile)
+    for module in modules:
+        if not module.allowed_outbound_to:
+            module.allowed_outbound_to = sorted(set(module.depends_on))
+        module.lifecycle.setdefault("allowed_outbound_layers", infer_allowed_layers(module.layer))
+    return modules
+
+
+def apply_profile_module_overrides(modules: list[ModuleEntry], profile: dict[str, Any]) -> None:
+    rules = profile.get("module_overrides", [])
+    for module in modules:
+        for rule in rules:
+            patterns = rule.get("path_patterns", [])
+            if patterns and not glob_match(patterns, module.path):
+                continue
+            if "layer" in rule:
+                module.layer = rule["layer"]
+            if "domain" in rule:
+                module.domain = rule["domain"]
+            if "public_api" in rule:
+                module.public_api = rule["public_api"]
+            if "purpose" in rule:
+                module.purpose = rule["purpose"]
+            if "owner" in rule:
+                module.owner = rule["owner"]
+            for key in ("import_names", "package_prefixes", "source_roots"):
+                if key in rule:
+                    module.lifecycle[key] = list(dict.fromkeys(list(module.lifecycle.get(key, [])) + list(rule[key])))
+
+
+def infer_module_dependencies(repo_root: Path, modules: list[ModuleEntry], config: dict[str, Any]) -> None:
+    ignore_patterns = default_ignore_patterns(config)
+    path_lookup = {module.path: module for module in modules}
+    for module in modules:
+        module_root = repo_root / module.path if module.path != "." else repo_root
+        if not module_root.exists():
+            continue
+        deps = set(module.depends_on)
+        for source_file in iter_source_files(module_root, ignore_patterns):
+            kind = file_suffix_kind(source_file)
+            if kind == "python":
+                imports = parse_python_imports(source_file)
+            elif kind in {"javascript", "typescript"}:
+                imports = parse_js_imports(source_file)
+            elif kind == "java":
+                imports = parse_java_imports(source_file)
+            else:
+                imports = []
+            for imp in imports:
+                target = resolve_import_to_module(imp, module, modules, repo_root, source_file)
+                if target and target.path != module.path and target.path in path_lookup:
+                    deps.add(target.path)
+        module.depends_on = sorted(deps)
+
+
+def profile_ownership_for_path(rel_path: str, profile: dict[str, Any]) -> Optional[str]:
+    for rule in profile.get("ownership_rules", []):
+        patterns = rule.get("path_patterns", [])
+        if patterns and glob_match(patterns, rel_path):
+            owner = rule.get("owner")
+            if owner:
+                return str(owner)
+    return None
+
+
+def default_owner_name(module: ModuleEntry) -> str:
+    if module.domain and module.domain not in {"root", "workspace"}:
+        return f"{stable_slug(module.domain)}-owners"
+    if module.layer == "ui":
+        return "frontend-owners"
+    if module.layer == "infra":
+        return "platform-owners"
+    return "platform-owners"
+
+
+def assign_module_ownership(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> None:
+    rules = load_codeowners(repo_root)
+    for module in modules:
+        rel = module.path if module.path != "." else ""
+        owner = codeowner_for_path(rel, rules) if rules else None
+        if not owner:
+            owner = profile_ownership_for_path(module.path, profile)
+        if not owner:
+            owner = default_owner_name(module)
+        module.owner = owner
+
+
+def infer_public_entries_from_modules(modules: list[ModuleEntry]) -> list[str]:
+    entries: list[str] = []
+    for module in modules:
+        if module.public_api:
+            entries.append(f"{module.path}/{module.public_api}" if module.path != "." else module.public_api)
+        else:
+            entries.extend(module.key_files[:1])
+    dedup: list[str] = []
+    for entry in entries:
+        normalized = entry.replace("\\", "/")
+        if normalized not in dedup:
+            dedup.append(normalized)
+    return dedup[:8]
+
+
+def infer_extension_points(repo_root: Path, modules: list[ModuleEntry], ignore_patterns: Iterable[str]) -> list[str]:
+    extension_points: list[str] = []
+    for module in modules:
+        module_root = repo_root / module.path if module.path != "." else repo_root
+        if not module_root.exists():
+            continue
+        for file in iter_source_files(module_root, ignore_patterns):
+            rel = normalize_rel_path(repo_root, file)
+            stem = file.stem.lower()
+            if any(marker in stem for marker in EXTENSION_FILE_MARKERS):
+                extension_points.append(rel)
+    dedup: list[str] = []
+    for item in extension_points:
+        if item not in dedup:
+            dedup.append(item)
+    return dedup[:12]
+
+
+def infer_related_tests(repo_root: Path, modules: list[ModuleEntry]) -> list[str]:
+    tests: list[str] = []
+    candidates = []
+    for base in ("tests", "test", "src/test", "src/tests"):
+        root = repo_root / base
+        if root.exists():
+            candidates.extend(root.rglob("*"))
+    module_tokens = set()
+    for module in modules:
+        module_tokens.update(text_tokens(module.domain))
+        module_tokens.update(text_tokens(Path(module.path).name))
+    for file in candidates:
+        if not file.is_file():
+            continue
+        rel = normalize_rel_path(repo_root, file)
+        if any(token and token in rel.lower() for token in module_tokens):
+            tests.append(rel)
+    return tests[:12]
+
+
+def generic_capability_id(domain: str) -> str:
+    return stable_slug(domain)
+
+
+def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> tuple[list[CapabilityEntry], set[str]]:
+    ignore_patterns = default_ignore_patterns(profile.get("discovery", {}))
+    capabilities: list[CapabilityEntry] = []
+    consumed_modules: set[str] = set()
+    for item in profile.get("capabilities", []):
+        patterns = item.get("path_patterns", [])
+        matched = [module for module in modules if patterns and glob_match(patterns, module.path)]
+        if not matched:
+            continue
+        consumed_modules.update(module.path for module in matched)
+        capabilities.append(
+            CapabilityEntry(
+                id=item["id"],
+                name=item.get("name", title_from_slug(item["id"])),
+                status=item.get("status", "stable"),
+                maturity=item.get("maturity", "curated"),
+                source_of_truth="profile",
+                intent_keywords=list(dict.fromkeys(item.get("keywords", []) + item.get("intent_keywords", []))),
+                aliases=item.get("aliases", []),
+                business_intents=item.get("business_intents", []),
+                scope={
+                    "domains": sorted({module.domain for module in matched}),
+                    "layers": sorted({module.layer for module in matched}),
+                    "paths": [module.path for module in matched],
+                },
+                owner_modules=[module.path for module in matched],
+                public_entries=list(dict.fromkeys(item.get("public_entries", []) + infer_public_entries_from_modules(matched))),
+                extension_points=list(dict.fromkeys(item.get("extension_points", []) + infer_extension_points(repo_root, matched, ignore_patterns))),
+                route_defaults=item.get("route_defaults", {"preferred_action": "reuse"}),
+                contracts=item.get("contracts", []),
+                related_tests=list(dict.fromkeys(item.get("related_tests", []) + infer_related_tests(repo_root, matched))),
+                test_bindings=item.get("test_bindings", []),
+                forbidden_patterns=item.get("forbidden_patterns", []),
+                dependent_modules=[],
+                anti_patterns=item.get("anti_patterns", []),
+                lifecycle={"profile_id": profile.get("profile_id")},
+                last_verified_at=today_date(),
+            )
+        )
+    return capabilities, consumed_modules
+
+
+def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> list[CapabilityEntry]:
+    profile_caps, consumed = apply_profile_capabilities(repo_root, modules, profile)
+    grouped: dict[str, list[ModuleEntry]] = defaultdict(list)
+    for module in modules:
+        if module.path in consumed:
+            continue
+        grouped[generic_capability_id(module.domain)].append(module)
+    ignore_patterns = default_ignore_patterns(profile.get("discovery", {}))
+    capabilities = list(profile_caps)
+    reverse_deps: dict[str, list[str]] = defaultdict(list)
+    for module in modules:
+        for dep in module.depends_on:
+            reverse_deps[dep].append(module.path)
+    for cap_id, grouped_modules in sorted(grouped.items()):
+        if not grouped_modules:
+            continue
+        domain = grouped_modules[0].domain
+        public_entries = infer_public_entries_from_modules(grouped_modules)
+        extension_points = infer_extension_points(repo_root, grouped_modules, ignore_patterns)
+        related_tests = infer_related_tests(repo_root, grouped_modules)
+        dependent_modules: set[str] = set()
+        for module in grouped_modules:
+            dependent_modules.update(reverse_deps.get(module.path, []))
+        flat_keywords: list[str] = [domain]
+        for module in grouped_modules:
+            flat_keywords.append(Path(module.path).name.replace("-", " "))
+            flat_keywords.append(module.domain)
+            flat_keywords.extend(public_import_names(module))
+        keywords = sorted({keyword for keyword in flat_keywords if keyword})
+        has_strong_surface = bool(public_entries) and any(module.owner not in {"unassigned", "platform-owners"} for module in grouped_modules)
+        maturity = "stable" if len(grouped_modules) > 1 or any(module.layer == "shared-capability" for module in grouped_modules) or has_strong_surface else "candidate"
+        capabilities.append(
+            CapabilityEntry(
+                id=cap_id,
+                name=f"{title_from_slug(domain)} Capability",
+                status="stable" if maturity == "stable" else "candidate",
+                maturity=maturity,
+                source_of_truth="generated",
+                intent_keywords=list(dict.fromkeys(text_tokens(" ".join(flat_keywords))))[:20],
+                aliases=sorted({Path(module.path).name for module in grouped_modules})[:8],
+                business_intents=sorted({f"{domain}-change", f"{domain}-reuse", f"{domain}-extension"}),
+                scope={
+                    "domains": sorted({module.domain for module in grouped_modules}),
+                    "layers": sorted({module.layer for module in grouped_modules}),
+                    "paths": [module.path for module in grouped_modules],
+                },
+                owner_modules=[module.path for module in grouped_modules],
+                public_entries=public_entries,
+                extension_points=extension_points,
+                route_defaults={"preferred_action": "reuse" if maturity == "stable" else "review"},
+                contracts=[],
+                related_tests=related_tests,
+                test_bindings=[
+                    {
+                        "id": f"tests-{cap_id}",
+                        "label": f"Run tests related to {cap_id}",
+                        "when_actions": ["extend", "extract", "review"],
+                        "when_changed_paths": [f"{module.path}/**" for module in grouped_modules if module.path != "."],
+                        "related_tests": related_tests,
+                    }
+                ] if related_tests else [],
+                forbidden_patterns=[],
+                dependent_modules=sorted(dependent_modules),
+                anti_patterns=["copying core logic outside owner modules"] if maturity == "stable" else [],
+                lifecycle={"generated_from": [module.path for module in grouped_modules]},
+                last_verified_at=today_date(),
+            )
+        )
+    return capabilities
+
+
+def capability_entries(bundle: dict[str, Any]) -> list[CapabilityEntry]:
+    return [CapabilityEntry(**item) for item in bundle.get("capability_catalog", {}).get("capabilities", [])]
+
+
+def module_entries(bundle: dict[str, Any]) -> list[ModuleEntry]:
+    return [ModuleEntry(**item) for item in bundle.get("module_map", {}).get("modules", [])]
+
+
+def build_module_map(repo_root: Path, config: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    modules = discover_modules(repo_root, config, profile)
+    return {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": repo_root.name,
+        "source_commit": current_git_commit(repo_root),
+        "modules": [module.to_dict() for module in modules],
+    }
+
+
+def build_capability_catalog(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> dict[str, Any]:
+    capabilities = infer_capabilities_from_modules(repo_root, modules, profile)
+    return {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": repo_root.name,
+        "source_commit": current_git_commit(repo_root),
+        "capabilities": [capability.to_dict() for capability in capabilities],
+    }
+
+
+def build_ownership(capabilities: list[CapabilityEntry], modules: list[ModuleEntry]) -> dict[str, Any]:
+    owners: list[dict[str, Any]] = []
+    for capability in capabilities:
+        primary = modules[0].owner if modules else "platform-owners"
+        for module in modules:
+            if module.path in capability.owner_modules:
+                primary = module.owner
+                break
+        owners.append(
+            {
+                "scope": "capability",
+                "target": capability.id,
+                "primary": primary,
+                "reviewers": [primary],
+                "escalation_group": primary,
+            }
+        )
+    for module in modules:
+        owners.append(
+            {
+                "scope": "module",
+                "target": module.path,
+                "primary": module.owner,
+                "reviewers": [module.owner],
+                "escalation_group": module.owner,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": "workspace",
+        "source_commit": None,
+        "owners": owners,
+    }
+
+
+def high_risk_capability_ids(capabilities: list[CapabilityEntry], profile: dict[str, Any]) -> list[str]:
+    ids = set(profile.get("risk", {}).get("capability_ids", []))
+    for capability in capabilities:
+        signals = capability.intent_keywords + capability.aliases + capability.business_intents + [capability.id, capability.name]
+        if match_strength(" ".join(signals), DEFAULT_HIGH_RISK_KEYWORDS) >= 1.0:
+            ids.add(capability.id)
+    return sorted(ids)
+
+
+def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, Any]) -> dict[str, Any]:
+    risk_profile = profile.get("risk", {})
+    return {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": "workspace",
+        "source_commit": None,
+        "confidence": {
+            "auto_route_threshold": 0.78,
+            "guarded_route_threshold": 0.58,
+        },
+        "high_risk_conditions": list(
+            dict.fromkeys(
+                [
+                    "auth-or-payment-change",
+                    "public-contract-change",
+                    "schema-migration",
+                    "multi-capability-core-change",
+                    *risk_profile.get("conditions", []),
+                ]
+            )
+        ),
+        "high_risk_capability_ids": high_risk_capability_ids(capabilities, profile),
+        "high_risk_module_patterns": risk_profile.get("path_patterns", []),
+        "route_rules": [
+            {
+                "name": "prefer-reuse-for-stable-capability",
+                "when": {"capability_status": "stable", "matching_intent": True, "path_proximity_gte": 0.6},
+                "action": "reuse",
+            },
+            {
+                "name": "prefer-extend-when-additive-change-is-clear",
+                "when": {"capability_status": "stable", "extension_point_or_public_api": True, "request_has_change_verb": True},
+                "action": "extend",
+            },
+            {
+                "name": "prefer-extract-when-duplicate-signal-is-strong",
+                "when": {"duplicate_signal": True, "repeated_occurrence_gte": 2},
+                "action": "extract",
+            },
+            {
+                "name": "require-review-for-low-confidence-or-overlap",
+                "when": {"confidence_below": 0.58, "candidate_capabilities_overlap_gte": 0.82},
+                "action": "review",
+            },
+        ],
+        "decision_policy": {
+            "tie_breaker": "review",
+            "high_risk_override": "review",
+            "human_override_allowed": True,
+            "human_override_must_record_reason": True,
+        },
+    }
+
+
+def build_router_config(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> dict[str, Any]:
+    manifest_kind = detect_repo_manifest_kind(repo_root)
+    supported_languages = discover_languages(repo_root, modules)
+    discovery_profile = profile.get("discovery", {})
+    return {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": repo_root.name,
+        "source_commit": current_git_commit(repo_root),
+        "repo_id": stable_slug(repo_root.name),
+        "repositories": discover_repositories(repo_root, modules),
+        "protected_branch_patterns": profile.get("protected_branch_patterns", ["main", "master", "release/*", "hotfix/*"]),
+        "ignore_paths": list(dict.fromkeys(DEFAULT_IGNORE_GLOBS + discovery_profile.get("ignore_paths", []))),
+        "supported_languages": supported_languages,
+        "module_discovery": {
+            "primary_manifest": manifest_kind,
+            "strategies": ["maven", "node", "python", "generic"],
+            "profile_id": profile.get("profile_id"),
+        },
+        "freshness_windows": {
+            "capability_catalog_days": 30,
+            "module_map_days": 30,
+            "exception_registry_days": 30,
+            "evaluation_set_days": 30,
+        },
+        "evaluation": {
+            "top1_accuracy_threshold": 0.80,
+            "review_precision_threshold": 0.90,
+            "minimum_case_count": 12,
+        },
+        "route_reports_dir": "reports/route-decisions",
+        "rebuild_reports_dir": "reports/index-rebuild",
+        "guardrail_reports_dir": "reports/guardrail-results",
+        "evaluation_reports_dir": "reports/evaluation",
+    }
+
+
+def build_exception_registry(repo_root: Path, profile: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": repo_root.name,
+        "source_commit": current_git_commit(repo_root),
+        "exceptions": profile.get("exceptions", []),
+    }
+
+
+def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[str, Any]) -> dict[str, Any]:
+    modules = [ModuleEntry(**item) for item in module_map.get("modules", [])]
+    stable_caps = [cap for cap in capabilities if cap.status == "stable"] or capabilities[:]
+    cases: list[dict[str, Any]] = []
+    for capability in stable_caps[:10]:
+        is_stable = capability.status == "stable"
+        is_risky = match_strength(capability.id, DEFAULT_HIGH_RISK_KEYWORDS) >= 1.0
+        can_extract = is_stable and len(capability.owner_modules) >= 2
+        cases.append(
+            {
+                "id": f"{capability.id}-reuse",
+                "request": f"Reuse the existing {capability.name.lower()} entry point without changing its core behavior.",
+                "expected_action": "reuse" if is_stable else "review",
+                "expected_capabilities": [capability.id],
+                "expected_modules": capability.owner_modules[:2],
+                "expected_reads": capability.public_entries[:2],
+                "changed_paths": capability.owner_modules[:1],
+                "risk_level": "medium",
+            }
+        )
+        cases.append(
+            {
+                "id": f"{capability.id}-extend",
+                "request": f"Extend the existing {capability.name.lower()} capability with a compatible new behavior.",
+                "expected_action": "extend" if is_stable and not is_risky else "review",
+                "expected_capabilities": [capability.id],
+                "expected_modules": capability.owner_modules[:2],
+                "expected_reads": capability.public_entries[:2],
+                "changed_paths": capability.owner_modules[:1],
+                "risk_level": "high",
+            }
+        )
+    for capability in stable_caps[:5]:
+        if len(capability.owner_modules) >= 2:
+            changed = capability.owner_modules[:2]
+        else:
+            changed = capability.owner_modules[:1]
+        cases.append(
+            {
+                "id": f"{capability.id}-extract",
+                "request": f"Extract repeated {capability.name.lower()} logic into a shared reusable entry point.",
+                "expected_action": "extract" if can_extract and not match_strength(capability.id, DEFAULT_HIGH_RISK_KEYWORDS) >= 1.0 else "review",
+                "expected_capabilities": [capability.id],
+                "expected_modules": capability.owner_modules[:2],
+                "expected_reads": capability.public_entries[:2],
+                "changed_paths": changed,
+                "risk_level": "high",
+            }
+        )
+    if len(stable_caps) >= 2:
+        first, second = stable_caps[0], stable_caps[1]
+        cases.append(
+            {
+                "id": "review-multi-capability",
+                "request": f"Modify {first.name.lower()} and {second.name.lower()} together in one change.",
+                "expected_action": "review",
+                "expected_capabilities": [first.id, second.id],
+                "expected_modules": list(dict.fromkeys(first.owner_modules[:1] + second.owner_modules[:1])),
+                "expected_reads": list(dict.fromkeys(first.public_entries[:1] + second.public_entries[:1])),
+                "changed_paths": list(dict.fromkeys(first.owner_modules[:1] + second.owner_modules[:1])),
+                "risk_level": "critical",
+            }
+        )
+    cases.extend(
+        [
+            {
+                "id": "new-capability",
+                "request": "Introduce a brand-new workflow area that does not map to any existing capability.",
+                "expected_action": "new",
+                "expected_capabilities": [],
+                "expected_modules": [],
+                "expected_reads": [],
+                "changed_paths": [],
+                "risk_level": "medium",
+            },
+            {
+                "id": "review-ambiguous",
+                "request": "Review a broad cross-cutting behavior that touches multiple existing modules and is not clearly owned by one capability.",
+                "expected_action": "review",
+                "expected_capabilities": [],
+                "expected_modules": [module.path for module in modules[:2]],
+                "expected_reads": [],
+                "changed_paths": [module.path for module in modules[:2]],
+                "risk_level": "high",
+            },
+        ]
+    )
+    while len(cases) < 12 and stable_caps:
+        capability = stable_caps[len(cases) % len(stable_caps)]
+        cases.append(
+            {
+                "id": f"extra-{len(cases)+1}",
+                "request": f"Reuse the existing {capability.name.lower()} capability from a nearby integration point.",
+                "expected_action": "reuse" if capability.status == "stable" else "review",
+                "expected_capabilities": [capability.id],
+                "expected_modules": capability.owner_modules[:2],
+                "expected_reads": capability.public_entries[:2],
+                "changed_paths": capability.owner_modules[:1],
+                "risk_level": "medium",
+            }
+        )
+    return {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": "workspace",
+        "source_commit": None,
+        "cases": cases,
+    }
+
+
+def capability_conflicts(bundle: dict[str, Any]) -> list[str]:
+    conflicts: list[str] = []
+    owner_to_caps: dict[str, list[str]] = defaultdict(list)
+    public_entry_to_caps: dict[str, list[str]] = defaultdict(list)
+    for capability in capability_entries(bundle):
+        for owner in capability.owner_modules:
+            owner_to_caps[owner].append(capability.id)
+        for entry in capability.public_entries:
+            public_entry_to_caps[entry].append(capability.id)
+    for owner, caps in owner_to_caps.items():
+        unique = sorted(set(caps))
+        if len(unique) > 1:
+            conflicts.append(f"module {owner} is owned by multiple capabilities: {', '.join(unique)}")
+    for entry, caps in public_entry_to_caps.items():
+        unique = sorted(set(caps))
+        if len(unique) > 1:
+            conflicts.append(f"public entry {entry} is claimed by multiple capabilities: {', '.join(unique)}")
+    return conflicts
+
+
+def build_router_bundle(repo_root: Path) -> dict[str, Any]:
+    profile = load_active_profile(repo_root)
+    preliminary_modules = discover_modules(repo_root, {}, profile)
+    config = build_router_config(repo_root, preliminary_modules, profile)
+    module_map = {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": repo_root.name,
+        "source_commit": current_git_commit(repo_root),
+        "modules": [module.to_dict() for module in preliminary_modules],
+    }
+    modules = [ModuleEntry(**item) for item in module_map["modules"]]
+    capability_catalog = build_capability_catalog(repo_root, modules, profile)
+    capabilities = [CapabilityEntry(**item) for item in capability_catalog["capabilities"]]
+    ownership = build_ownership(capabilities, modules)
+    change_rules = build_change_rules(capabilities, profile)
+    exception_registry = build_exception_registry(repo_root, profile)
+    evaluation_set = build_evaluation_set(capabilities, module_map)
+    bundle = {
+        "config": config,
+        "module_map": module_map,
+        "capability_catalog": capability_catalog,
+        "ownership": ownership,
+        "change_rules": change_rules,
+        "exception_registry": exception_registry,
+        "evaluation_set": evaluation_set,
+    }
+    bundle["root"] = resolve_bundle_root(repo_root)
+    return bundle
+
+
+def route_bundle_from_repo(repo_root: Path) -> dict[str, Any]:
+    bundle_root = resolve_bundle_root(repo_root)
+    if bundle_root.exists():
+        existing = load_bundle(bundle_root)
+        if existing:
+            existing["root"] = bundle_root
+            return existing
+    bundle = build_router_bundle(repo_root)
+    bundle["root"] = bundle_root
+    return bundle
 
 
 def parse_request_type(request_text: str) -> str:
     text = request_text.lower()
-    if any(word in text for word in ["refactor", "extract", "抽取", "重构"]):
+    if any(word in text for word in ("bug", "fix", "repair", "regression", "修复", "修正")):
+        return "bug-fix"
+    if any(word in text for word in ("refactor", "extract", "cleanup", "重构", "抽取")):
         return "refactor"
-    if any(word in text for word in ["migrate", "迁移"]):
+    if any(word in text for word in ("migrate", "migration", "升级", "迁移")):
         return "migration"
-    if any(word in text for word in ["fix", "bug", "修复", "resolve", "repair"]):
-        return "bugfix"
-    if any(word in text for word in ["review", "审查", "audit", "check"]):
-        return "review"
-    if any(word in text for word in ["add", "create", "introduce", "new", "新增", "创建"]):
-        return "feature-add"
-    return "modify-feature"
-
-
-def request_high_risk(request_text: str, changed_paths: Iterable[str], modules: list[ModuleEntry]) -> bool:
-    text = request_text.lower()
-    risky_verbs = ["change", "modify", "extend", "update", "rotate", "inject", "migrate", "refactor", "修复", "变更", "扩展", "迁移", "重构"]
-    if any(verb in text for verb in risky_verbs) and any(keyword in text for keyword in HIGH_RISK_KEYWORDS):
-        return True
-    for path in changed_paths:
-        rel = path.replace("\\", "/").lower()
-        if any(keyword in rel for keyword in HIGH_RISK_KEYWORDS):
-            return True
-        mod = module_for_path(rel, modules)
-        if mod and any(keyword in mod.path.lower() for keyword in HIGH_RISK_KEYWORDS):
-            return True
-    return False
+    if any(word in text for word in ("add", "new", "create", "introduce", "新增", "创建", "引入")):
+        return "feature-addition"
+    return "feature-modification"
 
 
 def request_duplicate_signal(request_text: str, changed_paths: Iterable[str]) -> tuple[bool, int]:
     text = request_text.lower()
-    repeated_words = ["extract", "duplicate", "shared", "common", "reuse", "重复", "抽取", "复用", "共享"]
-    keyword_hit = any(word in text for word in repeated_words)
+    words = ("extract", "duplicate", "shared", "common", "重复", "抽取", "复用", "共享")
     count = 0
-    if keyword_hit:
+    if any(word in text for word in words):
         count += 1
-    if len({Path(path).as_posix().split("/")[0] for path in changed_paths}) > 1:
+    normalized_paths = [path.replace("\\", "/") for path in changed_paths]
+    top_level = {item.split("/")[0] for item in normalized_paths if item}
+    if len(top_level) > 1:
         count += 1
-    if len(list(changed_paths)) >= 2:
+    if len(normalized_paths) >= 2:
         count += 1
-    return keyword_hit or count >= 2, count
+    return count >= 2, count
+
+
+def request_high_risk(request_text: str, changed_paths: Iterable[str], modules: list[ModuleEntry], bundle: dict[str, Any]) -> bool:
+    text = request_text.lower()
+    rules = bundle.get("change_rules", {})
+    keywords = list(dict.fromkeys(DEFAULT_HIGH_RISK_KEYWORDS + bundle.get("config", {}).get("high_risk_keywords", [])))
+    if any(keyword in text for keyword in keywords):
+        return True
+    path_patterns = rules.get("high_risk_module_patterns", [])
+    for path in changed_paths:
+        normalized = path.replace("\\", "/").lower()
+        if any(keyword in normalized for keyword in keywords):
+            return True
+        if path_patterns and glob_match(path_patterns, normalized):
+            return True
+        module = module_for_path(normalized, modules)
+        if module and any(keyword in module.path.lower() for keyword in keywords):
+            return True
+    return False
+
+
+def request_targets_existing_capability(request_text: str) -> bool:
+    text = request_text.lower()
+    negative_patterns = (
+        "no existing",
+        "not existing",
+        "without existing",
+        "does not map to any existing",
+        "doesn't map to any existing",
+        "不存在现有",
+        "没有现有",
+        "不属于现有",
+    )
+    if any(pattern in text for pattern in negative_patterns):
+        return False
+    phrases = (
+        "existing",
+        "reuse",
+        "extend",
+        "current",
+        "already",
+        "现有",
+        "已有",
+        "复用",
+        "扩展",
+    )
+    return any(phrase in text for phrase in phrases)
+
+
+def request_prefers_extract(request_text: str) -> bool:
+    text = request_text.lower()
+    phrases = (
+        "extract",
+        "duplicate",
+        "shared",
+        "common",
+        "重复",
+        "抽取",
+        "复用",
+        "共享",
+    )
+    return any(phrase in text for phrase in phrases)
+
+
+def request_requires_review(request_text: str) -> bool:
+    text = request_text.lower()
+    phrases = (
+        "review",
+        "ambiguous",
+        "unclear",
+        "cross-cutting",
+        "manual",
+        "broad",
+        "审查",
+        "模糊",
+        "不明确",
+        "跨模块",
+    )
+    return any(phrase in text for phrase in phrases)
+
+
+def module_path_proximity(capability: CapabilityEntry, changed_paths: list[str]) -> float:
+    owner_paths = {path.replace("\\", "/").lower() for path in capability.owner_modules}
+    if not owner_paths or not changed_paths:
+        return 0.0
+    hits = 0
+    for path in changed_paths:
+        normalized = path.replace("\\", "/").lower()
+        if any(normalized == owner or normalized.startswith(owner.rstrip("/") + "/") for owner in owner_paths):
+            hits += 1
+    return hits / max(1, len(changed_paths))
 
 
 def capability_match_score(request_text: str, capability: CapabilityEntry) -> float:
-    text = request_text.lower()
-    signal_sets = [
-        capability.intent_keywords,
-        capability.aliases,
-        capability.business_intents,
-        [capability.id, capability.name],
-    ]
-    for signal_set in signal_sets:
-        if match_strength(text, signal_set) >= 1.0:
-            return 1.0
-    if any(token in text_tokens(request_text) for token in text_tokens(" ".join(capability.intent_keywords + capability.aliases + capability.business_intents + [capability.id, capability.name]))):
-        return 0.5
-    return 0.0
-
-
-def capability_path_proximity(capability: CapabilityEntry, changed_modules: list[ModuleEntry], changed_paths: list[str]) -> float:
-    owner_paths = {path.replace("\\", "/").lower() for path in capability.owner_modules}
-    if not owner_paths:
-        return 0.0
-    for module in changed_modules:
-        if module.path.lower() in owner_paths:
-            return 1.0
-        if any(matches_module_path(module.path, owner) or matches_module_path(owner, module.path) for owner in owner_paths):
-            return 1.0
-    for path in changed_paths:
-        normalized = path.replace("\\", "/").lower()
-        if any(normalized.startswith(owner.rstrip("/").lower()) for owner in owner_paths):
-            return 1.0
-    return 0.0
-
-
-def capability_dependency_proximity(capability: CapabilityEntry, changed_modules: list[ModuleEntry], module_map: list[ModuleEntry]) -> float:
-    if not capability.dependent_modules:
-        return 0.0
-    capability_paths = {p.lower() for p in capability.owner_modules}
-    for module in changed_modules:
-        for dependency in module.depends_on:
-            if dependency.lower() in capability_paths:
-                return 1.0
-        if module.path.lower() in {p.lower() for p in capability.dependent_modules}:
-            return 1.0
-    return 0.0
-
-
-def capability_conflicts(bundle: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-    module_paths = {m["path"].replace("\\", "/").rstrip("/") for m in bundle.get("module_map", {}).get("modules", [])}
-    for capability in bundle.get("capability_catalog", {}).get("capabilities", []):
-        for owner in capability.get("owner_modules", []):
-            if owner.rstrip("/") not in module_paths and not any(path.startswith(owner.rstrip("/") + "/") for path in module_paths):
-                errors.append(f"capability {capability['id']} references missing owner module {owner}")
-        for public in capability.get("public_entries", []):
-            if not any(public == path or public.startswith(path + "/") for path in module_paths) and not any(public.startswith(path) for path in module_paths):
-                errors.append(f"capability {capability['id']} references missing public entry {public}")
-    return errors
-
-
-def source_of_truth_for(bundle: dict[str, Any], concern: str) -> str:
-    module_map = bundle.get("module_map", {})
-    cap_catalog = bundle.get("capability_catalog", {})
-    if concern == "capability":
-        return "curated" if cap_catalog else "generated"
-    if concern == "module":
-        return "generated" if module_map else "curated"
-    return "curated"
-
-
-def capability_entries(bundle: dict[str, Any]) -> list[CapabilityEntry]:
-    caps = bundle.get("capability_catalog", {}).get("capabilities", [])
-    out: list[CapabilityEntry] = []
-    for item in caps:
-        out.append(CapabilityEntry(**item))
-    return out
-
-
-def module_entries(bundle: dict[str, Any]) -> list[ModuleEntry]:
-    modules = bundle.get("module_map", {}).get("modules", [])
-    out: list[ModuleEntry] = []
-    for item in modules:
-        out.append(ModuleEntry(**item))
-    return out
-
-
-def score_capability(request_text: str, capability: CapabilityEntry, changed_modules: list[ModuleEntry], changed_paths: list[str], stale_index: bool, source_conflict: bool) -> tuple[float, dict[str, float]]:
-    intent_match = 1.0 if capability_match_score(request_text, capability) >= 1.0 else 0.5 if capability_match_score(request_text, capability) > 0 else 0.0
-    alias_match = 1.0 if match_strength(request_text, capability.aliases) >= 1.0 else 0.5 if match_strength(request_text, capability.aliases) > 0 else 0.0
-    path_proximity = capability_path_proximity(capability, changed_modules, changed_paths)
-    ownership_proximity = 1.0 if path_proximity >= 1.0 else 0.0
-    public_entry_available = 1.0 if capability.public_entries else 0.0
-    extension_point_available = 1.0 if capability.extension_points else 0.0
-    dependency_proximity = capability_dependency_proximity(capability, changed_modules, changed_modules)
-    current_context_match = 1.0 if any(token in request_text.lower() for token in [capability.id.lower(), capability.name.lower()]) else 0.0
-
-    raw_score = (
-        0.26 * intent_match
-        + 0.12 * alias_match
-        + 0.20 * path_proximity
-        + 0.08 * ownership_proximity
-        + 0.08 * public_entry_available
-        + 0.10 * extension_point_available
-        + 0.10 * dependency_proximity
-        + 0.06 * current_context_match
-    )
-    high_risk_penalty = 1.0 if any(keyword in capability.id for keyword in HIGH_RISK_KEYWORDS) and path_proximity == 0.0 and intent_match < 1.0 else 0.0
-    stale_index_penalty = 1.0 if stale_index else 0.0
-    source_conflict_penalty = 1.0 if source_conflict else 0.0
-    candidate_lifecycle_penalty = 1.0 if capability.status == "candidate" else 0.0
-    deprecated_lifecycle_penalty = 1.0 if capability.status in {"deprecated", "retired"} else 0.0
-    penalty = (
-        0.10 * high_risk_penalty
-        + 0.15 * stale_index_penalty
-        + 0.20 * source_conflict_penalty
-        + 0.15 * candidate_lifecycle_penalty
-        + 0.30 * deprecated_lifecycle_penalty
-    )
-    candidate_score = max(0.0, min(1.0, raw_score - penalty))
-    signals = {
-        "intent_match": intent_match,
-        "alias_match": alias_match,
-        "path_proximity": path_proximity,
-        "ownership_proximity": ownership_proximity,
-        "public_entry_available": public_entry_available,
-        "extension_point_available": extension_point_available,
-        "dependency_proximity": dependency_proximity,
-        "current_context_match": current_context_match,
-        "raw_score": raw_score,
-        "penalty": penalty,
-        "candidate_score": candidate_score,
+    signals = capability.intent_keywords + capability.aliases + capability.business_intents + [capability.id, capability.name]
+    score = match_strength(request_text, signals)
+    request_words = set(text_tokens(request_text))
+    capability_words = set(text_tokens(" ".join(signals)))
+    generic_words = {
+        "capability",
+        "existing",
+        "workflow",
+        "logic",
+        "change",
+        "behavior",
+        "entry",
+        "point",
+        "new",
+        "brand",
+        "area",
+        "compatible",
+        "current",
     }
-    return candidate_score, signals
+    if score == 0.5 and not (request_words & (capability_words - generic_words)):
+        return 0.0
+    return score
+
+
+def dependency_proximity(capability: CapabilityEntry, changed_modules: list[ModuleEntry]) -> float:
+    if not changed_modules or not capability.owner_modules:
+        return 0.0
+    owners = set(capability.owner_modules)
+    hits = 0
+    for module in changed_modules:
+        if owners.intersection(module.depends_on):
+            hits += 1
+    return hits / max(1, len(changed_modules))
+
+
+def capability_score(request_text: str, capability: CapabilityEntry, changed_modules: list[ModuleEntry], changed_paths: list[str], bundle: dict[str, Any]) -> tuple[float, dict[str, float]]:
+    intent_match = capability_match_score(request_text, capability)
+    path_proximity = module_path_proximity(capability, changed_paths)
+    dep_proximity = dependency_proximity(capability, changed_modules)
+    public_entry_available = 1.0 if capability.public_entries else 0.0
+    extension_available = 1.0 if capability.extension_points else 0.0
+    owner_coverage = 1.0 if capability.owner_modules else 0.0
+    raw = (
+        0.40 * intent_match
+        + 0.30 * path_proximity
+        + 0.10 * dep_proximity
+        + 0.10 * public_entry_available
+        + 0.05 * extension_available
+        + 0.05 * owner_coverage
+    )
+    penalty = 0.0
+    high_risk_ids = set(bundle.get("change_rules", {}).get("high_risk_capability_ids", []))
+    if capability.id in high_risk_ids and intent_match < 1.0 and path_proximity == 0.0:
+        penalty += 0.15
+    if capability.status == "candidate":
+        penalty += 0.10
+    score = max(0.0, min(1.0, raw - penalty))
+    signals = {
+        "intent_match": round(intent_match, 4),
+        "path_proximity": round(path_proximity, 4),
+        "dependency_proximity": round(dep_proximity, 4),
+        "public_entry_available": public_entry_available,
+        "extension_point_available": extension_available,
+        "owner_coverage": owner_coverage,
+        "raw_score": round(raw, 4),
+        "penalty": round(penalty, 4),
+        "candidate_score": round(score, 4),
+    }
+    return score, signals
 
 
 def overlap_score(best: float, second: float) -> float:
-    if best <= 0:
+    if best <= 0.0:
         return 0.0
     return min(1.0, second / best)
 
 
-def requires_review_override(capability: CapabilityEntry, module: Optional[ModuleEntry], route_confidence: float, overlap: float, high_risk: bool, source_conflict: bool, missing_owner: bool, public_entry_change: bool) -> bool:
-    if high_risk:
-        return True
-    if source_conflict and high_risk:
-        return True
-    if missing_owner:
-        return True
-    if public_entry_change:
-        return True
-    if overlap >= 0.90:
-        return True
-    if capability.status in {"deprecated", "retired"}:
-        return True
-    if module and module.status == "retired":
-        return True
-    return False
-
-
-def determine_action(
-    request_text: str,
-    capabilities: list[CapabilityEntry],
-    modules: list[ModuleEntry],
-    changed_paths: list[str],
-    route_scores: list[tuple[CapabilityEntry, float, dict[str, float]]],
-    stale_index: bool,
-    source_conflict: bool,
-    high_risk: bool,
-) -> tuple[str, Optional[CapabilityEntry], list[str], float, float, bool, bool, bool, list[str]]:
-    reasoning: list[str] = []
-    if not route_scores:
-        return "new", None, [], 0.0, 0.0, False, False, False, ["no capability candidates matched"]
-
-    sorted_scores = sorted(route_scores, key=lambda item: item[1], reverse=True)
-    best_cap, best, best_signals = sorted_scores[0]
-    second = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
-    ov = overlap_score(best, second)
-    route_confidence = max(0.0, min(1.0, best - 0.25 * ov - (0.10 if stale_index else 0.0) - (0.10 if source_conflict else 0.0)))
-    route_confidence = max(0.0, min(1.0, route_confidence))
-
-    changed_modules = [module_for_path(path, modules) for path in changed_paths]
-    changed_modules = [module for module in changed_modules if module is not None]
-    missing_owner = not best_cap.owner_modules
-    public_entry_change = any(any(path.replace("\\", "/").startswith(entry.rstrip("/") + "/") or path.replace("\\", "/") == entry for entry in best_cap.public_entries) for path in changed_paths)
-    review_override = requires_review_override(best_cap, module_for_path(changed_paths[0], modules) if changed_paths else None, route_confidence, ov, high_risk, source_conflict, missing_owner, public_entry_change)
-
-    duplicate_signal, duplicate_count = request_duplicate_signal(request_text, changed_paths)
-    coordination_required = False
-    composite_route_required = False
-    secondary_caps = [cap.id for cap, score, _ in sorted_scores[1:] if score >= 0.60]
-    if len(secondary_caps) >= 1 and any(cap.status == "stable" for cap, score, _ in sorted_scores[1:] if score >= 0.60):
-        coordination_required = True
-    if len([cap for cap, score, _ in sorted_scores if score >= 0.60 and cap.status == "stable"]) > 1:
-        composite_route_required = True
-
-    if review_override:
-        action = "review"
-        reasoning.append("mandatory review override triggered")
-    elif duplicate_signal and duplicate_count >= 2 and route_confidence >= 0.60:
-        action = "extract"
-        reasoning.append("duplicate signal and repeated occurrence indicate extraction")
-    elif best < 0.45:
-        action = "review" if high_risk else "new"
-        reasoning.append("no suitable capability exceeded the reuse threshold")
-    elif best_cap.status == "candidate":
-        if route_confidence >= 0.60 and best_cap.extension_points:
-            action = "extend"
-            reasoning.append("candidate capability can be extended through an existing extension point")
-        else:
-            action = "review"
-            reasoning.append("candidate capability requires review before extension")
-    elif best_cap.status == "stable":
-        if route_confidence >= 0.60 and best_cap.extension_points and any(word in request_text.lower() for word in ["add", "change", "extend", "modify", "update", "修复", "增加", "变更", "扩展"]):
-            action = "extend"
-            reasoning.append("stable capability selected for extension")
-        else:
-            action = "reuse"
-            reasoning.append("stable capability selected for reuse")
-    else:
-        action = "review"
-        reasoning.append("fallback review")
-
-    if high_risk and action != "review" and ov >= 0.80:
-        action = "review"
-        reasoning.append("high-risk overlap requires review")
-
-    return action, best_cap, secondary_caps, route_confidence, ov, coordination_required, composite_route_required, public_entry_change, reasoning
-
-
-def resolve_request(
-    request_text: str,
-    changed_paths: list[str],
-    bundle: dict[str, Any],
-    bundle_root: Path,
-) -> RouteDecision:
-    caps = capability_entries(bundle)
-    modules = module_entries(bundle)
-    stale = bundle_stale(bundle_root, bundle)
-    source_conflict = bool(capability_conflicts(bundle))
-    high_risk = request_high_risk(request_text, changed_paths, modules)
-    changed_modules = [module_for_path(path, modules) for path in changed_paths]
-    changed_modules = [module for module in changed_modules if module is not None]
-
-    route_scores: list[tuple[CapabilityEntry, float, dict[str, float]]] = []
-    for capability in caps:
-        score, signals = score_capability(request_text, capability, changed_modules, changed_paths, stale, source_conflict)
-        if score > 0 or capability.status == "stable":
-            route_scores.append((capability, score, signals))
-
-    action, best_cap, secondary_caps, confidence, ov, coordination_required, composite_route_required, public_entry_change, reasoning = determine_action(
-        request_text,
-        caps,
-        modules,
-        changed_paths,
-        route_scores,
-        stale,
-        source_conflict,
-        high_risk,
-    )
-
-    sorted_scores = sorted(route_scores, key=lambda item: item[1], reverse=True)
-    candidate_capabilities = [
-        {
-            "id": cap.id,
-            "name": cap.name,
-            "status": cap.status,
-            "score": round(score, 4),
-            "signals": {k: round(v, 4) if isinstance(v, float) else v for k, v in signals.items()},
-        }
-        for cap, score, signals in sorted_scores
-    ]
-    candidate_modules: list[dict[str, Any]] = []
-    for path in changed_paths:
-        module = module_for_path(path, modules)
-        if module:
-            candidate_modules.append({"path": module.path, "id": module.id, "layer": module.layer, "domain": module.domain})
-    if not candidate_modules:
-        candidate_modules = [{"path": module.path, "id": module.id, "layer": module.layer, "domain": module.domain} for module in changed_modules]
-    required_reads = required_read_paths(best_cap, modules, changed_paths)
-    required_checks = required_checks_for(best_cap, action, bundle)
-    forbidden_paths = forbidden_paths_for(best_cap, bundle)
-    timestamp = iso_now()
-    decision = RouteDecision(
-        decision_id=f"route-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}-{hashlib.sha1((request_text + '|'.join(changed_paths)).encode('utf-8')).hexdigest()[:8]}",
-        timestamp=timestamp,
-        request_type=parse_request_type(request_text),
-        request_summary=request_text.strip().splitlines()[0][:180] if request_text.strip() else "",
-        action=action,
-        confidence=round(confidence, 4),
-        overlap_score=round(ov, 4),
-        primary_capability=best_cap.id if best_cap else None,
-        secondary_capabilities=secondary_caps,
-        candidate_capabilities=candidate_capabilities,
-        candidate_modules=candidate_modules,
-        required_reads=required_reads,
-        required_checks=required_checks,
-        forbidden_paths=forbidden_paths,
-        review_required=action == "review",
-        coordination_required=coordination_required,
-        composite_route_required=composite_route_required,
-        reasoning=reasoning,
-        source_of_truths={
-            "capability_catalog": source_of_truth_for(bundle, "capability"),
-            "module_map": source_of_truth_for(bundle, "module"),
-            "exception_registry": source_of_truth_for(bundle, "exception"),
-        },
-    )
-    return decision
+def source_of_truth_for(bundle: dict[str, Any], kind: str) -> dict[str, Any]:
+    mapping = {
+        "capability": bundle.get("capability_catalog", {}),
+        "module": bundle.get("module_map", {}),
+        "exception": bundle.get("exception_registry", {}),
+    }
+    payload = mapping.get(kind, {})
+    return {
+        "generated_by": payload.get("generated_by"),
+        "generated_at": payload.get("generated_at"),
+        "source_commit": payload.get("source_commit"),
+    }
 
 
 def required_read_paths(capability: Optional[CapabilityEntry], modules: list[ModuleEntry], changed_paths: list[str]) -> list[str]:
     paths: list[str] = []
     if capability:
-        paths.extend(capability.public_entries[:3])
+        paths.extend(capability.public_entries[:4])
         for owner in capability.owner_modules:
-            module = next((m for m in modules if m.path == owner), None)
-            if module and module.key_files:
-                paths.extend([f"{module.path}/{key}" for key in module.key_files[:2]])
-            else:
-                paths.append(owner)
-    for path in changed_paths:
+            module = next((item for item in modules if item.path == owner), None)
+            if module:
+                if module.public_api:
+                    paths.append(f"{module.path}/{module.public_api}" if module.path != "." else module.public_api)
+                paths.extend(
+                    f"{module.path}/{key}" if module.path != "." else key
+                    for key in module.key_files[:2]
+                )
+    for path in changed_paths[:2]:
         module = module_for_path(path, modules)
         if module and module.public_api:
-            paths.append(f"{module.path}/{module.public_api}")
+            paths.append(f"{module.path}/{module.public_api}" if module.path != "." else module.public_api)
     dedup: list[str] = []
-    for path in paths:
-        if path not in dedup:
-            dedup.append(path)
-    return dedup[:6]
+    for item in paths:
+        normalized = item.replace("\\", "/")
+        if normalized not in dedup:
+            dedup.append(normalized)
+    return dedup[:8]
 
 
 def required_checks_for(capability: Optional[CapabilityEntry], action: str, bundle: dict[str, Any]) -> list[str]:
-    checks: list[str] = ["check-reuse", "check-deps", "check-public-api", "check-index-freshness"]
+    checks = ["check-reuse", "check-deps", "check-public-api", "check-index-freshness"]
     if capability:
         for binding in capability.test_bindings:
             if action in binding.get("when_actions", []):
@@ -1094,150 +1942,202 @@ def forbidden_paths_for(capability: Optional[CapabilityEntry], bundle: dict[str,
 
 
 def bundle_stale(bundle_root: Path, bundle: dict[str, Any]) -> bool:
-    config = bundle.get("config", {})
-    freshness = config.get("freshness_windows", {})
-    days = int(freshness.get("module_map_days", 1))
-    router_config = bundle_root / "router-config.yaml"
-    if not router_config.exists():
+    if not bundle_root.exists():
         return True
-    modified = dt.datetime.fromtimestamp(router_config.stat().st_mtime, tz=dt.timezone.utc).date()
-    return (dt.datetime.now(dt.timezone.utc).date() - modified).days > days
+    config = bundle.get("config", {})
+    threshold = int(config.get("freshness_windows", {}).get("module_map_days", 30))
+    marker = bundle_root / "references" / "module-map.yaml"
+    if not marker.exists():
+        return True
+    modified = dt.datetime.fromtimestamp(marker.stat().st_mtime, tz=dt.timezone.utc).date()
+    return (dt.datetime.now(dt.timezone.utc).date() - modified).days > threshold
 
 
 def build_route_report(decision: RouteDecision) -> dict[str, Any]:
     return decision.to_dict()
 
 
+def determine_action(
+    request_text: str,
+    changed_paths: list[str],
+    changed_modules: list[ModuleEntry],
+    route_scores: list[tuple[CapabilityEntry, float, dict[str, float]]],
+    high_risk: bool,
+    bundle: dict[str, Any],
+) -> tuple[str, Optional[CapabilityEntry], list[str], float, float, bool, bool, list[str]]:
+    reasoning: list[str] = []
+    if not route_scores:
+        action = "review" if high_risk else "new"
+        reasoning.append("no capability candidates were discovered")
+        return action, None, [], 0.0, 0.0, False, False, reasoning
+    sorted_scores = sorted(route_scores, key=lambda item: item[1], reverse=True)
+    best_cap, best_score, _ = sorted_scores[0]
+    best_signals = sorted_scores[0][2]
+    second_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
+    ov = overlap_score(best_score, second_score)
+    threshold = bundle.get("change_rules", {}).get("confidence", {})
+    auto_threshold = float(threshold.get("auto_route_threshold", 0.78))
+    guarded_threshold = float(threshold.get("guarded_route_threshold", 0.58))
+    duplicate_signal, duplicate_count = request_duplicate_signal(request_text, changed_paths)
+    request_has_change_verb = any(word in request_text.lower() for word in CHANGE_VERBS)
+    stable_candidates = [cap for cap, score, _ in sorted_scores if score >= guarded_threshold and cap.status == "stable"]
+    coordination_required = len(stable_candidates) > 1
+    composite_required = len({module.path for module in changed_modules}) > 1 and coordination_required
+    secondary = [cap.id for cap, score, _ in sorted_scores[1:] if score >= guarded_threshold]
+    high_risk_ids = set(bundle.get("change_rules", {}).get("high_risk_capability_ids", []))
+    stale_bundle = bundle.get("_runtime", {}).get("stale_bundle", False)
+    has_conflict = bundle.get("_runtime", {}).get("has_conflict", False)
+    targets_existing = request_targets_existing_capability(request_text)
+    extract_intent = request_prefers_extract(request_text)
+    explicit_review = request_requires_review(request_text)
+
+    if high_risk and (best_cap.id in high_risk_ids or ov >= 0.75):
+        reasoning.append("high-risk request requires manual review")
+        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if stale_bundle or has_conflict:
+        reasoning.append("routing bundle is stale or internally inconsistent")
+        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if not changed_paths and not targets_existing and best_score < auto_threshold:
+        reasoning.append("request is not anchored to an existing capability or changed surface")
+        return "new", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if not changed_paths and not targets_existing and best_score == 0.0:
+        reasoning.append("request does not align with any existing capability signals")
+        return "new", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if explicit_review or composite_required:
+        reasoning.append("request spans multiple capability surfaces or explicitly asks for review")
+        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if extract_intent:
+        if len(changed_paths) >= 2 or len({module.path for module in changed_modules}) >= 2:
+            reasoning.append("explicit extraction intent with repeated changed surfaces")
+            return "extract", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        reasoning.append("explicit extraction intent without enough repeated surface evidence")
+        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if duplicate_signal and duplicate_count >= 2 and (
+        len(changed_paths) >= 2 or len({module.path for module in changed_modules}) >= 2
+    ):
+        reasoning.append("duplicate signal indicates shared extraction work")
+        return "extract", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if ov >= 0.82:
+        reasoning.append("multiple capability candidates overlap too heavily")
+        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if best_score < guarded_threshold:
+        if changed_paths and best_signals.get("path_proximity", 0.0) >= 0.8 and not high_risk:
+            if request_has_change_verb:
+                reasoning.append("path proximity strongly anchors the request to an existing module surface")
+                return "extend", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+            reasoning.append("path proximity strongly anchors the request to an existing module surface")
+            return "reuse", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        action = "review" if high_risk else "new"
+        reasoning.append("no candidate exceeded the guarded routing threshold")
+        return action, best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if best_cap.status == "stable":
+        if request_has_change_verb and (best_cap.extension_points or best_cap.public_entries) and (best_score >= auto_threshold or targets_existing):
+            reasoning.append("stable capability selected for additive extension")
+            return "extend", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        reasoning.append("stable capability selected for reuse")
+        return "reuse", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if request_has_change_verb and (best_cap.extension_points or best_cap.public_entries):
+        reasoning.append("candidate capability can be extended but still needs caution")
+        return "extend", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    reasoning.append("candidate capability selected but confidence is not high enough for automatic routing")
+    return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+
+
+def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[str, Any], bundle_root: Path) -> RouteDecision:
+    capabilities = capability_entries(bundle)
+    modules = module_entries(bundle)
+    normalized_changed_paths = [path.replace("\\", "/") for path in changed_paths]
+    changed_modules = [module_for_path(path, modules) for path in normalized_changed_paths]
+    changed_modules = [module for module in changed_modules if module is not None]
+    high_risk = request_high_risk(request_text, normalized_changed_paths, modules, bundle)
+    route_scores: list[tuple[CapabilityEntry, float, dict[str, float]]] = []
+    for capability in capabilities:
+        score, signals = capability_score(request_text, capability, changed_modules, normalized_changed_paths, bundle)
+        if score > 0.0 or capability.status == "stable":
+            route_scores.append((capability, score, signals))
+    bundle["_runtime"] = {
+        "stale_bundle": bundle_stale(bundle_root, bundle),
+        "has_conflict": bool(capability_conflicts(bundle)),
+    }
+    action, primary_capability, secondary_capabilities, confidence, ov, coordination_required, composite_required, reasoning = determine_action(
+        request_text,
+        normalized_changed_paths,
+        changed_modules,
+        route_scores,
+        high_risk,
+        bundle,
+    )
+    sorted_scores = sorted(route_scores, key=lambda item: item[1], reverse=True)
+    candidate_capabilities = [
+        {
+            "id": capability.id,
+            "name": capability.name,
+            "status": capability.status,
+            "score": round(score, 4),
+            "signals": signals,
+        }
+        for capability, score, signals in sorted_scores
+    ]
+    candidate_modules = [
+        {"path": module.path, "id": module.id, "layer": module.layer, "domain": module.domain}
+        for module in changed_modules
+    ]
+    if not candidate_modules and modules:
+        candidate_modules = [{"path": module.path, "id": module.id, "layer": module.layer, "domain": module.domain} for module in modules[:3]]
+    required_reads = required_read_paths(primary_capability, modules, normalized_changed_paths)
+    required_checks = required_checks_for(primary_capability, action, bundle)
+    forbidden_paths = forbidden_paths_for(primary_capability, bundle)
+    decision_id = f"route-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}-{hashlib.sha1((request_text + '|' + '|'.join(normalized_changed_paths)).encode('utf-8')).hexdigest()[:8]}"
+    return RouteDecision(
+        decision_id=decision_id,
+        timestamp=iso_now(),
+        request_type=parse_request_type(request_text),
+        request_summary=request_text.strip().splitlines()[0][:180] if request_text.strip() else "",
+        action=action,
+        confidence=round(confidence, 4),
+        overlap_score=round(ov, 4),
+        primary_capability=primary_capability.id if primary_capability else None,
+        secondary_capabilities=secondary_capabilities,
+        candidate_capabilities=candidate_capabilities,
+        candidate_modules=candidate_modules,
+        required_reads=required_reads,
+        required_checks=required_checks,
+        forbidden_paths=forbidden_paths,
+        review_required=action == "review",
+        coordination_required=coordination_required,
+        composite_route_required=composite_required,
+        reasoning=reasoning,
+        source_of_truths={
+            "capability_catalog": source_of_truth_for(bundle, "capability"),
+            "module_map": source_of_truth_for(bundle, "module"),
+            "exception_registry": source_of_truth_for(bundle, "exception"),
+        },
+    )
+
+
 def normalized_code(text: str) -> str:
     text = re.sub(r"//.*?$|/\*.*?\*/|#.*?$", " ", text, flags=re.M | re.S)
-    string_pattern = r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''
+    string_pattern = r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''  # noqa: W605
     text = re.sub(string_pattern, '"STR"', text)
     text = re.sub(r"\b\d+(\.\d+)?\b", "NUM", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip().lower()
 
 
-def python_tokens(path: Path) -> list[str]:
-    try:
-        import tokenize
-        from io import BytesIO
-
-        tokens: list[str] = []
-        data = path.read_bytes()
-        for tok in tokenize.tokenize(BytesIO(data).readline):
-            if tok.type in {tokenize.NAME, tokenize.OP, tokenize.STRING, tokenize.NUMBER}:
-                if tok.string in {"def", "class", "import", "from", "return", "async", "await"}:
-                    tokens.append(tok.string)
-                else:
-                    tokens.append("ID")
-        return tokens
-    except Exception:
-        return text_tokens(path.read_text(encoding="utf-8", errors="ignore"))
-
-
-def token_signature(path: Path) -> str:
-    if path.suffix.lower() == ".py":
-        tokens = python_tokens(path)
-    else:
-        tokens = text_tokens(normalized_code(path.read_text(encoding="utf-8", errors="ignore")))
-    return hashlib.sha256(" ".join(tokens).encode("utf-8")).hexdigest()
-
-
 def similarity(a: Path, b: Path) -> float:
-    try:
-        a_text = normalized_code(a.read_text(encoding="utf-8", errors="ignore"))
-        b_text = normalized_code(b.read_text(encoding="utf-8", errors="ignore"))
-        return difflib.SequenceMatcher(None, a_text, b_text).ratio()
-    except Exception:
-        return 0.0
+    a_text = normalized_code(a.read_text(encoding="utf-8", errors="ignore"))
+    b_text = normalized_code(b.read_text(encoding="utf-8", errors="ignore"))
+    return difflib.SequenceMatcher(None, a_text, b_text).ratio()
 
 
-def source_files_for_modules(repo_root: Path, modules: list[ModuleEntry], ignore_patterns: Iterable[str]) -> list[Path]:
-    files: list[Path] = []
-    for module in modules:
-        module_path = repo_root / module.path
-        if not module_path.exists():
-            continue
-        for path in iter_source_files(module_path, ignore_patterns):
-            files.append(path)
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for path in files:
-        rel = normalize_rel_path(repo_root, path)
-        if rel not in seen:
-            seen.add(rel)
-            unique.append(path)
-    return unique
-
-
-def path_to_module_map(path: Path, modules: list[ModuleEntry], repo_root: Path) -> Optional[ModuleEntry]:
-    rel = normalize_rel_path(repo_root, path)
-    return module_for_path(rel, modules)
-
-
-def parse_python_imports(path: Path) -> list[str]:
-    imports: list[str] = []
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", SyntaxWarning)
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
-    except Exception:
-        return imports
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imports.append(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imports.append(node.module)
-    return imports
-
-
-def parse_js_imports(path: Path) -> list[str]:
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    imports: list[str] = []
-    for match in re.finditer(r"(?:import|export)\s+.*?from\s+['\"]([^'\"]+)['\"]", text):
-        imports.append(match.group(1))
-    for match in re.finditer(r"require\(\s*['\"]([^'\"]+)['\"]\s*\)", text):
-        imports.append(match.group(1))
-    return imports
-
-
-def parse_java_imports(path: Path) -> list[str]:
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    imports = []
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("import "):
-            value = line.removeprefix("import ").rstrip(";").strip()
-            imports.append(value)
-    return imports
-
-
-def resolve_import_to_module(import_name: str, source_module: ModuleEntry, modules: list[ModuleEntry], repo_root: Path, source_file: Path) -> Optional[ModuleEntry]:
-    name = import_name.replace("\\", "/").strip()
-    if not name:
-        return None
-    if name.startswith("."):
-        target = (source_file.parent / name).resolve()
-        for candidate in modules:
-            if target.as_posix().lower().startswith((repo_root / candidate.path).resolve().as_posix().lower()):
-                return candidate
-        return None
-    # Java package heuristic.
-    if "." in name and not "/" in name:
-        package = name.lower()
-        for module in modules:
-            package_prefix = java_package_prefix(module.path)
-            if package.startswith(package_prefix.lower()):
-                return module
-    # Path import heuristic for TS/Python.
-    normalized = name.replace("@/", "").replace("@", "")
-    for module in modules:
-        mod_path = module.path.replace("\\", "/")
-        if normalized.startswith(mod_path.lower()) or mod_path.lower().split("/")[-1] in normalized.lower():
-            return module
-    return None
+def matches_dependency(source: ModuleEntry, target: ModuleEntry) -> bool:
+    allowed_paths = [pattern.replace("\\", "/") for pattern in source.allowed_outbound_to]
+    if target.path in source.depends_on:
+        return True
+    if allowed_paths and glob_match(allowed_paths, target.path):
+        return True
+    allowed_layers = source.lifecycle.get("allowed_outbound_layers", [])
+    return target.layer in allowed_layers
 
 
 def gather_dependency_findings(repo_root: Path, bundle: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1245,14 +2145,16 @@ def gather_dependency_findings(repo_root: Path, bundle: dict[str, Any]) -> list[
     ignore_patterns = default_ignore_patterns(bundle.get("config", {}))
     findings: list[dict[str, Any]] = []
     for module in modules:
-        module_root = repo_root / module.path
+        module_root = repo_root / module.path if module.path != "." else repo_root
         if not module_root.exists():
             continue
         for source_file in iter_source_files(module_root, ignore_patterns):
+            if source_file.suffix.lower() not in CODE_SUFFIXES:
+                continue
             kind = file_suffix_kind(source_file)
             if kind == "python":
                 imports = parse_python_imports(source_file)
-            elif kind in {"typescript", "javascript"}:
+            elif kind in {"javascript", "typescript"}:
                 imports = parse_js_imports(source_file)
             elif kind == "java":
                 imports = parse_java_imports(source_file)
@@ -1262,7 +2164,7 @@ def gather_dependency_findings(repo_root: Path, bundle: dict[str, Any]) -> list[
                 target = resolve_import_to_module(imp, module, modules, repo_root, source_file)
                 if not target or target.path == module.path:
                     continue
-                if not matches_dependency(module, target, bundle):
+                if not matches_dependency(module, target):
                     findings.append(
                         {
                             "severity": "P1",
@@ -1271,18 +2173,35 @@ def gather_dependency_findings(repo_root: Path, bundle: dict[str, Any]) -> list[
                             "source_module": module.path,
                             "target_module": target.path,
                             "import": imp,
-                            "message": f"{module.path} imports {target.path} outside its declared dependency surface",
+                            "message": f"{module.path} imports {target.path} outside its allowed dependency surface",
                         }
                     )
     return findings
 
 
-def matches_dependency(source: ModuleEntry, target: ModuleEntry, bundle: dict[str, Any]) -> bool:
-    allowed = [pattern.replace("\\", "/") for pattern in source.allowed_outbound_to]
-    if allowed and glob_match(allowed, target.path):
+def import_reaches_private_surface(import_name: str, resolved_path: Optional[str]) -> bool:
+    lowered = import_name.lower()
+    if any(f".{segment}." in lowered or f"/{segment}/" in lowered for segment in PRIVATE_SEGMENTS):
         return True
-    if target.path in source.depends_on:
-        return True
+    if resolved_path:
+        rel = resolved_path.lower().replace("\\", "/")
+        if any(f"/{segment}/" in rel for segment in PRIVATE_SEGMENTS):
+            return True
+    return False
+
+
+def import_matches_public_surface(import_name: str, target: ModuleEntry, resolved_path: Optional[str]) -> bool:
+    lowered = import_name.lower()
+    for name in public_import_names(target):
+        public_name = name.lower()
+        if lowered == public_name or lowered.startswith(public_name + ".") or lowered.startswith(public_name + "/"):
+            if not import_reaches_private_surface(import_name, resolved_path):
+                return True
+    if resolved_path and target.public_api:
+        expected_prefix = f"{target.path}/{target.public_api}".replace("\\", "/").strip("/")
+        normalized = resolved_path.replace("\\", "/").strip("/")
+        if normalized == expected_prefix or normalized.startswith(expected_prefix.rstrip("/") + "/"):
+            return True
     return False
 
 
@@ -1291,27 +2210,37 @@ def gather_public_api_findings(repo_root: Path, bundle: dict[str, Any]) -> list[
     ignore_patterns = default_ignore_patterns(bundle.get("config", {}))
     findings: list[dict[str, Any]] = []
     for module in modules:
-        if not module.public_api:
-            continue
-        module_root = repo_root / module.path
+        module_root = repo_root / module.path if module.path != "." else repo_root
         if not module_root.exists():
             continue
         for source_file in iter_source_files(module_root, ignore_patterns):
-            # Only inspect files outside public API directories.
-            rel = normalize_rel_path(repo_root, source_file)
-            if rel.startswith(f"{module.path}/{module.public_api}"):
+            if source_file.suffix.lower() not in CODE_SUFFIXES:
                 continue
-            text = source_file.read_text(encoding="utf-8", errors="ignore")
-            if module.public_api.replace("\\", "/") in text and source_file.is_file():
-                findings.append(
-                    {
-                        "severity": "P2",
-                        "rule": "public-api-bypass",
-                        "source_file": rel,
-                        "module": module.path,
-                        "message": f"{rel} references internal public API path for {module.path}",
-                    }
-                )
+            kind = file_suffix_kind(source_file)
+            if kind == "python":
+                imports = parse_python_imports(source_file)
+            elif kind in {"javascript", "typescript"}:
+                imports = parse_js_imports(source_file)
+            elif kind == "java":
+                imports = parse_java_imports(source_file)
+            else:
+                imports = []
+            for imp in imports:
+                target, resolved_path = infer_import_reference(imp, module, modules, repo_root, source_file)
+                if not target or target.path == module.path:
+                    continue
+                if target.public_api and not import_matches_public_surface(imp, target, resolved_path):
+                    findings.append(
+                        {
+                            "severity": "P1" if import_reaches_private_surface(imp, resolved_path) else "P2",
+                            "rule": "public-api-bypass",
+                            "source_file": normalize_rel_path(repo_root, source_file),
+                            "source_module": module.path,
+                            "target_module": target.path,
+                            "import": imp,
+                            "message": f"{module.path} reaches {target.path} through a non-public import path",
+                        }
+                    )
     return findings
 
 
@@ -1321,20 +2250,20 @@ def gather_reuse_findings(repo_root: Path, bundle: dict[str, Any], changed_paths
     ignore_patterns = default_ignore_patterns(bundle.get("config", {}))
     candidate_files = source_files_for_modules(repo_root, modules, ignore_patterns)
     if changed_paths:
-        filtered: list[Path] = []
-        for path in candidate_files:
-            rel = normalize_rel_path(repo_root, path)
-            if any(rel == cp.replace("\\", "/") or rel.startswith(cp.replace("\\", "/").rstrip("/") + "/") for cp in changed_paths):
-                filtered.append(path)
+        normalized_paths = [item.replace("\\", "/") for item in changed_paths]
+        filtered = []
+        for file in candidate_files:
+            rel = normalize_rel_path(repo_root, file)
+            if any(rel == path or rel.startswith(path.rstrip("/") + "/") for path in normalized_paths):
+                filtered.append(file)
         if filtered:
             candidate_files = filtered
-
     findings: list[dict[str, Any]] = []
-    # Direct forbidden paths first.
+    owner_file_cache: dict[str, list[Path]] = {}
     for capability in capabilities:
         for pattern in capability.forbidden_patterns:
-            for path in candidate_files:
-                rel = normalize_rel_path(repo_root, path)
+            for file in candidate_files:
+                rel = normalize_rel_path(repo_root, file)
                 if fnmatch.fnmatchcase(rel, pattern.replace("\\", "/")):
                     findings.append(
                         {
@@ -1342,50 +2271,42 @@ def gather_reuse_findings(repo_root: Path, bundle: dict[str, Any], changed_paths
                             "rule": "forbidden-pattern",
                             "path": rel,
                             "capability": capability.id,
-                            "message": f"{rel} matches forbidden pattern for {capability.id}",
+                            "message": f"{rel} matches a forbidden path pattern for {capability.id}",
                         }
                     )
-
-    # Similarity-based duplicates.
-    for capability in capabilities:
-        owner_files = []
-        for owner in capability.owner_modules:
-            module = next((m for m in modules if m.path == owner), None)
-            if module:
-                owner_root = repo_root / module.path
-                owner_files.extend([p for p in iter_source_files(owner_root, ignore_patterns) if p.suffix.lower() in {".py", ".java", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}])
-        if not owner_files:
+        if not capability.owner_modules:
             continue
+        if capability.id not in owner_file_cache:
+            owner_files: list[Path] = []
+            for owner in capability.owner_modules:
+                module = next((item for item in modules if item.path == owner), None)
+                if not module:
+                    continue
+                owner_root = repo_root / module.path if module.path != "." else repo_root
+                owner_files.extend([file for file in iter_source_files(owner_root, ignore_patterns) if file.suffix.lower() in CODE_SUFFIXES])
+            owner_file_cache[capability.id] = owner_files
+        owner_files = owner_file_cache[capability.id]
         for owner_file in owner_files:
-            for path in candidate_files:
-                if path == owner_file:
+            owner_module = module_for_path(normalize_rel_path(repo_root, owner_file), modules)
+            for candidate in candidate_files:
+                if candidate == owner_file or candidate.suffix.lower() != owner_file.suffix.lower():
                     continue
-                if path.suffix.lower() != owner_file.suffix.lower():
+                candidate_module = module_for_path(normalize_rel_path(repo_root, candidate), modules)
+                if candidate_module and owner_module and candidate_module.path == owner_module.path:
                     continue
-                score = similarity(owner_file, path)
-                rel = normalize_rel_path(repo_root, path)
-                if score >= 0.92:
-                    findings.append(
-                        {
-                            "severity": "P1",
-                            "rule": "duplicate-implementation",
-                            "path": rel,
-                            "capability": capability.id,
-                            "score": round(score, 4),
-                            "message": f"strong duplicate candidate for {capability.id}",
-                        }
-                    )
-                elif score >= 0.85:
-                    findings.append(
-                        {
-                            "severity": "P2",
-                            "rule": "duplicate-implementation",
-                            "path": rel,
-                            "capability": capability.id,
-                            "score": round(score, 4),
-                            "message": f"possible duplicate for {capability.id}",
-                        }
-                    )
+                score = similarity(owner_file, candidate)
+                if score < 0.85:
+                    continue
+                findings.append(
+                    {
+                        "severity": "P1" if score >= 0.92 else "P2",
+                        "rule": "duplicate-implementation",
+                        "path": normalize_rel_path(repo_root, candidate),
+                        "capability": capability.id,
+                        "score": round(score, 4),
+                        "message": f"duplicate implementation signal for {capability.id}",
+                    }
+                )
     return findings
 
 
@@ -1399,7 +2320,7 @@ def bundle_metadata(bundle: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_bundle(bundle_root: Path, bundle: dict[str, Any], overwrite: bool = True) -> None:
+def write_bundle(bundle_root: Path, bundle: dict[str, Any]) -> None:
     bundle_root.mkdir(parents=True, exist_ok=True)
     (bundle_root / "references").mkdir(parents=True, exist_ok=True)
     (bundle_root / "schemas").mkdir(parents=True, exist_ok=True)
@@ -1407,7 +2328,6 @@ def write_bundle(bundle_root: Path, bundle: dict[str, Any], overwrite: bool = Tr
     (bundle_root / "reports" / "index-rebuild").mkdir(parents=True, exist_ok=True)
     (bundle_root / "reports" / "guardrail-results").mkdir(parents=True, exist_ok=True)
     (bundle_root / "reports" / "evaluation").mkdir(parents=True, exist_ok=True)
-
     dump_yaml_file(bundle_root / "router-config.yaml", bundle["config"])
     dump_yaml_file(bundle_root / "references" / "capability-catalog.yaml", bundle["capability_catalog"])
     dump_yaml_file(bundle_root / "references" / "module-map.yaml", bundle["module_map"])
@@ -1417,854 +2337,26 @@ def write_bundle(bundle_root: Path, bundle: dict[str, Any], overwrite: bool = Tr
     dump_yaml_file(bundle_root / "references" / "evaluation-set.yaml", bundle["evaluation_set"])
 
 
-def infer_capabilities_from_modules(modules: list[ModuleEntry], repo_root: Path) -> list[CapabilityEntry]:
-    archetypes = capability_archetypes()
-    capabilities: list[CapabilityEntry] = []
-    repo_name = repo_root.name.lower()
-    for archetype in archetypes:
-        scope = str(archetype.get("repository_scope", "workspace")).lower()
-        if scope != "workspace" and scope != repo_name:
-            continue
-        matched_modules = []
-        for module in modules:
-            haystack = " ".join([module.path, module.domain, module.purpose] + module.key_files).lower()
-            if match_strength(haystack, archetype["keywords"]) >= 1.0:
-                matched_modules.append(module.path)
-            elif any(hint.lower() in haystack for hint in archetype.get("path_hints", [])):
-                matched_modules.append(module.path)
-        if matched_modules:
-            public_entries = infer_public_entries_from_modules(matched_modules, modules)
-            extension_points = infer_extension_points_from_modules(matched_modules, modules)
-            capabilities.append(
-                CapabilityEntry(
-                    id=archetype["id"],
-                    name=archetype["name"],
-                    status="stable",
-                    maturity="shared",
-                    source_of_truth="generated",
-                    intent_keywords=list(archetype["keywords"]),
-                    aliases=list(archetype.get("aliases", [])),
-                    business_intents=list(archetype.get("business_intents", [])),
-                    scope={"kind": "capability", "repository": archetype.get("repository_scope", "workspace")},
-                    owner_modules=sorted(set(matched_modules)),
-                    public_entries=public_entries,
-                    extension_points=extension_points,
-                    route_defaults={"stable_action": "reuse", "extensible_action": "extend", "low_confidence_action": "review"},
-                    contracts=list(archetype.get("contracts", [])),
-                    related_tests=list(archetype.get("related_tests", [])),
-                    test_bindings=list(archetype.get("test_bindings", [])),
-                    forbidden_patterns=list(archetype.get("forbidden_patterns", [])),
-                    dependent_modules=list(archetype.get("dependent_modules", [])),
-                    anti_patterns=list(archetype.get("anti_patterns", [])),
-                    lifecycle={"introduced_at": today_date(), "deprecated_at": None, "replaced_by": None},
-                    last_verified_at=today_date(),
-                )
-            )
-    if capabilities:
-        return capabilities
-
-    # Fallback candidate capabilities derived from module names.
-    for module in modules:
-        capability_id = stable_slug(module.domain or Path(module.path).name)
-        capabilities.append(
-            CapabilityEntry(
-                id=capability_id,
-                name=module.purpose.title(),
-                status="candidate",
-                maturity="local",
-                source_of_truth="generated",
-                intent_keywords=[module.domain, Path(module.path).name],
-                aliases=[],
-                business_intents=[module.domain],
-                scope={"kind": "capability", "repository": "workspace"},
-                owner_modules=[module.path],
-                public_entries=[module.public_api] if module.public_api else [],
-                extension_points=module.key_files[:3],
-                route_defaults={"stable_action": "reuse", "extensible_action": "extend", "low_confidence_action": "review"},
-                contracts=[],
-                related_tests=[],
-                test_bindings=[],
-                forbidden_patterns=[],
-                dependent_modules=module.depends_on,
-                anti_patterns=[],
-                lifecycle={"introduced_at": today_date(), "deprecated_at": None, "replaced_by": None},
-                last_verified_at=today_date(),
-            )
-        )
-    return capabilities
-
-
-def infer_public_entries_from_modules(matched_modules: list[str], modules: list[ModuleEntry]) -> list[str]:
-    entries: list[str] = []
-    for matched in matched_modules:
-        module = next((m for m in modules if m.path == matched), None)
-        if not module:
-            continue
-        if module.public_api:
-            entries.append(f"{module.path}/{module.public_api}".replace("//", "/"))
-        elif module.key_files:
-            entries.append(f"{module.path}/{module.key_files[0]}".replace("//", "/"))
-        else:
-            entries.append(module.path)
-    dedup: list[str] = []
-    for entry in entries:
-        if entry not in dedup:
-            dedup.append(entry)
-    return dedup[:4]
-
-
-def infer_extension_points_from_modules(matched_modules: list[str], modules: list[ModuleEntry]) -> list[str]:
-    points: list[str] = []
-    for matched in matched_modules:
-        module = next((m for m in modules if m.path == matched), None)
-        if not module:
-            continue
-        for key_file in module.key_files[:3]:
-            name = Path(key_file).stem
-            if name and name not in points:
-                points.append(name)
-    return points[:6]
-
-
-def capability_archetypes() -> list[dict[str, Any]]:
-    return [
-        {
-            "id": "security-jws",
-            "name": "Principal JWS and JWKS Security",
-            "keywords": ["jws", "jwks", "principal", "token", "signature", "security", "signer", "verifier"],
-            "aliases": ["principal-jws", "token-verifier", "key-rotation"],
-            "business_intents": ["principal-injection", "downstream-verification", "key-rotation"],
-            "path_hints": ["security", "sdk-java", "sdk-node", "gateway"],
-            "repository_scope": "saas-control-plane",
-        },
-        {
-            "id": "tenant-management",
-            "name": "Tenant and Workspace Management",
-            "keywords": ["tenant", "workspace", "membership", "isolation"],
-            "aliases": ["workspace-management", "tenant-context"],
-            "business_intents": ["tenant-isolation", "workspace-membership", "workspace-selection"],
-            "path_hints": ["tenant"],
-            "repository_scope": "saas-control-plane",
-        },
-        {
-            "id": "billing-subscription",
-            "name": "Billing, Subscription, Invoice, and Payment Processing",
-            "keywords": ["billing", "subscription", "invoice", "payment", "refund", "webhook", "stripe"],
-            "aliases": ["payment-provider", "subscription-billing"],
-            "business_intents": ["subscription-lifecycle", "payment-attempt", "invoice-generation"],
-            "path_hints": ["billing", "payment", "invoice", "stripe"],
-            "repository_scope": "saas-control-plane",
-        },
-        {
-            "id": "entitlement-usage",
-            "name": "Entitlement and Usage Enforcement",
-            "keywords": ["entitlement", "quota", "usage", "limit"],
-            "aliases": ["quota-enforcement", "usage-tracking"],
-            "business_intents": ["feature-entitlement", "quota-check", "usage-idempotency"],
-            "path_hints": ["entitlement", "quota", "usage"],
-            "repository_scope": "saas-control-plane",
-        },
-        {
-            "id": "gateway-access",
-            "name": "Gateway Access and Launch Enforcement",
-            "keywords": ["gateway", "launch", "session", "access", "route"],
-            "aliases": ["launch-flow", "app-gateway"],
-            "business_intents": ["application-launch", "access-check", "principal-injection"],
-            "path_hints": ["gateway", "launch"],
-            "repository_scope": "saas-control-plane",
-        },
-        {
-            "id": "audit-log",
-            "name": "Audit and Trace Recording",
-            "keywords": ["audit", "trace", "event log", "logging"],
-            "aliases": ["audit-recording", "audit-aspect"],
-            "business_intents": ["audit-recording", "trace-export"],
-            "path_hints": ["audit", "trace"],
-            "repository_scope": "saas-control-plane",
-        },
-        {
-            "id": "application-launch",
-            "name": "Application Registration and Launch Sessions",
-            "keywords": ["application", "launch", "registration", "session"],
-            "aliases": ["app-launch", "application-registry"],
-            "business_intents": ["app-discovery", "launch-session", "registered-application"],
-            "path_hints": ["application", "launch"],
-            "repository_scope": "saas-control-plane",
-        },
-        {
-            "id": "developer-conformance",
-            "name": "Developer Portal and Conformance Testing",
-            "keywords": ["developer", "conformance", "webhook", "portal"],
-            "aliases": ["developer-portal", "webhook-test"],
-            "business_intents": ["developer-onboarding", "webhook-validation", "conformance-check"],
-            "path_hints": ["developer", "conformance", "webhook"],
-            "repository_scope": "saas-control-plane",
-        },
-        {
-            "id": "workflow-engine",
-            "name": "Workflow Engine",
-            "keywords": ["workflow", "execution", "node", "runtime", "graph"],
-            "aliases": ["workflow-runtime", "workflow-orchestrator"],
-            "business_intents": ["workflow-definition", "workflow-execution", "workflow-recovery"],
-            "path_hints": ["workflow", "execution"],
-            "repository_scope": "GodView",
-        },
-        {
-            "id": "plot-outline",
-            "name": "Plot Outline Management",
-            "keywords": ["outline", "chapter", "plot", "readiness"],
-            "aliases": ["chapter-outline", "outline-resource"],
-            "business_intents": ["outline-generation", "outline-validation", "outline-readiness"],
-            "path_hints": ["outline", "chapter", "plot"],
-            "repository_scope": "GodView",
-        },
-        {
-            "id": "lore-management",
-            "name": "Lore and Setting Management",
-            "keywords": ["lore", "setting", "world", "reference"],
-            "aliases": ["setting-management", "lore-index"],
-            "business_intents": ["lore-crud", "lore-indexing", "lore-reference-resolution"],
-            "path_hints": ["lore", "setting", "world"],
-            "repository_scope": "GodView",
-        },
-        {
-            "id": "character-management",
-            "name": "Character and Character Depth Management",
-            "keywords": ["character", "persona", "relationship", "voice"],
-            "aliases": ["character-depth", "character-graph"],
-            "business_intents": ["character-crud", "character-depth", "character-voice"],
-            "path_hints": ["character", "persona"],
-            "repository_scope": "GodView",
-        },
-        {
-            "id": "skill-system",
-            "name": "Skill Retrieval, Execution, and Registry",
-            "keywords": ["skill", "prompt", "retrieval", "execution", "registry"],
-            "aliases": ["skill-runtime", "prompt-skill"],
-            "business_intents": ["skill-retrieval", "skill-execution", "skill-registry"],
-            "path_hints": ["skill", "prompt"],
-            "repository_scope": "GodView",
-        },
-        {
-            "id": "assistant-context",
-            "name": "Assistant Context Snapshot and Retrieval",
-            "keywords": ["assistant context", "session", "snapshot", "retrieval", "delta"],
-            "aliases": ["context-fabric", "assistant-session"],
-            "business_intents": ["context-snapshot", "session-state", "retrieval-delta"],
-            "path_hints": ["context", "snapshot", "session"],
-            "repository_scope": "GodView",
-        },
-    ]
-
-
-def build_change_rules(capabilities: list[CapabilityEntry]) -> dict[str, Any]:
-    high_risk_ids = [cap.id for cap in capabilities if cap.id in {"security-jws", "billing-subscription", "entitlement-usage", "gateway-access", "tenant-management"}]
-    return {
-        "schema_version": 1,
-        "generated_at": iso_now(),
-        "generated_by": "bootstrap_router",
-        "source_repository": "workspace",
-        "source_commit": None,
-        "confidence": {"auto_route_threshold": 0.85, "guarded_route_threshold": 0.60},
-        "high_risk_conditions": [
-            "shared-capability-contract-change",
-            "auth-or-billing-module-change",
-            "schema-migration",
-            "security-sensitive-entry",
-            "gateway-claim-change",
-            "multi-capability-core-change",
-        ],
-        "high_risk_capability_ids": high_risk_ids,
-        "high_risk_module_patterns": [],
-        "route_rules": [
-            {
-                "name": "prefer-reuse-for-stable-capability",
-                "when": {"capability_status": "stable", "public_entry_exists": True, "matching_intent": True},
-                "action": "reuse",
-            },
-            {
-                "name": "prefer-extend-when-extension-point-exists",
-                "when": {"extension_point_exists": True, "behavior_is_compatible": True},
-                "action": "extend",
-            },
-            {
-                "name": "prefer-extract-when-duplicate-signal-is-strong",
-                "when": {"duplicate_signal": True, "repeated_occurrence_gte": 2},
-                "action": "extract",
-            },
-            {
-                "name": "require-review-for-low-confidence",
-                "when": {"confidence_below": 0.60},
-                "action": "review",
-            },
-            {
-                "name": "require-review-for-heavy-overlap",
-                "when": {"candidate_capabilities_overlap_gte": 0.80},
-                "action": "review",
-            },
-        ],
-        "decision_policy": {
-            "tie_breaker": "review",
-            "high_risk_override": "review",
-            "human_override_allowed": True,
-            "human_override_must_record_reason": True,
-        },
-    }
-
-
-def build_router_config(repo_root: Path) -> dict[str, Any]:
-    repo_name = repo_root.name.lower()
-    repositories: list[dict[str, Any]] = []
-    for candidate in repo_root.iterdir():
-        if candidate.is_dir() and not should_ignore_path(candidate, DEFAULT_IGNORE_GLOBS, repo_root):
-            if (candidate / "pom.xml").exists() or (candidate / "package.json").exists() or (candidate / "app").exists():
-                repositories.append({"id": candidate.name, "path": candidate.name, "type": detect_repo_manifest_kind(candidate)})
-    if not repositories:
-        repositories.append({"id": repo_name, "path": ".", "type": detect_repo_manifest_kind(repo_root)})
-    return {
-        "schema_version": 1,
-        "generated_at": iso_now(),
-        "generated_by": "bootstrap_router",
-        "source_repository": repo_name,
-        "source_commit": current_git_commit(repo_root),
-        "repo_id": repo_name,
-        "repositories": repositories,
-        "protected_branch_patterns": ["main", "master", "release/*"],
-        "ignore_paths": DEFAULT_IGNORE_GLOBS,
-        "supported_languages": ["java", "python", "typescript", "javascript"],
-        "module_discovery": {"maven": True, "node_workspace": True, "python_package": True},
-        "freshness_windows": {
-            "capability_catalog_days": 7,
-            "module_map_days": 1,
-            "exception_registry_days": 1,
-            "evaluation_set_days": 30,
-        },
-        "evaluation": {"minimum_case_count": 30, "top1_accuracy_threshold": 0.85, "review_precision_threshold": 0.90},
-        "route_reports_dir": "reports/route-decisions",
-        "rebuild_reports_dir": "reports/index-rebuild",
-        "guardrail_reports_dir": "reports/guardrail-results",
-        "evaluation_reports_dir": "reports/evaluation",
-    }
-
-
-def current_git_commit(path: Path) -> Optional[str]:
-    try:
-        result = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
-        commit = result.stdout.strip()
-        return commit or None
-    except Exception:
-        return None
-
-
-def build_ownership(capabilities: list[CapabilityEntry], modules: list[ModuleEntry]) -> dict[str, Any]:
-    owners = []
-    for cap in capabilities:
-        owners.append(
-            {
-                "scope": "capability",
-                "target": cap.id,
-                "primary": {
-                    "security-jws": "scp-security-team",
-                    "tenant-management": "scp-platform-team",
-                    "billing-subscription": "scp-billing-team",
-                    "entitlement-usage": "scp-platform-team",
-                    "gateway-access": "scp-security-team",
-                    "audit-log": "scp-platform-team",
-                    "application-launch": "scp-platform-team",
-                    "developer-conformance": "scp-platform-team",
-                    "workflow-engine": "godview-workflow-team",
-                    "plot-outline": "godview-story-engine-team",
-                    "lore-management": "godview-knowledge-team",
-                    "character-management": "godview-character-team",
-                    "skill-system": "godview-platform-team",
-                    "assistant-context": "godview-platform-team",
-                }.get(cap.id, "platform-team"),
-                "reviewers": ["architecture-board"],
-                "escalation_group": "architecture-board",
-            }
-        )
-    for module in modules:
-        owners.append(
-            {
-                "scope": "module",
-                "target": module.path,
-                "primary": module.owner if module.owner != "unassigned" else "platform-team",
-                "reviewers": ["architecture-board"],
-                "escalation_group": "architecture-board",
-            }
-        )
-    return {"schema_version": 1, "generated_at": iso_now(), "generated_by": "bootstrap_router", "source_repository": "workspace", "source_commit": None, "owners": owners}
-
-
-def build_module_map(repo_root: Path, config: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    modules = discover_modules(repo_root, config)
-    infer_module_dependencies(repo_root, modules, config or {})
-    # Owner and dependency heuristics.
-    for module in modules:
-        lower = module.path.lower()
-        if "security" in lower:
-            module.owner = "scp-security-team" if "saas-control-plane" in lower else "godview-platform-team"
-        elif "billing" in lower:
-            module.owner = "scp-billing-team"
-        elif "tenant" in lower:
-            module.owner = "scp-platform-team"
-        elif "workflow" in lower:
-            module.owner = "godview-workflow-team"
-        elif "outline" in lower:
-            module.owner = "godview-story-engine-team"
-        elif "lore" in lower:
-            module.owner = "godview-knowledge-team"
-        elif "character" in lower:
-            module.owner = "godview-character-team"
-        elif "skill" in lower:
-            module.owner = "godview-platform-team"
-        elif "context" in lower:
-            module.owner = "godview-platform-team"
-        elif "gateway" in lower:
-            module.owner = "scp-security-team"
-        elif "developer" in lower:
-            module.owner = "scp-platform-team"
-        elif "frontend" in lower or "ui" in lower:
-            module.owner = "godview-platform-team" if "godview" in lower else "scp-platform-team"
-        elif "sdk" in lower:
-            module.owner = "scp-security-team"
-        elif "app" in lower or "demo" in lower:
-            module.owner = "scp-platform-team"
-        if not module.allowed_outbound_to:
-            module.allowed_outbound_to = sorted(set(module.depends_on))
-
-    module_dicts = [module.to_dict() for module in modules]
-    return {
-        "schema_version": 1,
-        "generated_at": iso_now(),
-        "generated_by": "bootstrap_router",
-        "source_repository": repo_root.name,
-        "source_commit": current_git_commit(repo_root),
-        "modules": module_dicts,
-    }
-
-
-def infer_module_dependencies(repo_root: Path, modules: list[ModuleEntry], config: dict[str, Any]) -> None:
-    ignore_patterns = default_ignore_patterns(config)
-    for module in modules:
-        module_root = repo_root / module.path
-        if not module_root.exists():
-            continue
-        deps: set[str] = set(module.depends_on)
-        for source_file in iter_source_files(module_root, ignore_patterns):
-            kind = file_suffix_kind(source_file)
-            if kind == "python":
-                imports = parse_python_imports(source_file)
-            elif kind in {"typescript", "javascript"}:
-                imports = parse_js_imports(source_file)
-            elif kind == "java":
-                imports = parse_java_imports(source_file)
-            else:
-                imports = []
-            for imp in imports:
-                target = resolve_import_to_module(imp, module, modules, repo_root, source_file)
-                if target and target.path != module.path:
-                    deps.add(target.path)
-        module.depends_on = sorted(deps)
-
-
-def build_capability_catalog(repo_root: Path, module_map: dict[str, Any]) -> dict[str, Any]:
-    modules = [ModuleEntry(**module) for module in module_map.get("modules", [])]
-    capabilities = infer_capabilities_from_modules(modules, repo_root)
-    return {
-        "schema_version": 1,
-        "generated_at": iso_now(),
-        "generated_by": "bootstrap_router",
-        "source_repository": repo_root.name,
-        "source_commit": current_git_commit(repo_root),
-        "capabilities": [cap.to_dict() for cap in capabilities],
-    }
-
-
-def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[str, Any]) -> dict[str, Any]:
-    stable_caps = [cap for cap in capabilities if cap.status == "stable"]
-    cases: list[dict[str, Any]] = []
-    if not stable_caps:
-        stable_caps = capabilities[:]
-    for cap in stable_caps[:10]:
-        reuse_changed_paths = [owner for owner in cap.dependent_modules[:1]] if cap.dependent_modules else []
-        cases.append(
-            {
-                "id": f"{cap.id}-reuse",
-                "request": f"Reuse the existing {cap.name.lower()} capability in the integration layer.",
-                "expected_action": "reuse",
-                "expected_capabilities": [cap.id],
-                "expected_modules": cap.owner_modules[:2],
-                "expected_reads": cap.public_entries[:2],
-                "changed_paths": reuse_changed_paths,
-                "risk_level": "medium",
-            }
-        )
-        expected_extend_action = "review" if any(keyword in cap.id for keyword in ["security", "billing", "entitlement", "gateway", "tenant"]) else "extend"
-        cases.append(
-            {
-                "id": f"{cap.id}-extend",
-                "request": f"Extend the existing {cap.name.lower()} capability with a compatible new behavior.",
-                "expected_action": expected_extend_action,
-                "expected_capabilities": [cap.id],
-                "expected_modules": cap.owner_modules[:2],
-                "expected_reads": cap.public_entries[:2],
-                "changed_paths": cap.owner_modules[:1],
-                "risk_level": "high",
-            }
-        )
-    for cap in stable_caps[:4]:
-        expected_extract_action = "review" if any(keyword in cap.id for keyword in ["security", "billing", "entitlement", "gateway", "tenant"]) else "extract"
-        cases.append(
-            {
-                "id": f"{cap.id}-extract",
-                "request": f"Extract repeated {cap.name.lower()} logic into a shared capability.",
-                "expected_action": expected_extract_action,
-                "expected_capabilities": [cap.id],
-                "expected_modules": cap.owner_modules[:2],
-                "expected_reads": cap.public_entries[:2],
-                "changed_paths": cap.owner_modules[:2],
-                "risk_level": "high",
-            }
-        )
-    cases.extend(
-        [
-            {
-                "id": "new-capability-1",
-                "request": "Introduce a new capability for a workflow not covered by the current catalog.",
-                "expected_action": "new",
-                "expected_capabilities": [],
-                "expected_modules": [],
-                "expected_reads": [],
-                "risk_level": "medium",
-            },
-            {
-                "id": "new-capability-2",
-                "request": "Build a brand-new feature area with no reusable shared entry point.",
-                "expected_action": "new",
-                "expected_capabilities": [],
-                "expected_modules": [],
-                "expected_reads": [],
-                "risk_level": "medium",
-            },
-            {
-                "id": "review-high-risk-1",
-                "request": "Change two stable shared capabilities in one request.",
-                "expected_action": "review",
-                "expected_capabilities": [stable_caps[0].id if stable_caps else "unknown"],
-                "expected_modules": stable_caps[0].owner_modules[:2] if stable_caps else [],
-                "expected_reads": [],
-                "changed_paths": stable_caps[0].owner_modules[:2] if stable_caps else [],
-                "risk_level": "critical",
-            },
-            {
-                "id": "review-high-risk-2",
-                "request": "Modify gateway claims and billing state transitions together.",
-                "expected_action": "review",
-                "expected_capabilities": ["gateway-access", "billing-subscription"],
-                "expected_modules": [],
-                "expected_reads": [],
-                "changed_paths": ["backend/saas-gateway", "backend/saas-billing"],
-                "risk_level": "critical",
-            },
-        ]
-    )
-    while len(cases) < 30 and stable_caps:
-        cap = stable_caps[len(cases) % len(stable_caps)]
-        cases.append(
-            {
-                "id": f"extra-{len(cases)+1}",
-                "request": f"Reuse {cap.name.lower()} without changing its core logic.",
-                "expected_action": "reuse",
-                "expected_capabilities": [cap.id],
-                "expected_modules": cap.owner_modules[:2],
-                "expected_reads": cap.public_entries[:2],
-                "risk_level": "medium",
-            }
-        )
-    return {
-        "schema_version": 1,
-        "generated_at": iso_now(),
-        "generated_by": "bootstrap_router",
-        "source_repository": "workspace",
-        "source_commit": None,
-        "cases": cases[:30],
-    }
-
-
-def build_router_bundle(repo_root: Path) -> dict[str, Any]:
-    config = build_router_config(repo_root)
-    module_map = build_module_map(repo_root, config)
-    capability_catalog = build_capability_catalog(repo_root, module_map)
-    capabilities = [CapabilityEntry(**cap) for cap in capability_catalog["capabilities"]]
-    ownership = build_ownership(capabilities, [ModuleEntry(**module) for module in module_map["modules"]])
-    change_rules = build_change_rules(capabilities)
-    exception_registry = {
-        "schema_version": 1,
-        "generated_at": iso_now(),
-        "generated_by": "bootstrap_router",
-        "source_repository": repo_root.name,
-        "source_commit": current_git_commit(repo_root),
-        "exceptions": [],
-    }
-    evaluation_set = build_evaluation_set(capabilities, module_map)
-    return {
-        "config": config,
-        "module_map": module_map,
-        "capability_catalog": capability_catalog,
-        "ownership": ownership,
-        "change_rules": change_rules,
-        "exception_registry": exception_registry,
-        "evaluation_set": evaluation_set,
-    }
-
-
-def route_bundle_from_repo(repo_root: Path) -> dict[str, Any]:
-    bundle_root = resolve_bundle_root(repo_root)
-    if bundle_root.exists():
-        bundle = load_bundle(bundle_root)
-        if bundle:
-            bundle["root"] = bundle_root
-            return bundle
-    bundle = build_router_bundle(repo_root)
-    bundle["root"] = bundle_root
-    return bundle
-
-
-def route_or_bootstrap(repo_root: Path, request_text: str, changed_paths: list[str]) -> RouteDecision:
-    bundle = route_bundle_from_repo(repo_root)
-    return resolve_request(request_text, changed_paths, bundle, bundle.get("root", resolve_bundle_root(repo_root)))
-
-
-def test_bindings_for_action(bundle: dict[str, Any], action: str, changed_paths: list[str]) -> list[dict[str, Any]]:
-    caps = capability_entries(bundle)
-    bindings: list[dict[str, Any]] = []
-    for cap in caps:
-        for binding in cap.test_bindings:
-            if action in binding.get("when_actions", []) and any(
-                glob_match([pattern], path.replace("\\", "/")) for pattern in binding.get("when_changed_paths", []) for path in changed_paths
-            ):
-                bindings.append(binding)
-    unique: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for binding in bindings:
-        if binding["id"] not in seen:
-            seen.add(binding["id"])
-            unique.append(binding)
-    return unique
-
-
-def run_command(command: list[str], cwd: Path) -> tuple[int, str, str]:
-    result = subprocess.run(command, cwd=str(cwd), capture_output=True, text=True)
-    return result.returncode, result.stdout, result.stderr
-
-
-def locate_bundle_or_raise(repo_root: Path) -> Path:
-    bundle_root = resolve_bundle_root(repo_root)
-    if not bundle_root.exists():
-        raise FileNotFoundError(f"project-change-router bundle not found at {bundle_root}")
-    return bundle_root
-
-
-def evaluate_bundle(bundle: dict[str, Any], repo_root: Path) -> dict[str, Any]:
-    evaluations = bundle.get("evaluation_set", {}).get("cases", [])
-    results = []
-    action_matches = 0
-    primary_matches = 0
-    review_expected = 0
-    review_correct = 0
-    for case in evaluations:
-        decision = resolve_request(case["request"], case.get("changed_paths", []), bundle, bundle.get("root", resolve_bundle_root(repo_root)))
-        action_ok = decision.action == case["expected_action"]
-        primary_ok = not case.get("expected_capabilities") or decision.primary_capability in case["expected_capabilities"]
-        review_expected += 1 if case["expected_action"] == "review" else 0
-        review_correct += 1 if case["expected_action"] == "review" and decision.action == "review" else 0
-        action_matches += 1 if action_ok else 0
-        primary_matches += 1 if primary_ok else 0
-        results.append(
-            {
-                "id": case["id"],
-                "expected_action": case["expected_action"],
-                "predicted_action": decision.action,
-                "expected_capabilities": case.get("expected_capabilities", []),
-                "predicted_capability": decision.primary_capability,
-                "action_ok": action_ok,
-                "primary_ok": primary_ok,
-            }
-        )
-    total = max(1, len(evaluations))
-    summary = {
-        "run_id": f"eval-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-        "timestamp": iso_now(),
-        "case_count": len(evaluations),
-        "top1_action_accuracy": round(action_matches / total, 4),
-        "top1_capability_accuracy": round(primary_matches / total, 4),
-        "review_precision": round(review_correct / review_expected, 4) if review_expected else 1.0,
-        "review_recall": round(review_correct / review_expected, 4) if review_expected else 1.0,
-        "false_positive_count": sum(1 for result in results if result["expected_action"] == "review" and result["predicted_action"] != "review"),
-        "false_negative_count": sum(1 for result in results if result["expected_action"] != "review" and result["predicted_action"] == "review"),
-        "per_case_results": results,
-        "status": "pass"
-        if (action_matches / total) >= bundle.get("config", {}).get("evaluation", {}).get("top1_accuracy_threshold", 0.85)
-        else "fail",
-    }
-    return summary
-
-
-def write_report(path: Path, report: dict[str, Any]) -> None:
-    dump_json_file(path, report)
-
-
-def update_last_verified(bundle_root: Path, bundle: dict[str, Any]) -> None:
-    now = today_date()
-    refs = bundle_root / "references"
-    for file_name in ["capability-catalog.yaml", "module-map.yaml", "ownership.yaml", "change-rules.yaml", "exception-registry.yaml", "evaluation-set.yaml"]:
-        path = refs / file_name
-        if path.exists():
-            data = load_yaml_file(path)
-            data["generated_at"] = iso_now()
-            data["generated_by"] = "rebuild_index"
-            if isinstance(data, dict) and "capabilities" in data:
-                for cap in data["capabilities"]:
-                    cap["last_verified_at"] = now
-            dump_yaml_file(path, data)
-
-
-def rebuild_index(repo_root: Path, write_back: bool = False) -> dict[str, Any]:
-    bundle = build_router_bundle(repo_root)
-    bundle_root = resolve_bundle_root(repo_root)
-    reports_dir = bundle_root / "reports" / "index-rebuild"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    discovered_modules = bundle["module_map"]["modules"]
-    curated_capabilities = bundle["capability_catalog"]["capabilities"]
-    conflicts = capability_conflicts(bundle)
-    missing_paths = []
-    for module in discovered_modules:
-        if not (repo_root / module["path"]).exists():
-            missing_paths.append(module["path"])
-    report = {
-        "report_id": f"rebuild-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-        "timestamp": iso_now(),
-        "source_commit": current_git_commit(repo_root),
-        "generated_modules_count": len(discovered_modules),
-        "curated_entries_count": len(curated_capabilities),
-        "conflicts": conflicts,
-        "stale_entries": [],
-        "missing_paths": missing_paths,
-        "status": "pass" if not conflicts and not missing_paths else "fail",
-    }
-    if write_back:
-        write_bundle(bundle_root, bundle)
-        update_last_verified(bundle_root, bundle)
-        write_report(reports_dir / "latest.json", report)
-    else:
-        write_report(reports_dir / "latest.json", report)
-    return report
-
-
-def freshness_report(repo_root: Path, bundle: dict[str, Any]) -> dict[str, Any]:
-    config = bundle.get("config", {})
-    windows = config.get("freshness_windows", {})
-    bundle_root = bundle.get("root", resolve_bundle_root(repo_root))
-    results = []
-    for key, filename in [
-        ("capability_catalog_days", "references/capability-catalog.yaml"),
-        ("module_map_days", "references/module-map.yaml"),
-        ("exception_registry_days", "references/exception-registry.yaml"),
-        ("evaluation_set_days", "references/evaluation-set.yaml"),
-    ]:
-        path = bundle_root / filename
-        if not path.exists():
-            results.append({"item": filename, "fresh": False, "reason": "missing file"})
-            continue
-        days = int(windows.get(key, 7))
-        age_days = (dt.datetime.now(dt.timezone.utc).date() - dt.datetime.fromtimestamp(path.stat().st_mtime, tz=dt.timezone.utc).date()).days
-        results.append({"item": filename, "fresh": age_days <= days, "age_days": age_days, "threshold_days": days})
-    missing_references = []
-    for capability in bundle.get("capability_catalog", {}).get("capabilities", []):
-        for ref in capability.get("owner_modules", []):
-            if not (repo_root / ref).exists():
-                missing_references.append(ref)
-        for ref in capability.get("public_entries", []):
-            if not any((repo_root / path).exists() for path in [ref, ref.split("/")[0]]):
-                missing_references.append(ref)
-    return {
-        "report_id": f"freshness-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-        "timestamp": iso_now(),
-        "status": "pass" if all(item.get("fresh", True) for item in results) and not missing_references else "fail",
-        "checks": results,
-        "missing_references": sorted(set(missing_references)),
-    }
-
-
-def generate_feedback(bundle_root: Path) -> dict[str, Any]:
-    route_dir = bundle_root / "reports" / "route-decisions"
-    guardrail_dir = bundle_root / "reports" / "guardrail-results"
-    proposals: list[dict[str, Any]] = []
-    for report_file in sorted(route_dir.glob("*.json")):
-        try:
-            report = load_json_file(report_file)
-        except Exception:
-            continue
-        if report.get("review_required"):
-            proposals.append(
-                {
-                    "kind": "routing-review",
-                    "decision_id": report.get("decision_id"),
-                    "reason": report.get("reasoning", []),
-                    "suggestion": "Add or refine keywords, aliases, or ownership for the reviewed capability.",
-                }
-            )
-    for report_file in sorted(guardrail_dir.glob("*.json")):
-        try:
-            report = load_json_file(report_file)
-        except Exception:
-            continue
-        for finding in report.get("findings", []):
-            proposals.append(
-                {
-                    "kind": "guardrail-finding",
-                    "rule": finding.get("rule"),
-                    "severity": finding.get("severity"),
-                    "path": finding.get("path") or finding.get("source_file"),
-                    "suggestion": "Promote this pattern into the capability catalog or add a blocking rule.",
-                }
-            )
-    return {
-        "report_id": f"feedback-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-        "timestamp": iso_now(),
-        "proposals": proposals,
-        "status": "pass",
-    }
-
-
 def create_bundle_directory(repo_root: Path) -> Path:
     bundle_root = resolve_bundle_root(repo_root)
-    bundle_root.mkdir(parents=True, exist_ok=True)
-    for sub in ["references", "schemas", "reports/route-decisions", "reports/index-rebuild", "reports/guardrail-results", "reports/evaluation"]:
-        (bundle_root / sub).mkdir(parents=True, exist_ok=True)
+    for rel in [
+        ".",
+        "references",
+        "schemas",
+        "reports/route-decisions",
+        "reports/index-rebuild",
+        "reports/guardrail-results",
+        "reports/evaluation",
+    ]:
+        (bundle_root / rel).mkdir(parents=True, exist_ok=True)
     return bundle_root
 
 
 def copy_skill_schemas_to_bundle(bundle_root: Path) -> None:
-    skill_schemas = schema_dir()
     target = bundle_root / "schemas"
     target.mkdir(parents=True, exist_ok=True)
-    for schema_file in skill_schemas.glob("*.json"):
+    for schema_file in schema_dir().glob("*.json"):
         shutil.copy2(schema_file, target / schema_file.name)
-
-
-def bootstrap_bundle(repo_root: Path, write: bool = True) -> dict[str, Any]:
-    bundle = build_router_bundle(repo_root)
-    bundle_root = resolve_bundle_root(repo_root)
-    bundle["root"] = bundle_root
-    if write:
-        create_bundle_directory(repo_root)
-        clear_core_reference_files(bundle_root)
-        write_bundle(bundle_root, bundle)
-        copy_skill_schemas_to_bundle(bundle_root)
-        update_last_verified(bundle_root, bundle)
-    return bundle
 
 
 def clear_core_reference_files(bundle_root: Path) -> None:
@@ -2282,21 +2374,173 @@ def clear_core_reference_files(bundle_root: Path) -> None:
             path.unlink()
 
 
-def validate_bundle_files(bundle_root: Path) -> list[str]:
-    return validate_bundle(bundle_root)
+def bootstrap_bundle(repo_root: Path, write: bool = True) -> dict[str, Any]:
+    bundle = build_router_bundle(repo_root)
+    bundle_root = resolve_bundle_root(repo_root)
+    bundle["root"] = bundle_root
+    if write:
+        create_bundle_directory(repo_root)
+        clear_core_reference_files(bundle_root)
+        write_bundle(bundle_root, bundle)
+        copy_skill_schemas_to_bundle(bundle_root)
+    return bundle
 
 
-def schema_files() -> list[str]:
-    return [
-        "router-config.schema.json",
-        "capability-catalog.schema.json",
-        "module-map.schema.json",
-        "ownership.schema.json",
-        "change-rules.schema.json",
-        "exception-registry.schema.json",
-        "evaluation-set.schema.json",
-        "route-decision-report.schema.json",
-        "guardrail-report.schema.json",
-        "index-rebuild-report.schema.json",
-        "evaluation-summary.schema.json",
-    ]
+def write_report(path: Path, report: dict[str, Any]) -> None:
+    dump_json_file(path, report)
+
+
+def locate_bundle_or_raise(repo_root: Path) -> Path:
+    bundle_root = resolve_bundle_root(repo_root)
+    if not bundle_root.exists():
+        raise FileNotFoundError(f"project-change-router bundle not found at {bundle_root}")
+    return bundle_root
+
+
+def evaluate_bundle(bundle: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    evaluations = bundle.get("evaluation_set", {}).get("cases", [])
+    results = []
+    action_matches = 0
+    primary_matches = 0
+    review_expected = 0
+    review_predicted = 0
+    for case in evaluations:
+        decision = resolve_request(case["request"], case.get("changed_paths", []), bundle, bundle.get("root", resolve_bundle_root(repo_root)))
+        action_ok = decision.action == case["expected_action"]
+        primary_ok = not case.get("expected_capabilities") or decision.primary_capability in case["expected_capabilities"]
+        action_matches += 1 if action_ok else 0
+        primary_matches += 1 if primary_ok else 0
+        review_expected += 1 if case["expected_action"] == "review" else 0
+        review_predicted += 1 if decision.action == "review" else 0
+        results.append(
+            {
+                "id": case["id"],
+                "expected_action": case["expected_action"],
+                "predicted_action": decision.action,
+                "expected_capabilities": case.get("expected_capabilities", []),
+                "predicted_capability": decision.primary_capability,
+                "action_ok": action_ok,
+                "primary_ok": primary_ok,
+            }
+        )
+    total = max(1, len(evaluations))
+    review_hits = sum(1 for result in results if result["expected_action"] == "review" and result["predicted_action"] == "review")
+    report = {
+        "run_id": f"eval-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+        "timestamp": iso_now(),
+        "case_count": len(evaluations),
+        "top1_action_accuracy": round(action_matches / total, 4),
+        "top1_capability_accuracy": round(primary_matches / total, 4),
+        "review_precision": round(review_hits / max(1, review_predicted), 4),
+        "review_recall": round(review_hits / max(1, review_expected), 4),
+        "false_positive_count": sum(1 for result in results if result["expected_action"] != "review" and result["predicted_action"] == "review"),
+        "false_negative_count": sum(1 for result in results if result["expected_action"] == "review" and result["predicted_action"] != "review"),
+        "per_case_results": results,
+        "status": "pass" if (action_matches / total) >= bundle.get("config", {}).get("evaluation", {}).get("top1_accuracy_threshold", 0.80) else "fail",
+    }
+    return report
+
+
+def rebuild_index(repo_root: Path, write_back: bool = False) -> dict[str, Any]:
+    bundle_root = resolve_bundle_root(repo_root)
+    existing = load_bundle(bundle_root) if bundle_root.exists() else {}
+    rebuilt = build_router_bundle(repo_root)
+    rebuilt["root"] = bundle_root
+    existing_modules = {item["path"] for item in existing.get("module_map", {}).get("modules", [])}
+    new_modules = {item["path"] for item in rebuilt["module_map"]["modules"]}
+    stale_entries = [{"path": path, "kind": "module"} for path in sorted(existing_modules - new_modules)]
+    missing_paths = [item["path"] for item in rebuilt["module_map"]["modules"] if not (repo_root / item["path"]).exists() and item["path"] != "."]
+    report = {
+        "report_id": f"rebuild-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+        "timestamp": iso_now(),
+        "source_commit": current_git_commit(repo_root),
+        "generated_modules_count": len(rebuilt["module_map"]["modules"]),
+        "curated_entries_count": len(rebuilt["capability_catalog"]["capabilities"]),
+        "conflicts": capability_conflicts(rebuilt),
+        "stale_entries": stale_entries,
+        "missing_paths": missing_paths,
+        "status": "pass" if not missing_paths and not capability_conflicts(rebuilt) else "fail",
+    }
+    if write_back:
+        create_bundle_directory(repo_root)
+        write_bundle(bundle_root, rebuilt)
+        copy_skill_schemas_to_bundle(bundle_root)
+        write_report(bundle_root / "reports" / "index-rebuild" / "latest.json", report)
+    return report
+
+
+def freshness_report(repo_root: Path, bundle: dict[str, Any]) -> dict[str, Any]:
+    bundle_root = bundle.get("root", resolve_bundle_root(repo_root))
+    if not bundle_root.exists():
+        return {
+            "report_id": f"freshness-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+            "timestamp": iso_now(),
+            "status": "fail",
+            "checks": [],
+            "missing_references": ["project-change-router/router-config.yaml"],
+        }
+    freshness = bundle.get("config", {}).get("freshness_windows", {})
+    checks = []
+    for key, rel in [
+        ("capability_catalog_days", "references/capability-catalog.yaml"),
+        ("module_map_days", "references/module-map.yaml"),
+        ("exception_registry_days", "references/exception-registry.yaml"),
+        ("evaluation_set_days", "references/evaluation-set.yaml"),
+    ]:
+        path = bundle_root / rel
+        if not path.exists():
+            checks.append({"item": rel, "fresh": False, "reason": "missing file"})
+            continue
+        age_days = (dt.datetime.now(dt.timezone.utc).date() - dt.datetime.fromtimestamp(path.stat().st_mtime, tz=dt.timezone.utc).date()).days
+        checks.append({"item": rel, "fresh": age_days <= int(freshness.get(key, 30)), "age_days": age_days, "threshold_days": int(freshness.get(key, 30))})
+    missing_references = []
+    for capability in bundle.get("capability_catalog", {}).get("capabilities", []):
+        for path in capability.get("owner_modules", []):
+            if path != "." and not (repo_root / path).exists():
+                missing_references.append(path)
+        for path in capability.get("public_entries", []):
+            parts = path.split("/")
+            if parts and parts[0] != "." and not (repo_root / parts[0]).exists():
+                missing_references.append(path)
+    return {
+        "report_id": f"freshness-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+        "timestamp": iso_now(),
+        "status": "pass" if all(item.get("fresh", False) for item in checks) and not missing_references else "fail",
+        "checks": checks,
+        "missing_references": sorted(set(missing_references)),
+    }
+
+
+def generate_feedback(bundle_root: Path) -> dict[str, Any]:
+    route_dir = bundle_root / "reports" / "route-decisions"
+    guardrail_dir = bundle_root / "reports" / "guardrail-results"
+    proposals: list[dict[str, Any]] = []
+    for report_file in sorted(route_dir.glob("*.json")):
+        report = load_json_file(report_file)
+        if report.get("review_required"):
+            proposals.append(
+                {
+                    "kind": "routing-review",
+                    "decision_id": report.get("decision_id"),
+                    "reason": report.get("reasoning", []),
+                    "suggestion": "Add or refine capability ownership, keywords, or profile overrides for this route.",
+                }
+            )
+    for report_file in sorted(guardrail_dir.glob("*.json")):
+        report = load_json_file(report_file)
+        for finding in report.get("findings", []):
+            proposals.append(
+                {
+                    "kind": "guardrail-finding",
+                    "rule": finding.get("rule"),
+                    "severity": finding.get("severity"),
+                    "path": finding.get("path") or finding.get("source_file"),
+                    "suggestion": "Promote this rule into the profile, module map, or public API contract.",
+                }
+            )
+    return {
+        "report_id": f"feedback-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+        "timestamp": iso_now(),
+        "proposals": proposals,
+        "status": "pass",
+    }

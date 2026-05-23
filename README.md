@@ -21,6 +21,7 @@
 - exception registry
 - evaluation set
 - schema 校验文件
+- 可选的仓库级 profile 覆盖
 
 ## 能力说明
 
@@ -30,6 +31,7 @@
 - 降低重复实现
 - 检查依赖方向和 public API 边界
 - 为仓库生成本地 router bundle
+- 读取仓库级 `.project-change-router.yaml` 覆盖能力与 owner 规则
 - 用 JSON Schema 校验 bundle
 - 执行路由评估集
 - 从路由结果和 guardrail 报告中生成反馈建议
@@ -54,13 +56,7 @@ project-change-router/
 把整个目录复制或 clone 到：
 
 ```text
-C:\Users\<你的用户>\.codex\skills\project-change-router
-```
-
-当前机器上的安装路径是：
-
-```text
-C:\Users\dell\.codex\skills\project-change-router
+%USERPROFILE%\.codex\skills\project-change-router
 ```
 
 ## 安装校验
@@ -68,7 +64,7 @@ C:\Users\dell\.codex\skills\project-change-router
 运行：
 
 ```powershell
-python C:\Users\dell\.codex\skills\.system\skill-creator\scripts\quick_validate.py C:\Users\dell\.codex\skills\project-change-router
+python <codex-home>\skills\.system\skill-creator\scripts\quick_validate.py <codex-home>\skills\project-change-router
 ```
 
 期望输出：
@@ -85,6 +81,19 @@ Skill is valid!
 - `Use $project-change-router to resolve the correct capability entry for this change.`
 - `Use $project-change-router to validate the repository-local router bundle.`
 
+在 Claude Code 中，推荐显式调用：
+
+- `/project-change-router bootstrap a router bundle for this repository`
+- `/project-change-router resolve the correct capability entry for this change`
+- `/project-change-router validate the repository-local router bundle`
+
+## 运行模式
+
+- 只读模式：`resolve_entry.py`、`check_reuse.py`、`check_deps.py`、`check_public_api.py`、`check_index_freshness.py`、`run_evaluation.py`
+- 写入模式：`bootstrap_router.py`、`rebuild_index.py`
+
+建议默认使用只读模式；只有在用户明确要求生成或刷新仓库本地 bundle 时，才执行写入模式。
+
 ## 仓库本地 Bundle
 
 skill 本体是全局的。  
@@ -93,7 +102,7 @@ skill 本体是全局的。
 示例：
 
 ```powershell
-python C:\Users\dell\.codex\skills\project-change-router\scripts\bootstrap_router.py --repo E:\_Workspace\SaaS\saas-control-plane --format json
+python <codex-home>\skills\project-change-router\scripts\bootstrap_router.py --repo <repo-root> --format json
 ```
 
 执行后会在目标仓库里生成：
@@ -103,6 +112,22 @@ python C:\Users\dell\.codex\skills\project-change-router\scripts\bootstrap_route
 ```
 
 用于保存该仓库自己的引用数据、schema 和报告。
+
+可选地，目标仓库根目录还可以放这些覆盖文件之一：
+
+```text
+.project-change-router.yaml
+.project-change-router.yml
+project-change-router.profile.yaml
+project-change-router.profile.yml
+```
+
+这些文件可用于声明：
+
+- capability 到路径的映射
+- owner 规则
+- 风险规则
+- module 覆盖规则
 
 ## 主要脚本
 
@@ -122,6 +147,7 @@ python C:\Users\dell\.codex\skills\project-change-router\scripts\bootstrap_route
 - 这是一个独立 skill，不绑定单个仓库
 - 本地 bundle 按需生成，不是 skill 本体的一部分
 - 对高风险共享能力会采取更保守的 `review` 路由策略
+- 通用逻辑在全局 skill 中，仓库特例通过 profile 覆盖表达，不再硬编码进脚本
 - 自动生成的 bundle 仍然建议由仓库维护者继续人工整理
 
 ## 已完成验证
@@ -130,7 +156,8 @@ python C:\Users\dell\.codex\skills\project-change-router\scripts\bootstrap_route
 
 - Codex skill 结构校验
 - skill 自带单元测试
-- 在真实 Java 仓库和 Python/TypeScript 仓库上执行 bootstrap 与 bundle 校验
+- 在 Java、Python、TypeScript、mixed monorepo fixture 上执行 bootstrap 与 bundle 校验
+- 在仓库级 profile 覆盖场景下执行 capability/owner 覆盖验证
 
 ## English Version
 

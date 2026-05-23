@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
 import sys
-import subprocess
-import tempfile
 from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
@@ -12,68 +9,192 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 import router_core
 
 
-def create_sample_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "sample-repo"
-    (repo / "backend" / "security").mkdir(parents=True)
-    (repo / "backend" / "billing").mkdir(parents=True)
-    (repo / "frontend").mkdir(parents=True)
+def create_java_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "java-repo"
+    (repo / "backend" / "security" / "src" / "main" / "java" / "com" / "example" / "security").mkdir(parents=True)
+    (repo / "backend" / "billing" / "src" / "main" / "java" / "com" / "example" / "billing").mkdir(parents=True)
     (repo / "pom.xml").write_text(
-        """<project><modules><module>backend/security</module><module>backend/billing</module></modules></project>""",
+        "<project><modules><module>backend/security</module><module>backend/billing</module></modules></project>",
         encoding="utf-8",
     )
     (repo / "backend" / "security" / "pom.xml").write_text(
-        """<project><artifactId>security</artifactId><dependencies><dependency><artifactId>billing</artifactId></dependency></dependencies></project>""",
+        "<project><artifactId>security</artifactId><dependencies><dependency><artifactId>billing</artifactId></dependency></dependencies></project>",
         encoding="utf-8",
     )
     (repo / "backend" / "billing" / "pom.xml").write_text(
-        """<project><artifactId>billing</artifactId></project>""",
+        "<project><artifactId>billing</artifactId></project>",
         encoding="utf-8",
     )
-    (repo / "backend" / "security" / "TokenService.java").write_text(
-        "package com.example.security; import com.saas.billing.InvoiceService; class TokenService {}",
+    (repo / "backend" / "security" / "src" / "main" / "java" / "com" / "example" / "security" / "TokenService.java").write_text(
+        "package com.example.security; import com.example.billing.InvoiceService; class TokenService {}",
         encoding="utf-8",
     )
-    (repo / "backend" / "billing" / "InvoiceService.java").write_text(
-        "package com.example.billing; class InvoiceService {}",
+    (repo / "backend" / "billing" / "src" / "main" / "java" / "com" / "example" / "billing" / "InvoiceService.java").write_text(
+        "package com.example.billing; public class InvoiceService {}",
         encoding="utf-8",
     )
     return repo
 
 
-def test_bootstrap_bundle(tmp_path: Path) -> None:
-    repo = create_sample_repo(tmp_path)
+def create_python_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "python-repo"
+    repo.mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("[project]\nname = 'python-repo'\nversion = '0.1.0'\n", encoding="utf-8")
+    (repo / "services" / "billing").mkdir(parents=True)
+    (repo / "services" / "billing" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "services" / "billing" / "service.py").write_text(
+        "def bill_customer():\n    return 'ok'\n",
+        encoding="utf-8",
+    )
+    (repo / "services" / "payments").mkdir(parents=True)
+    (repo / "services" / "payments" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "services" / "payments" / "webhook.py").write_text(
+        "from services.billing.service import bill_customer\n\n\ndef handle_webhook():\n    return bill_customer()\n",
+        encoding="utf-8",
+    )
+    return repo
+
+
+def create_typescript_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "ts-repo"
+    repo.mkdir(parents=True)
+    (repo / "package.json").write_text(
+        '{"name":"ts-repo","private":true,"workspaces":["packages/*"]}',
+        encoding="utf-8",
+    )
+    (repo / "packages" / "billing" / "src").mkdir(parents=True)
+    (repo / "packages" / "checkout" / "src").mkdir(parents=True)
+    (repo / "packages" / "billing" / "package.json").write_text(
+        '{"name":"@acme/billing","version":"1.0.0"}',
+        encoding="utf-8",
+    )
+    (repo / "packages" / "checkout" / "package.json").write_text(
+        '{"name":"@acme/checkout","version":"1.0.0","dependencies":{"@acme/billing":"1.0.0"}}',
+        encoding="utf-8",
+    )
+    (repo / "packages" / "billing" / "src" / "index.ts").write_text(
+        "export function chargeCustomer() { return true; }\n",
+        encoding="utf-8",
+    )
+    (repo / "packages" / "checkout" / "src" / "index.ts").write_text(
+        "import { chargeCustomer } from '@acme/billing';\nexport function checkout() { return chargeCustomer(); }\n",
+        encoding="utf-8",
+    )
+    return repo
+
+
+def create_mixed_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "mixed-repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("[project]\nname = 'mixed-repo'\nversion = '0.1.0'\n", encoding="utf-8")
+    (repo / "services" / "catalog").mkdir(parents=True)
+    (repo / "services" / "catalog" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "services" / "catalog" / "service.py").write_text("def list_items():\n    return []\n", encoding="utf-8")
+    (repo / "packages" / "web" / "src").mkdir(parents=True)
+    (repo / "packages" / "web" / "package.json").write_text(
+        '{"name":"@acme/web","version":"1.0.0"}',
+        encoding="utf-8",
+    )
+    (repo / "packages" / "web" / "src" / "index.ts").write_text("export const screen = 'ok';\n", encoding="utf-8")
+    return repo
+
+
+def create_profiled_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "profiled-repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "services" / "payments").mkdir(parents=True)
+    (repo / "services" / "payments" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "services" / "payments" / "service.py").write_text("def charge():\n    return True\n", encoding="utf-8")
+    (repo / ".project-change-router.yaml").write_text(
+        """
+profile_id: acme
+capabilities:
+  - id: payment-core
+    name: Payment Core
+    path_patterns:
+      - "services/payments/**"
+    keywords: ["payment", "charge", "refund"]
+    aliases: ["payments"]
+    route_defaults:
+      preferred_action: reuse
+ownership_rules:
+  - path_patterns: ["services/payments/**"]
+    owner: payments-team
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return repo
+
+
+def test_bootstrap_bundle_for_java_repo(tmp_path: Path) -> None:
+    repo = create_java_repo(tmp_path)
     bundle = router_core.bootstrap_bundle(repo, write=True)
     bundle_root = repo / "project-change-router"
     assert bundle_root.exists()
     assert (bundle_root / "router-config.yaml").exists()
-    assert bundle["capability_catalog"]["capabilities"]
-    assert bundle["module_map"]["modules"]
+    modules = bundle["module_map"]["modules"]
+    assert {module["path"] for module in modules} == {"backend/billing", "backend/security"}
+    capabilities = bundle["capability_catalog"]["capabilities"]
+    assert {cap["id"] for cap in capabilities} >= {"billing", "security"}
 
 
-def test_resolve_request_returns_route(tmp_path: Path) -> None:
-    repo = create_sample_repo(tmp_path)
+def test_python_repo_root_detection_and_resolution(tmp_path: Path) -> None:
+    repo = create_python_repo(tmp_path)
+    nested = repo / "services" / "payments"
+    assert router_core.repo_root_from(nested) == repo.resolve()
     bundle = router_core.bootstrap_bundle(repo, write=True)
     decision = router_core.resolve_request(
-        "Extend the existing billing payment flow with a new webhook rule",
-        ["backend/billing/InvoiceService.java"],
+        "Extend the payment webhook behavior with a new validation step",
+        ["services/payments/webhook.py"],
         bundle,
         repo / "project-change-router",
     )
-    assert decision.action in {"extend", "reuse", "review"}
-    assert decision.primary_capability is not None
+    assert decision.primary_capability in {"payments", "billing"}
+    assert decision.action in {"extend", "review", "reuse"}
     assert decision.required_reads
 
 
+def test_typescript_workspace_dependency_mapping(tmp_path: Path) -> None:
+    repo = create_typescript_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    modules = {module["path"]: module for module in bundle["module_map"]["modules"]}
+    assert "packages/billing" in modules
+    assert "packages/checkout" in modules
+    assert "packages/billing" in modules["packages/checkout"]["depends_on"]
+    findings = router_core.gather_dependency_findings(repo, bundle)
+    assert findings == []
+
+
+def test_mixed_repo_discovers_multiple_languages(tmp_path: Path) -> None:
+    repo = create_mixed_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    languages = set(bundle["config"]["supported_languages"])
+    assert "python" in languages
+    assert "typescript" in languages or "javascript" in languages
+    repositories = bundle["config"]["repositories"]
+    assert repositories
+
+
+def test_profile_overrides_capability_and_owner(tmp_path: Path) -> None:
+    repo = create_profiled_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    capabilities = {cap["id"]: cap for cap in bundle["capability_catalog"]["capabilities"]}
+    assert "payment-core" in capabilities
+    ownership_entries = [entry for entry in bundle["ownership"]["owners"] if entry["scope"] == "module"]
+    assert any(entry["target"] == "services/payments" and entry["primary"] == "payments-team" for entry in ownership_entries)
+
+
 def test_validate_bundle(tmp_path: Path) -> None:
-    repo = create_sample_repo(tmp_path)
+    repo = create_typescript_repo(tmp_path)
     router_core.bootstrap_bundle(repo, write=True)
     errors = router_core.validate_bundle_files(repo / "project-change-router")
     assert errors == []
 
 
 def test_evaluation_runs(tmp_path: Path) -> None:
-    repo = create_sample_repo(tmp_path)
+    repo = create_java_repo(tmp_path)
     bundle = router_core.bootstrap_bundle(repo, write=True)
     summary = router_core.evaluate_bundle(bundle, repo)
-    assert summary["case_count"] >= 1
+    assert summary["case_count"] >= 12
     assert "top1_action_accuracy" in summary
