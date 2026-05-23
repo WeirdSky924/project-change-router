@@ -155,6 +155,21 @@ Each capability also carries its own `stage`:
 
 Do not treat generated capabilities, owners, or public entries as final architecture facts in an early repository.
 
+Route outputs now also include:
+
+- `confidence_level`
+- `confidence_reasons`
+- `veto_reasons`
+- `positive_signals`
+- `negative_signals`
+- `risk_signals`
+
+Interpretation:
+
+- `high`: strong profile, boundary, and structure evidence
+- `medium`: partial structure evidence, still needs care
+- `low`: insufficient evidence, usually should be treated as `review`
+
 ## Lifecycle
 
 Recommended decision table:
@@ -165,6 +180,26 @@ Recommended decision table:
 - routine guardrail checks: `python scripts/check_reuse.py --repo <repo-root>`, `python scripts/check_deps.py --repo <repo-root>`, `python scripts/check_public_api.py --repo <repo-root>`
 - routing quality review: `python scripts/run_evaluation.py --repo <repo-root>`
 - rule improvement suggestions: `python scripts/sync_feedback.py --repo <repo-root>`
+
+Manual feedback write-back:
+
+```powershell
+python scripts/sync_feedback.py --repo <repo-root> --feedback-file <feedback.json> --format json
+```
+
+Example `feedback.json`:
+
+```json
+{
+  "decision_id": "route-...",
+  "final_action": "review",
+  "final_capability": "billing",
+  "confirmed_public_entry": "services/billing/__init__.py",
+  "confirmed_owner": "billing-team",
+  "profile_update_recommended": true,
+  "notes": "Human-confirmed correction"
+}
+```
 
 ## Repository-Local Bundle
 
@@ -243,6 +278,13 @@ Typical failure signals:
 - route report `review_required: true`
 - validation report with non-empty `errors`
 
+Important fields:
+
+- `confidence_level`
+- `confidence_reasons`
+- `veto_reasons`
+- `primary_capability_stage`
+
 ## Main Scripts
 
 - `scripts/bootstrap_router.py`
@@ -277,6 +319,7 @@ Be explicit about these limits:
 - a passing evaluation does not eliminate the need for architecture review
 - early repositories are deliberately downgraded to more conservative `repo_stage`s
 - `provisional` capabilities should not be treated as long-term architecture boundaries
+- `generated_only` evaluation indicates self-consistency, not architectural maturity
 
 ## Verification Performed
 

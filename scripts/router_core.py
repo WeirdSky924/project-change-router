@@ -184,10 +184,13 @@ class RouteDecision:
     timestamp: str
     request_type: str
     request_summary: str
+    repo_stage: str
     action: str
     confidence: float
+    confidence_level: str
     overlap_score: float
     primary_capability: Optional[str]
+    primary_capability_stage: Optional[str]
     secondary_capabilities: list[str]
     candidate_capabilities: list[dict[str, Any]]
     candidate_modules: list[dict[str, Any]]
@@ -197,6 +200,11 @@ class RouteDecision:
     review_required: bool
     coordination_required: bool
     composite_route_required: bool
+    confidence_reasons: list[str]
+    veto_reasons: list[str]
+    positive_signals: dict[str, Any]
+    negative_signals: dict[str, Any]
+    risk_signals: dict[str, Any]
     reasoning: list[str]
     source_of_truths: dict[str, Any]
 
@@ -288,6 +296,14 @@ def stage_rank(stage: str) -> int:
         "governed-capability": 3,
     }
     return order.get(stage, 0)
+
+
+def confidence_level_for(score: float) -> str:
+    if score >= 0.80:
+        return "high"
+    if score >= 0.55:
+        return "medium"
+    return "low"
 
 
 def text_tokens(text: str) -> list[str]:
@@ -452,6 +468,43 @@ def load_bundle(bundle_root: Path) -> dict[str, Any]:
         "evaluation_set": load_yaml_file(references / "evaluation-set.yaml"),
     }
     return bundle
+
+
+def manual_feedback_dir(bundle_root: Path) -> Path:
+    return bundle_root / "reports" / "manual-feedback"
+
+
+def load_manual_feedback(bundle_root: Path) -> list[dict[str, Any]]:
+    directory = manual_feedback_dir(bundle_root)
+    if not directory.exists():
+        return []
+    feedback_items: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            feedback_items.append(load_json_file(path))
+        except Exception:
+            continue
+    return feedback_items
+
+
+def feedback_summary(feedback_items: list[dict[str, Any]]) -> dict[str, Any]:
+    by_capability: dict[str, int] = defaultdict(int)
+    confirmations = 0
+    profile_updates = 0
+    for item in feedback_items:
+        capability = item.get("final_capability")
+        if capability:
+            by_capability[str(capability)] += 1
+        if item.get("confirmed_owner") or item.get("confirmed_public_entry"):
+            confirmations += 1
+        if item.get("profile_update_recommended"):
+            profile_updates += 1
+    return {
+        "feedback_count": len(feedback_items),
+        "confirmed_boundary_count": confirmations,
+        "profile_update_recommended_count": profile_updates,
+        "capability_confirmation_counts": dict(by_capability),
+    }
 
 
 def resolve_bundle_root(repo_root: Path) -> Path:
@@ -974,6 +1027,10 @@ def profile_signal_counts(profile: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def profile_stage(profile: dict[str, Any]) -> str:
+    return str(profile.get("profile_stage") or "provisional").lower()
+
+
 def detect_ci(repo_root: Path) -> bool:
     return any(
         path.exists()
@@ -1061,9 +1118,12 @@ def detect_branch_mode(repo_root: Path) -> str:
     return "feature"
 
 
-def classify_repo_stage(modules: list[ModuleEntry], capabilities: list[CapabilityEntry], profile: dict[str, Any], repo_root: Path) -> tuple[str, dict[str, Any]]:
+def classify_repo_stage(modules: list[ModuleEntry], capabilities: list[CapabilityEntry], profile: dict[str, Any], repo_root: Path, feedback_items: Optional[list[dict[str, Any]]] = None) -> tuple[str, dict[str, Any]]:
+    feedback_items = feedback_items or []
+    feedback_meta = feedback_summary(feedback_items)
     profile_counts = profile_signal_counts(profile)
     has_profile = bool(profile)
+    explicit_profile_stage = profile_stage(profile)
     has_codeowners = bool(load_codeowners(repo_root))
     has_ci = detect_ci(repo_root)
     boundary_evidence = detect_boundary_evidence(repo_root)
@@ -1118,6 +1178,9 @@ def classify_repo_stage(modules: list[ModuleEntry], capabilities: list[Capabilit
         reasons.append("curated evaluation mode enabled")
     elif eval_mode == "generated_only":
         reasons.append("evaluation set is generated-only")
+    if feedback_meta["confirmed_boundary_count"] > 0:
+        score += 1
+        reasons.append(f"{feedback_meta['confirmed_boundary_count']} manual boundary confirmations recorded")
     if capability_signals_available and heuristic_ratio >= 0.8:
         score -= 2
         reasons.append("public entries are mostly heuristic")
@@ -1163,7 +1226,13 @@ def classify_repo_stage(modules: list[ModuleEntry], capabilities: list[Capabilit
         and (profile_counts["profile_capability_count"] > 0 or stable_caps >= 1)
     )
 
-    if governed_gate:
+    if explicit_profile_stage == "governed":
+        stage = "governed"
+    elif explicit_profile_stage == "structured":
+        stage = "structured"
+    elif explicit_profile_stage == "emerging" and not seed_gate:
+        stage = "emerging"
+    elif governed_gate:
         stage = "governed"
     elif seed_gate and score <= 2:
         stage = "seed"
@@ -1178,6 +1247,7 @@ def classify_repo_stage(modules: list[ModuleEntry], capabilities: list[Capabilit
         "cross_module_edges": cross_edges,
         "language_count": len(languages),
         "has_profile": has_profile,
+        "profile_stage": explicit_profile_stage,
         "profile_capability_count": profile_counts["profile_capability_count"],
         "profile_owner_rule_count": profile_counts["profile_owner_rule_count"],
         "profile_public_api_override_count": profile_counts["profile_public_api_override_count"],
@@ -1194,6 +1264,9 @@ def classify_repo_stage(modules: list[ModuleEntry], capabilities: list[Capabilit
         "module_with_tests_count": module_tests,
         "evaluation_mode": eval_mode,
         "branch_mode": branch_mode,
+        "manual_feedback_count": feedback_meta["feedback_count"],
+        "confirmed_boundary_count": feedback_meta["confirmed_boundary_count"],
+        "profile_update_recommended_count": feedback_meta["profile_update_recommended_count"],
     }
     return stage, {
         "repo_stage": stage,
@@ -1557,7 +1630,10 @@ def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], prof
     return capabilities, consumed_modules
 
 
-def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any], repo_stage: str) -> list[CapabilityEntry]:
+def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any], repo_stage: str, feedback_items: Optional[list[dict[str, Any]]] = None) -> list[CapabilityEntry]:
+    feedback_items = feedback_items or []
+    feedback_meta = feedback_summary(feedback_items)
+    confirmation_counts = feedback_meta["capability_confirmation_counts"]
     profile_caps, consumed = apply_profile_capabilities(repo_root, modules, profile)
     grouped: dict[str, list[ModuleEntry]] = defaultdict(list)
     for module in modules:
@@ -1587,6 +1663,11 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
             flat_keywords.extend(public_import_names(module))
         keywords = sorted({keyword for keyword in flat_keywords if keyword})
         stage, maturity = capability_stage_for_generated(grouped_modules, public_entries, repo_stage)
+        confirmation_count = int(confirmation_counts.get(cap_id, 0))
+        if stage == "provisional" and confirmation_count >= 1 and repo_stage in {"emerging", "structured", "governed"}:
+            stage, maturity = "candidate", "candidate"
+        if stage == "candidate" and confirmation_count >= 2 and repo_stage in {"structured", "governed"}:
+            stage, maturity = "stable", "stable"
         status = "stable" if stage in {"stable", "governed-capability"} else "candidate"
         capabilities.append(
             CapabilityEntry(
@@ -1625,6 +1706,7 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
                 lifecycle={
                     "generated_from": [module.path for module in grouped_modules],
                     "public_entry_semantics": public_entry_semantics(public_entries, repo_stage, False),
+                    "confirmation_count": confirmation_count,
                 },
                 last_verified_at=today_date(),
             )
@@ -1939,8 +2021,35 @@ def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[s
         "generated_by": "bootstrap_router",
         "source_repository": "workspace",
         "source_commit": None,
+        "mode": "generated_only",
         "cases": cases,
     }
+
+
+def merge_curated_evaluation(existing: dict[str, Any], generated: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    profile_eval = profile.get("evaluation", {})
+    curated_cases = list(profile_eval.get("cases", []))
+    if existing.get("mode") == "curated":
+        curated_cases.extend(existing.get("cases", []))
+    if profile_eval.get("mode") == "curated":
+        mode = "curated"
+    elif curated_cases:
+        mode = "hybrid"
+    else:
+        mode = generated.get("mode", "generated_only")
+    merged = dict(generated)
+    merged["mode"] = mode
+    if curated_cases:
+        seen: set[str] = set()
+        ordered_cases = []
+        for case in curated_cases + generated.get("cases", []):
+            case_id = str(case.get("id"))
+            if case_id in seen:
+                continue
+            seen.add(case_id)
+            ordered_cases.append(case)
+        merged["cases"] = ordered_cases
+    return merged
 
 
 def capability_conflicts(bundle: dict[str, Any]) -> list[str]:
@@ -1965,8 +2074,11 @@ def capability_conflicts(bundle: dict[str, Any]) -> list[str]:
 
 def build_router_bundle(repo_root: Path) -> dict[str, Any]:
     profile = load_active_profile(repo_root)
+    bundle_root = resolve_bundle_root(repo_root)
+    feedback_items = load_manual_feedback(bundle_root)
+    existing_bundle = load_bundle(bundle_root) if bundle_root.exists() else {}
     preliminary_modules = discover_modules(repo_root, {}, profile)
-    initial_stage, initial_stage_info = classify_repo_stage(preliminary_modules, [], profile, repo_root)
+    initial_stage, initial_stage_info = classify_repo_stage(preliminary_modules, [], profile, repo_root, feedback_items)
     config = build_router_config(repo_root, preliminary_modules, profile, initial_stage_info)
     module_map = {
         "schema_version": 1,
@@ -1977,14 +2089,39 @@ def build_router_bundle(repo_root: Path) -> dict[str, Any]:
         "modules": [module.to_dict() for module in preliminary_modules],
     }
     modules = [ModuleEntry(**item) for item in module_map["modules"]]
-    capability_catalog = build_capability_catalog(repo_root, modules, profile, initial_stage)
+    capability_catalog = {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": repo_root.name,
+        "source_commit": current_git_commit(repo_root),
+        "capabilities": [
+            capability.to_dict()
+            for capability in infer_capabilities_from_modules(repo_root, modules, profile, initial_stage, feedback_items)
+        ],
+    }
     capabilities = [CapabilityEntry(**item) for item in capability_catalog["capabilities"]]
-    repo_stage, stage_info = classify_repo_stage(modules, capabilities, profile, repo_root)
+    repo_stage, stage_info = classify_repo_stage(modules, capabilities, profile, repo_root, feedback_items)
     config = build_router_config(repo_root, modules, profile, stage_info)
+    config["generated_only"] = stage_info["signals"].get("evaluation_mode") == "generated_only"
+    config["needs_calibration"] = repo_stage in {"seed", "emerging"} or stage_info["signals"].get("provisional_owner_ratio", 0.0) >= 0.5
+    warnings: list[str] = []
+    if config["generated_only"]:
+        warnings.append("evaluation set is generated-only")
+    if repo_stage in {"seed", "emerging"}:
+        warnings.append("repository is in an early stage; prefer review over strong auto-routing")
+    if stage_info["signals"].get("provisional_owner_ratio", 0.0) >= 0.5:
+        warnings.append("ownership is still provisional")
+    if stage_info["signals"].get("heuristic_public_entry_ratio", 0.0) >= 0.5:
+        warnings.append("public entries are still heuristic")
+    if stage_info["signals"].get("manual_feedback_count", 0) == 0:
+        warnings.append("no manual feedback confirmations have been recorded yet")
+    config["warnings"] = warnings
     ownership = build_ownership(capabilities, modules, repo_stage)
     change_rules = build_change_rules(capabilities, profile, repo_stage)
     exception_registry = build_exception_registry(repo_root, profile)
-    evaluation_set = build_evaluation_set(capabilities, module_map, repo_stage)
+    generated_evaluation = build_evaluation_set(capabilities, module_map, repo_stage)
+    evaluation_set = merge_curated_evaluation(existing_bundle.get("evaluation_set", {}), generated_evaluation, profile)
     bundle = {
         "config": config,
         "module_map": module_map,
@@ -2154,6 +2291,44 @@ def capability_match_score(request_text: str, capability: CapabilityEntry) -> fl
     return score
 
 
+def capability_positive_negative_risk_signals(
+    request_text: str,
+    capability: CapabilityEntry,
+    changed_modules: list[ModuleEntry],
+    changed_paths: list[str],
+    bundle: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    positive: dict[str, Any] = {}
+    negative: dict[str, Any] = {}
+    risk: dict[str, Any] = {}
+
+    positive["profile_backed"] = capability.source_of_truth == "profile"
+    positive["path_proximity"] = round(module_path_proximity(capability, changed_paths), 4)
+    positive["dependency_proximity"] = round(dependency_proximity(capability, changed_modules), 4)
+    positive["has_public_entries"] = bool(capability.public_entries)
+    positive["has_extension_points"] = bool(capability.extension_points)
+    positive["owner_modules_count"] = len(capability.owner_modules)
+    positive["matching_intent"] = capability_match_score(request_text, capability) >= 0.5
+    positive["repo_stage"] = bundle.get("config", {}).get("repo_stage")
+
+    public_semantics = capability.lifecycle.get("public_entry_semantics", {})
+    negative["capability_stage"] = capability.stage
+    negative["provisional_stage"] = capability.stage == "provisional"
+    negative["heuristic_public_entry"] = public_semantics.get("kind") == "heuristic_public_entry"
+    negative["owner_unclear"] = not capability.owner_modules
+    negative["generated_only"] = capability.source_of_truth == "generated"
+    negative["profile_missing"] = capability.source_of_truth != "profile"
+    negative["multi_module_span"] = len({module.path for module in changed_modules}) > 1
+
+    risk_keywords = list(dict.fromkeys(DEFAULT_HIGH_RISK_KEYWORDS + bundle.get("config", {}).get("high_risk_keywords", [])))
+    risk["keyword_hit"] = any(keyword in request_text.lower() for keyword in risk_keywords)
+    risk["high_risk_capability"] = capability.id in set(bundle.get("change_rules", {}).get("high_risk_capability_ids", []))
+    risk["repo_stage"] = bundle.get("config", {}).get("repo_stage")
+    risk["request_requires_review"] = request_requires_review(request_text)
+    risk["duplicate_signal"] = request_prefers_extract(request_text)
+    return positive, negative, risk
+
+
 def dependency_proximity(capability: CapabilityEntry, changed_modules: list[ModuleEntry]) -> float:
     if not changed_modules or not capability.owner_modules:
         return 0.0
@@ -2172,6 +2347,9 @@ def capability_score(request_text: str, capability: CapabilityEntry, changed_mod
     public_entry_available = 1.0 if capability.public_entries else 0.0
     extension_available = 1.0 if capability.extension_points else 0.0
     owner_coverage = 1.0 if capability.owner_modules else 0.0
+    positive, negative, risk = capability_positive_negative_risk_signals(
+        request_text, capability, changed_modules, changed_paths, bundle
+    )
     raw = (
         0.40 * intent_match
         + 0.30 * path_proximity
@@ -2184,8 +2362,14 @@ def capability_score(request_text: str, capability: CapabilityEntry, changed_mod
     high_risk_ids = set(bundle.get("change_rules", {}).get("high_risk_capability_ids", []))
     if capability.id in high_risk_ids and intent_match < 1.0 and path_proximity == 0.0:
         penalty += 0.15
-    if capability.status == "candidate":
+    if capability.stage == "provisional":
+        penalty += 0.20
+    elif capability.stage == "candidate" or capability.status == "candidate":
         penalty += 0.10
+    if negative["heuristic_public_entry"]:
+        penalty += 0.05
+    if negative["profile_missing"] and bundle.get("config", {}).get("repo_stage") in {"seed", "emerging"}:
+        penalty += 0.05
     score = max(0.0, min(1.0, raw - penalty))
     signals = {
         "intent_match": round(intent_match, 4),
@@ -2197,6 +2381,9 @@ def capability_score(request_text: str, capability: CapabilityEntry, changed_mod
         "raw_score": round(raw, 4),
         "penalty": round(penalty, 4),
         "candidate_score": round(score, 4),
+        "positive_signals": positive,
+        "negative_signals": negative,
+        "risk_signals": risk,
     }
     return score, signals
 
@@ -2284,15 +2471,21 @@ def determine_action(
     route_scores: list[tuple[CapabilityEntry, float, dict[str, float]]],
     high_risk: bool,
     bundle: dict[str, Any],
-) -> tuple[str, Optional[CapabilityEntry], list[str], float, float, bool, bool, list[str]]:
+) -> tuple[str, Optional[CapabilityEntry], list[str], float, str, float, bool, bool, list[str], list[str], list[str]]:
     reasoning: list[str] = []
+    confidence_reasons: list[str] = []
+    veto_reasons: list[str] = []
     if not route_scores:
-        action = "review" if high_risk else "new"
+        action = "review" if high_risk or changed_paths else "new"
         reasoning.append("no capability candidates were discovered")
-        return action, None, [], 0.0, 0.0, False, False, reasoning
+        confidence_reasons.append("no candidate capabilities were discovered")
+        if action == "review":
+            veto_reasons.append("no capability candidates were discovered for a changed surface")
+        return action, None, [], 0.0, "low", 0.0, False, False, reasoning, confidence_reasons, veto_reasons
     sorted_scores = sorted(route_scores, key=lambda item: item[1], reverse=True)
     best_cap, best_score, _ = sorted_scores[0]
     best_signals = sorted_scores[0][2]
+    confidence_level = confidence_level_for(best_score)
     second_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
     ov = overlap_score(best_score, second_score)
     threshold = bundle.get("change_rules", {}).get("confidence", {})
@@ -2316,80 +2509,114 @@ def determine_action(
     extract_intent = request_prefers_extract(request_text)
     explicit_review = request_requires_review(request_text)
 
+    if best_signals["positive_signals"].get("profile_backed"):
+        confidence_reasons.append("profile-backed capability mapping")
+    if best_signals.get("path_proximity", 0.0) >= 0.8:
+        confidence_reasons.append("strong path proximity to owner module")
+    if best_signals["positive_signals"].get("has_public_entries"):
+        confidence_reasons.append("public entry evidence exists")
+    if best_signals["negative_signals"].get("provisional_stage"):
+        confidence_reasons.append("capability is only provisional")
+    if best_signals["negative_signals"].get("heuristic_public_entry"):
+        confidence_reasons.append("public entry is heuristic only")
+    if best_signals["negative_signals"].get("profile_missing"):
+        confidence_reasons.append("no explicit profile mapping supports this route")
+
     if high_risk and (best_cap.id in high_risk_ids or ov >= 0.75):
         reasoning.append("high-risk request requires manual review")
-        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        veto_reasons.append("high-risk capability or overlapping high-risk candidates")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if stale_bundle or has_conflict:
         reasoning.append("routing bundle is stale or internally inconsistent")
-        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        veto_reasons.append("bundle is stale or conflicts exist")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if repo_stage == "seed":
         if not changed_paths and not targets_existing:
             reasoning.append("seed-stage repository defaults to new capability suggestions")
-            return "new", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+            confidence_reasons.append("seed-stage repositories do not trust auto-reuse without changed surfaces")
+            return "new", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         reasoning.append("seed-stage repository does not auto-route into existing capability boundaries")
-        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        veto_reasons.append("repo_stage=seed blocks auto-route into existing boundaries")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if not changed_paths and not targets_existing and best_score < auto_threshold:
         reasoning.append("request is not anchored to an existing capability or changed surface")
-        return "new", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        confidence_reasons.append("request lacks changed-path anchoring")
+        return "new", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if not changed_paths and not targets_existing and best_score == 0.0:
         reasoning.append("request does not align with any existing capability signals")
-        return "new", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        confidence_reasons.append("no existing capability signals were matched")
+        return "new", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if explicit_review or composite_required:
         reasoning.append("request spans multiple capability surfaces or explicitly asks for review")
-        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        veto_reasons.append("explicit review requested or multi-capability request detected")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if repo_stage == "emerging" and best_cap.stage == "provisional":
         if not changed_paths and not targets_existing:
             reasoning.append("emerging repository avoids promoting provisional capability guesses into new boundaries")
-            return "new", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+            confidence_reasons.append("provisional capability lacks enough structure evidence")
+            return "new", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         reasoning.append("emerging repository treats provisional capabilities as review-only")
-        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        veto_reasons.append("repo_stage=emerging blocks auto-routing to provisional capability")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if extract_intent:
         if repo_stage in {"seed", "emerging"}:
             reasoning.append("early-stage repository requires manual review before extraction")
-            return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+            veto_reasons.append("extract is blocked in early-stage repositories")
+            return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         if len(changed_paths) >= 2 or len({module.path for module in changed_modules}) >= 2:
             reasoning.append("explicit extraction intent with repeated changed surfaces")
-            return "extract", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+            return "extract", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         reasoning.append("explicit extraction intent without enough repeated surface evidence")
-        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        veto_reasons.append("extract lacks enough repeated-surface evidence")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if duplicate_signal and duplicate_count >= 2 and (
         len(changed_paths) >= 2 or len({module.path for module in changed_modules}) >= 2
     ):
         if repo_stage in {"seed", "emerging"}:
             reasoning.append("early-stage repository defers duplicate extraction to manual review")
-            return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+            veto_reasons.append("duplicate-based extract is blocked in early-stage repositories")
+            return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         reasoning.append("duplicate signal indicates shared extraction work")
-        return "extract", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        return "extract", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if ov >= 0.82:
         reasoning.append("multiple capability candidates overlap too heavily")
-        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        veto_reasons.append("overlap between top capability candidates is too high")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
+    if confidence_level == "low":
+        reasoning.append("low confidence route is downgraded to review")
+        veto_reasons.append("confidence_level=low")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if best_score < guarded_threshold:
         if changed_paths and best_signals.get("path_proximity", 0.0) >= 0.8 and not high_risk and repo_stage in {"emerging", "structured", "governed"}:
             if request_has_change_verb:
                 if repo_stage == "emerging" and best_cap.stage not in {"stable", "governed-capability"}:
                     reasoning.append("emerging repository only allows path-anchored extend on stable capabilities")
-                    return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+                    veto_reasons.append("emerging path-anchored extend requires stable capability")
+                    return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
                 reasoning.append("path proximity strongly anchors the request to an existing module surface")
-                return "extend", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+                return "extend", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
             reasoning.append("path proximity strongly anchors the request to an existing module surface")
-            return "reuse", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+            return "reuse", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         action = "review" if high_risk else "new"
         reasoning.append("no candidate exceeded the guarded routing threshold")
-        return action, best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        confidence_reasons.append("candidate score is below guarded threshold")
+        return action, best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if best_cap.stage in {"stable", "governed-capability"} or best_cap.status == "stable":
         if request_has_change_verb and (best_cap.extension_points or best_cap.public_entries) and (best_score >= auto_threshold or targets_existing):
             if repo_stage == "emerging" and best_cap.stage == "candidate":
                 reasoning.append("emerging repository will not extend candidate capability boundaries automatically")
-                return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+                veto_reasons.append("emerging repo blocks extend on candidate capability")
+                return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
             reasoning.append("stable capability selected for additive extension")
-            return "extend", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+            return "extend", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         reasoning.append("stable capability selected for reuse")
-        return "reuse", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        return "reuse", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if repo_stage in {"structured", "governed"} and request_has_change_verb and (best_cap.extension_points or best_cap.public_entries):
         reasoning.append("candidate capability can be extended but still needs caution")
-        return "extend", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        return "extend", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     reasoning.append("capability remains below the maturity threshold for automatic routing")
-    return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    veto_reasons.append("capability maturity is below automatic routing threshold")
+    return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
 
 
 def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[str, Any], bundle_root: Path) -> RouteDecision:
@@ -2408,7 +2635,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         "stale_bundle": bundle_stale(bundle_root, bundle),
         "has_conflict": bool(capability_conflicts(bundle)),
     }
-    action, primary_capability, secondary_capabilities, confidence, ov, coordination_required, composite_required, reasoning = determine_action(
+    action, primary_capability, secondary_capabilities, confidence, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons = determine_action(
         request_text,
         normalized_changed_paths,
         changed_modules,
@@ -2417,6 +2644,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         bundle,
     )
     sorted_scores = sorted(route_scores, key=lambda item: item[1], reverse=True)
+    best_signals = sorted_scores[0][2] if sorted_scores else {}
     candidate_capabilities = [
         {
             "id": capability.id,
@@ -2438,15 +2666,21 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
     required_checks = required_checks_for(primary_capability, action, bundle)
     forbidden_paths = forbidden_paths_for(primary_capability, bundle)
     decision_id = f"route-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}-{hashlib.sha1((request_text + '|' + '|'.join(normalized_changed_paths)).encode('utf-8')).hexdigest()[:8]}"
+    positive_signals = best_signals.get("positive_signals", {}) if route_scores else {}
+    negative_signals = best_signals.get("negative_signals", {}) if route_scores else {}
+    risk_signals = best_signals.get("risk_signals", {}) if route_scores else {}
     return RouteDecision(
         decision_id=decision_id,
         timestamp=iso_now(),
         request_type=parse_request_type(request_text),
         request_summary=request_text.strip().splitlines()[0][:180] if request_text.strip() else "",
+        repo_stage=bundle.get("config", {}).get("repo_stage", "emerging"),
         action=action,
         confidence=round(confidence, 4),
+        confidence_level=confidence_level,
         overlap_score=round(ov, 4),
         primary_capability=primary_capability.id if primary_capability else None,
+        primary_capability_stage=primary_capability.stage if primary_capability else None,
         secondary_capabilities=secondary_capabilities,
         candidate_capabilities=candidate_capabilities,
         candidate_modules=candidate_modules,
@@ -2456,6 +2690,11 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         review_required=action == "review",
         coordination_required=coordination_required,
         composite_route_required=composite_required,
+        confidence_reasons=confidence_reasons,
+        veto_reasons=veto_reasons,
+        positive_signals=positive_signals,
+        negative_signals=negative_signals,
+        risk_signals=risk_signals,
         reasoning=reasoning,
         source_of_truths={
             "capability_catalog": source_of_truth_for(bundle, "capability"),
@@ -2786,6 +3025,7 @@ def evaluate_bundle(bundle: dict[str, Any], repo_root: Path) -> dict[str, Any]:
         "false_positive_count": sum(1 for result in results if result["expected_action"] != "review" and result["predicted_action"] == "review"),
         "false_negative_count": sum(1 for result in results if result["expected_action"] == "review" and result["predicted_action"] != "review"),
         "per_case_results": results,
+        "evaluation_mode": bundle.get("evaluation_set", {}).get("mode", bundle.get("config", {}).get("evaluation", {}).get("mode", "generated_only")),
         "status": "pass" if (action_matches / total) >= bundle.get("config", {}).get("evaluation", {}).get("top1_accuracy_threshold", 0.80) else "fail",
     }
     return report
@@ -2902,3 +3142,22 @@ def generate_feedback(bundle_root: Path) -> dict[str, Any]:
         "proposals": proposals,
         "status": "pass",
     }
+
+
+def record_manual_feedback(bundle_root: Path, feedback: dict[str, Any]) -> dict[str, Any]:
+    feedback_dir = bundle_root / "reports" / "manual-feedback"
+    feedback_dir.mkdir(parents=True, exist_ok=True)
+    feedback_id = feedback.get("feedback_id") or f"feedback-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    payload = {
+        "feedback_id": feedback_id,
+        "timestamp": iso_now(),
+        "decision_id": feedback.get("decision_id"),
+        "final_action": feedback.get("final_action"),
+        "final_capability": feedback.get("final_capability"),
+        "notes": feedback.get("notes", ""),
+        "confirmed_public_entry": feedback.get("confirmed_public_entry"),
+        "confirmed_owner": feedback.get("confirmed_owner"),
+        "profile_update_recommended": bool(feedback.get("profile_update_recommended")),
+    }
+    dump_json_file(feedback_dir / f"{feedback_id}.json", payload)
+    return payload

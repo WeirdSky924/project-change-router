@@ -185,6 +185,11 @@ def test_python_repo_root_detection_and_resolution(tmp_path: Path) -> None:
     assert decision.primary_capability in {"payments", "billing"}
     assert decision.action in {"extend", "review", "reuse"}
     assert decision.required_reads
+    assert decision.confidence_level in {"low", "medium", "high"}
+    assert isinstance(decision.confidence_reasons, list)
+    assert isinstance(decision.positive_signals, dict)
+    assert isinstance(decision.negative_signals, dict)
+    assert isinstance(decision.risk_signals, dict)
 
 
 def test_typescript_workspace_dependency_mapping(tmp_path: Path) -> None:
@@ -228,6 +233,8 @@ def test_seed_repo_stage_is_conservative(tmp_path: Path) -> None:
         repo / "project-change-router",
     )
     assert decision.action == "review"
+    assert decision.confidence_level == "low"
+    assert decision.veto_reasons
 
 
 def test_emerging_repo_limits_provisional_capabilities(tmp_path: Path) -> None:
@@ -261,3 +268,50 @@ def test_evaluation_runs(tmp_path: Path) -> None:
     summary = router_core.evaluate_bundle(bundle, repo)
     assert summary["case_count"] >= 12
     assert "top1_action_accuracy" in summary
+    assert "evaluation_mode" in summary
+
+
+def test_manual_feedback_recording(tmp_path: Path) -> None:
+    repo = create_java_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    bundle_root = repo / "project-change-router"
+    payload = router_core.record_manual_feedback(
+        bundle_root,
+        {
+            "decision_id": "route-1",
+            "final_action": "review",
+            "final_capability": "billing",
+            "notes": "Confirmed by human reviewer",
+            "confirmed_public_entry": "backend/billing/src/main/java",
+            "confirmed_owner": "billing-team",
+            "profile_update_recommended": True,
+        },
+    )
+    assert payload["final_action"] == "review"
+    feedback_dir = bundle_root / "reports" / "manual-feedback"
+    assert any(feedback_dir.glob("feedback-*.json"))
+
+
+def test_profile_curated_evaluation_mode(tmp_path: Path) -> None:
+    repo = create_profiled_repo(tmp_path)
+    profile_path = repo / ".project-change-router.yaml"
+    profile_path.write_text(
+        profile_path.read_text(encoding="utf-8")
+        + """
+evaluation:
+  mode: curated
+  cases:
+    - id: curated-case-1
+      request: Reuse the existing payment capability.
+      expected_action: reuse
+      expected_capabilities: ["payment-core"]
+      expected_modules: ["services/payments"]
+      expected_reads: []
+      changed_paths: ["services/payments"]
+      risk_level: medium
+""",
+        encoding="utf-8",
+    )
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    assert bundle["evaluation_set"]["mode"] in {"curated", "hybrid"}
+    assert any(case["id"] == "curated-case-1" for case in bundle["evaluation_set"]["cases"])

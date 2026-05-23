@@ -163,6 +163,21 @@ python scripts/run_evaluation.py --repo <repo-root> --format json
 
 早期仓库时，不要把 generated capability / owner / public entry 当正式架构事实。
 
+Route 输出现在还会显式给出：
+
+- `confidence_level`
+- `confidence_reasons`
+- `veto_reasons`
+- `positive_signals`
+- `negative_signals`
+- `risk_signals`
+
+建议解释：
+
+- `high`：有较强 profile / 边界 / 结构证据
+- `medium`：有部分结构证据，但仍需谨慎
+- `low`：证据不足，默认应理解为 `review`
+
 ## 生命周期
 
 推荐按下面的决策表使用：
@@ -173,6 +188,26 @@ python scripts/run_evaluation.py --repo <repo-root> --format json
 - 日常 guardrail 检查：`python scripts/check_reuse.py --repo <repo-root>`、`python scripts/check_deps.py --repo <repo-root>`、`python scripts/check_public_api.py --repo <repo-root>`
 - 路由质量回顾：`python scripts/run_evaluation.py --repo <repo-root>`
 - 规则优化建议汇总：`python scripts/sync_feedback.py --repo <repo-root>`
+
+人工确认回写：
+
+```powershell
+python scripts/sync_feedback.py --repo <repo-root> --feedback-file <feedback.json> --format json
+```
+
+`feedback.json` 可以包含：
+
+```json
+{
+  "decision_id": "route-...",
+  "final_action": "review",
+  "final_capability": "billing",
+  "confirmed_public_entry": "services/billing/__init__.py",
+  "confirmed_owner": "billing-team",
+  "profile_update_recommended": true,
+  "notes": "Human-confirmed correction"
+}
+```
 
 ## 仓库本地 Bundle
 
@@ -251,6 +286,13 @@ project-change-router.profile.yml
 - route report 中 `review_required: true`
 - validation report 中 `errors` 非空
 
+关键字段还包括：
+
+- `confidence_level`
+- `confidence_reasons`
+- `veto_reasons`
+- `primary_capability_stage`
+
 ## 主要脚本
 
 - `scripts/bootstrap_router.py`
@@ -285,6 +327,7 @@ project-change-router.profile.yml
 - evaluation 通过不代表完全替代人工架构判断
 - 早期仓库会被降到更保守的 `repo_stage`
 - `provisional` capability 不应该被当成长期边界
+- `generated_only` evaluation 只能说明系统自洽，不代表架构已成熟
 
 ## 已完成验证
 

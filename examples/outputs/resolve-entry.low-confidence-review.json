@@ -1,0 +1,37 @@
+{
+  "decision_id": "route-sample-low-001",
+  "timestamp": "2026-05-23T15:51:30Z",
+  "request_type": "feature-modification",
+  "request_summary": "Extend the existing router capability with repo profile support",
+  "repo_stage": "seed",
+  "action": "review",
+  "confidence": 0.25,
+  "confidence_level": "low",
+  "overlap_score": 0.0,
+  "primary_capability": "scripts",
+  "primary_capability_stage": "candidate",
+  "secondary_capabilities": [],
+  "candidate_capabilities": [],
+  "candidate_modules": [],
+  "required_reads": [],
+  "required_checks": [],
+  "forbidden_paths": [],
+  "review_required": true,
+  "coordination_required": false,
+  "composite_route_required": false,
+  "confidence_reasons": [
+    "strong path proximity to owner module",
+    "public entry is heuristic only",
+    "no explicit profile mapping supports this route"
+  ],
+  "veto_reasons": [
+    "repo_stage=seed blocks auto-route into existing boundaries"
+  ],
+  "positive_signals": {},
+  "negative_signals": {},
+  "risk_signals": {},
+  "reasoning": [
+    "seed-stage repository does not auto-route into existing capability boundaries"
+  ],
+  "source_of_truths": {}
+}
