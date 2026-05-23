@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["report_id", "timestamp", "script", "status", "blocking", "summary", "findings"],
+  "properties": {
+    "report_id": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "script": { "type": "string" },
+    "status": { "type": "string" },
+    "blocking": { "type": "boolean" },
+    "summary": { "type": "object" },
+    "findings": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": true
+}

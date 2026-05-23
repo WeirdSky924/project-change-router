@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["run_id", "timestamp", "case_count", "top1_action_accuracy", "top1_capability_accuracy", "review_precision", "review_recall", "false_positive_count", "false_negative_count", "per_case_results", "status"],
+  "properties": {
+    "run_id": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "case_count": { "type": "integer" },
+    "top1_action_accuracy": { "type": "number" },
+    "top1_capability_accuracy": { "type": "number" },
+    "review_precision": { "type": "number" },
+    "review_recall": { "type": "number" },
+    "false_positive_count": { "type": "integer" },
+    "false_negative_count": { "type": "integer" },
+    "per_case_results": { "type": "array", "items": { "type": "object" } },
+    "status": { "type": "string" }
+  },
+  "additionalProperties": true
+}

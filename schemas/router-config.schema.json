@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "generated_by", "source_repository", "source_commit", "repo_id", "repositories", "protected_branch_patterns", "ignore_paths", "supported_languages", "module_discovery", "freshness_windows", "evaluation", "route_reports_dir", "rebuild_reports_dir", "guardrail_reports_dir", "evaluation_reports_dir"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "generated_at": { "type": "string" },
+    "generated_by": { "type": "string" },
+    "source_repository": { "type": "string" },
+    "source_commit": { "type": ["string", "null"] },
+    "repo_id": { "type": "string" },
+    "repositories": { "type": "array", "items": { "type": "object" } },
+    "protected_branch_patterns": { "type": "array", "items": { "type": "string" } },
+    "ignore_paths": { "type": "array", "items": { "type": "string" } },
+    "supported_languages": { "type": "array", "items": { "type": "string" } },
+    "module_discovery": { "type": "object" },
+    "freshness_windows": { "type": "object" },
+    "evaluation": { "type": "object" },
+    "route_reports_dir": { "type": "string" },
+    "rebuild_reports_dir": { "type": "string" },
+    "guardrail_reports_dir": { "type": "string" },
+    "evaluation_reports_dir": { "type": "string" }
+  },
+  "additionalProperties": true
+}
