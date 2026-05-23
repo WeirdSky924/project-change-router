@@ -1,0 +1,11 @@
+profile_id: early-repo
+
+ownership_rules:
+  - path_patterns:
+      - "services/orders/**"
+    owner: provisional:orders
+
+module_overrides:
+  - path_patterns:
+      - "services/orders/**"
+    layer: feature-module

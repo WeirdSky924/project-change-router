@@ -136,6 +136,33 @@ python scripts/run_evaluation.py --repo <repo-root> --format json
 
 建议默认使用只读模式；只有在用户明确要求生成或刷新仓库本地 bundle 时，才执行写入模式。
 
+## 仓库阶段策略
+
+这个 skill 现在会根据仓库成熟度推断 `repo_stage`，并据此限制路由强度。
+
+阶段：
+
+- `seed`
+- `emerging`
+- `structured`
+- `governed`
+
+对应原则：
+
+- `seed`：默认只给 `new` / `review`
+- `emerging`：允许有限 `reuse`，`extend` / `extract` 明显收紧
+- `structured`：完整启用 `reuse` / `extend` / `extract`
+- `governed`：以 profile 和 guardrail 为主
+
+同时每个 capability 也有自己的 `stage`：
+
+- `provisional`
+- `candidate`
+- `stable`
+- `governed-capability`
+
+早期仓库时，不要把 generated capability / owner / public entry 当正式架构事实。
+
 ## 生命周期
 
 推荐按下面的决策表使用：
@@ -185,6 +212,7 @@ project-change-router.profile.yml
 现成最小模板见：
 
 - [examples/profiles/README.md](./examples/profiles/README.md)
+- [examples/profiles/early-repo.project-change-router.yaml](./examples/profiles/early-repo.project-change-router.yaml)
 - [examples/profiles/python-monorepo.project-change-router.yaml](./examples/profiles/python-monorepo.project-change-router.yaml)
 - [examples/profiles/ts-workspace.project-change-router.yaml](./examples/profiles/ts-workspace.project-change-router.yaml)
 - [examples/profiles/mixed-repo.project-change-router.yaml](./examples/profiles/mixed-repo.project-change-router.yaml)
@@ -255,6 +283,8 @@ project-change-router.profile.yml
 - `route=review` 不是失败，而是保护机制
 - 没有 profile 时，结果会偏保守
 - evaluation 通过不代表完全替代人工架构判断
+- 早期仓库会被降到更保守的 `repo_stage`
+- `provisional` capability 不应该被当成长期边界
 
 ## 已完成验证
 

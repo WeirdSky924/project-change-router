@@ -127,6 +127,38 @@ ownership_rules:
     return repo
 
 
+def create_seed_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "seed-repo"
+    repo.mkdir(parents=True)
+    (repo / "app.py").write_text("print('hello')\n", encoding="utf-8")
+    return repo
+
+
+def create_emerging_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "emerging-repo"
+    repo.mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("[project]\nname = 'emerging-repo'\nversion = '0.1.0'\n", encoding="utf-8")
+    (repo / "services" / "orders").mkdir(parents=True)
+    (repo / "services" / "orders" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "services" / "orders" / "service.py").write_text("def place_order():\n    return True\n", encoding="utf-8")
+    (repo / "services" / "notifications").mkdir(parents=True)
+    (repo / "services" / "notifications" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "services" / "notifications" / "service.py").write_text("def notify():\n    return True\n", encoding="utf-8")
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "test_orders.py").write_text("def test_orders():\n    assert True\n", encoding="utf-8")
+    (repo / ".project-change-router.yaml").write_text(
+        """
+profile_id: emerging
+ownership_rules:
+  - path_patterns: ["services/orders/**"]
+    owner: provisional:orders
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return repo
+
+
 def test_bootstrap_bundle_for_java_repo(tmp_path: Path) -> None:
     repo = create_java_repo(tmp_path)
     bundle = router_core.bootstrap_bundle(repo, write=True)
@@ -183,6 +215,37 @@ def test_profile_overrides_capability_and_owner(tmp_path: Path) -> None:
     assert "payment-core" in capabilities
     ownership_entries = [entry for entry in bundle["ownership"]["owners"] if entry["scope"] == "module"]
     assert any(entry["target"] == "services/payments" and entry["primary"] == "payments-team" for entry in ownership_entries)
+
+
+def test_seed_repo_stage_is_conservative(tmp_path: Path) -> None:
+    repo = create_seed_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    assert bundle["config"]["repo_stage"] == "seed"
+    decision = router_core.resolve_request(
+        "Extend the existing platform capability with a new behavior",
+        ["app.py"],
+        bundle,
+        repo / "project-change-router",
+    )
+    assert decision.action == "review"
+
+
+def test_emerging_repo_limits_provisional_capabilities(tmp_path: Path) -> None:
+    repo = create_emerging_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    assert bundle["config"]["repo_stage"] in {"seed", "emerging", "structured"}
+    capabilities = bundle["capability_catalog"]["capabilities"]
+    assert any(cap["stage"] in {"provisional", "candidate", "stable"} for cap in capabilities)
+    decision = router_core.resolve_request(
+        "Extract repeated order and notification logic into a shared reusable entry point",
+        ["services/orders", "services/notifications"],
+        bundle,
+        repo / "project-change-router",
+    )
+    if bundle["config"]["repo_stage"] in {"seed", "emerging"}:
+        assert decision.action == "review"
+    else:
+        assert decision.action in {"review", "extract"}
 
 
 def test_validate_bundle(tmp_path: Path) -> None:

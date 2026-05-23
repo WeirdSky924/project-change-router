@@ -128,6 +128,33 @@ Expected behavior:
 
 Default to read-only mode. Only use write mode when the user explicitly wants repository-local routing data to be created or refreshed.
 
+## Repository Stage Policy
+
+This skill now infers a `repo_stage` and uses it to limit routing strength.
+
+Stages:
+
+- `seed`
+- `emerging`
+- `structured`
+- `governed`
+
+Behavior:
+
+- `seed`: default to `new` / `review`
+- `emerging`: limited `reuse`, stricter `extend` / `extract`
+- `structured`: full `reuse` / `extend` / `extract`
+- `governed`: profile- and guardrail-driven routing
+
+Each capability also carries its own `stage`:
+
+- `provisional`
+- `candidate`
+- `stable`
+- `governed-capability`
+
+Do not treat generated capabilities, owners, or public entries as final architecture facts in an early repository.
+
 ## Lifecycle
 
 Recommended decision table:
@@ -177,6 +204,7 @@ These files can define:
 Ready-to-copy templates:
 
 - [examples/profiles/README.md](./examples/profiles/README.md)
+- [examples/profiles/early-repo.project-change-router.yaml](./examples/profiles/early-repo.project-change-router.yaml)
 - [examples/profiles/python-monorepo.project-change-router.yaml](./examples/profiles/python-monorepo.project-change-router.yaml)
 - [examples/profiles/ts-workspace.project-change-router.yaml](./examples/profiles/ts-workspace.project-change-router.yaml)
 - [examples/profiles/mixed-repo.project-change-router.yaml](./examples/profiles/mixed-repo.project-change-router.yaml)
@@ -247,6 +275,8 @@ Be explicit about these limits:
 - `route=review` is a safety mechanism, not a failure state
 - without a profile, the router intentionally behaves more conservatively
 - a passing evaluation does not eliminate the need for architecture review
+- early repositories are deliberately downgraded to more conservative `repo_stage`s
+- `provisional` capabilities should not be treated as long-term architecture boundaries
 
 ## Verification Performed
 

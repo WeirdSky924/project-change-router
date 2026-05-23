@@ -155,6 +155,7 @@ class CapabilityEntry:
     name: str
     status: str
     maturity: str
+    stage: str = "candidate"
     source_of_truth: str = "generated"
     intent_keywords: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
@@ -273,6 +274,20 @@ def stable_slug(value: str) -> str:
 
 def title_from_slug(value: str) -> str:
     return " ".join(part.capitalize() for part in stable_slug(value).split("-") if part) or "Capability"
+
+
+def stage_rank(stage: str) -> int:
+    order = {
+        "seed": 0,
+        "emerging": 1,
+        "structured": 2,
+        "governed": 3,
+        "provisional": 0,
+        "candidate": 1,
+        "stable": 2,
+        "governed-capability": 3,
+    }
+    return order.get(stage, 0)
 
 
 def text_tokens(text: str) -> list[str]:
@@ -934,6 +949,260 @@ def discover_languages(repo_root: Path, modules: list[ModuleEntry]) -> list[str]
     return sorted(languages or {"generic"})
 
 
+def count_cross_module_edges(modules: list[ModuleEntry]) -> int:
+    return sum(1 for module in modules for dep in module.depends_on if dep != module.path)
+
+
+def meaningful_module_count(modules: list[ModuleEntry]) -> int:
+    count = 0
+    for module in modules:
+        if module.path == ".":
+            continue
+        if Path(module.path).name.lower() not in GENERIC_CONTAINER_NAMES:
+            count += 1
+    return count
+
+
+def profile_signal_counts(profile: dict[str, Any]) -> dict[str, int]:
+    capability_count = len(profile.get("capabilities", []))
+    owner_rule_count = len(profile.get("ownership_rules", []))
+    public_api_override_count = sum(1 for rule in profile.get("module_overrides", []) if "public_api" in rule)
+    return {
+        "profile_capability_count": capability_count,
+        "profile_owner_rule_count": owner_rule_count,
+        "profile_public_api_override_count": public_api_override_count,
+    }
+
+
+def detect_ci(repo_root: Path) -> bool:
+    return any(
+        path.exists()
+        for path in [
+            repo_root / ".github" / "workflows",
+            repo_root / ".gitlab-ci.yml",
+            repo_root / "azure-pipelines.yml",
+            repo_root / ".circleci" / "config.yml",
+        ]
+    )
+
+
+def heuristic_public_entry_ratio(modules: list[ModuleEntry]) -> float:
+    considered = [module for module in modules if module.public_api]
+    if not considered:
+        return 1.0
+    heuristic = 0
+    for module in considered:
+        entry = (module.public_api or "").lower()
+        if entry in {"__init__.py", "index.ts", "index.js", "index.tsx", "index.jsx"}:
+            heuristic += 1
+    return heuristic / max(1, len(considered))
+
+
+def provisional_owner_ratio(modules: list[ModuleEntry]) -> float:
+    if not modules:
+        return 1.0
+    provisional = 0
+    for module in modules:
+        owner = (module.owner or "").lower()
+        if owner in {"unassigned", "platform-owners"} or owner.startswith("provisional:") or owner.endswith("-owners"):
+            provisional += 1
+    return provisional / len(modules)
+
+
+def generated_only_ratio(capabilities: list[CapabilityEntry]) -> float:
+    if not capabilities:
+        return 1.0
+    generated = sum(1 for capability in capabilities if capability.source_of_truth == "generated")
+    return generated / len(capabilities)
+
+
+def count_tests(repo_root: Path) -> tuple[int, int]:
+    test_files = []
+    test_dirs = [repo_root / "tests", repo_root / "test", repo_root / "src" / "test", repo_root / "src" / "tests"]
+    for root in test_dirs:
+        if root.exists():
+            test_files.extend([path for path in root.rglob("*") if path.is_file()])
+    module_like_tests = sum(1 for file in test_files if file.suffix.lower() in CODE_SUFFIXES)
+    return len(test_files), module_like_tests
+
+
+def detect_boundary_evidence(repo_root: Path) -> bool:
+    patterns = ["*.proto", "*openapi*.yml", "*openapi*.yaml", "*schema*.json", "*swagger*.yaml", "*swagger*.yml"]
+    for pattern in patterns:
+        if list(repo_root.rglob(pattern)):
+            return True
+    return False
+
+
+def evaluation_mode(capabilities: list[CapabilityEntry], profile: dict[str, Any]) -> str:
+    if profile.get("evaluation", {}).get("mode") == "curated":
+        return "curated"
+    if any(capability.source_of_truth == "profile" for capability in capabilities):
+        return "hybrid"
+    return "generated_only"
+
+
+def detect_branch_mode(repo_root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return "unknown"
+    branch = result.stdout.strip()
+    if not branch:
+        return "unknown"
+    if branch in {"main", "master", "develop"}:
+        return "default"
+    return "feature"
+
+
+def classify_repo_stage(modules: list[ModuleEntry], capabilities: list[CapabilityEntry], profile: dict[str, Any], repo_root: Path) -> tuple[str, dict[str, Any]]:
+    profile_counts = profile_signal_counts(profile)
+    has_profile = bool(profile)
+    has_codeowners = bool(load_codeowners(repo_root))
+    has_ci = detect_ci(repo_root)
+    boundary_evidence = detect_boundary_evidence(repo_root)
+    module_count = len(modules)
+    meaningful_count = meaningful_module_count(modules)
+    cross_edges = count_cross_module_edges(modules)
+    languages = discover_languages(repo_root, modules)
+    tests_total, module_tests = count_tests(repo_root)
+    heuristic_ratio = heuristic_public_entry_ratio(modules)
+    provisional_ratio = provisional_owner_ratio(modules)
+    stable_caps = sum(1 for capability in capabilities if capability.stage in {"stable", "governed-capability"} or capability.status == "stable")
+    candidate_caps = sum(1 for capability in capabilities if capability.stage == "candidate" or capability.status == "candidate")
+    provisional_caps = sum(1 for capability in capabilities if capability.stage == "provisional")
+    capability_signals_available = bool(capabilities)
+    generated_ratio = generated_only_ratio(capabilities)
+    eval_mode = evaluation_mode(capabilities, profile)
+    branch_mode = detect_branch_mode(repo_root)
+
+    reasons: list[str] = []
+    score = 0
+
+    if module_count <= 1 or meaningful_count <= 1:
+        reasons.append("very few meaningful modules discovered")
+    else:
+        score += 1
+        reasons.append(f"{meaningful_count} meaningful modules discovered")
+    if meaningful_count >= 4:
+        score += 1
+    if cross_edges > 0:
+        score += 1
+        reasons.append(f"{cross_edges} cross-module dependencies discovered")
+    if boundary_evidence:
+        score += 1
+        reasons.append("shared schema or boundary evidence discovered")
+    if has_profile:
+        score += 1
+        reasons.append("repository profile present")
+    if profile_counts["profile_capability_count"] > 0:
+        score += 2
+        reasons.append(f"{profile_counts['profile_capability_count']} profile-backed capabilities declared")
+    if has_codeowners:
+        score += 1
+        reasons.append("CODEOWNERS present")
+    if has_ci:
+        score += 1
+        reasons.append("CI configuration present")
+    if tests_total > 0:
+        score += 1
+        reasons.append(f"{tests_total} test files discovered")
+    if eval_mode == "curated":
+        score += 2
+        reasons.append("curated evaluation mode enabled")
+    elif eval_mode == "generated_only":
+        reasons.append("evaluation set is generated-only")
+    if capability_signals_available and heuristic_ratio >= 0.8:
+        score -= 2
+        reasons.append("public entries are mostly heuristic")
+    elif not capability_signals_available and heuristic_ratio >= 0.8:
+        reasons.append("public entries are mostly heuristic")
+    if capability_signals_available and provisional_ratio >= 0.8:
+        score -= 2
+        reasons.append("ownership is mostly provisional")
+    elif not capability_signals_available and provisional_ratio >= 0.8:
+        reasons.append("ownership is mostly provisional")
+    if capability_signals_available and generated_ratio >= 0.8:
+        score -= 2
+        reasons.append("most capabilities are generated rather than curated")
+    elif not capability_signals_available and generated_ratio >= 0.8:
+        reasons.append("most capabilities are generated rather than curated")
+    if branch_mode == "feature":
+        score -= 1
+        reasons.append("current worktree is on a non-default branch")
+
+    seed_gate = (
+        meaningful_count <= 1
+        or (
+            meaningful_count <= 1
+            and profile_counts["profile_capability_count"] == 0
+            and stable_caps == 0
+            and module_tests == 0
+        )
+        or heuristic_ratio >= 0.9 and provisional_ratio >= 0.9
+    )
+    governed_gate = (
+        has_profile
+        and has_ci
+        and has_codeowners
+        and profile_counts["profile_capability_count"] >= 2
+        and stable_caps >= 2
+        and provisional_ratio < 0.4
+        and heuristic_ratio < 0.4
+        and eval_mode != "generated_only"
+    )
+    structured_gate = (
+        meaningful_count >= 3
+        and cross_edges >= 1
+        and (profile_counts["profile_capability_count"] > 0 or stable_caps >= 1)
+    )
+
+    if governed_gate:
+        stage = "governed"
+    elif seed_gate and score <= 2:
+        stage = "seed"
+    elif structured_gate and score >= 6:
+        stage = "structured"
+    else:
+        stage = "emerging"
+
+    signal_payload = {
+        "module_count": module_count,
+        "meaningful_module_count": meaningful_count,
+        "cross_module_edges": cross_edges,
+        "language_count": len(languages),
+        "has_profile": has_profile,
+        "profile_capability_count": profile_counts["profile_capability_count"],
+        "profile_owner_rule_count": profile_counts["profile_owner_rule_count"],
+        "profile_public_api_override_count": profile_counts["profile_public_api_override_count"],
+        "has_codeowners": has_codeowners,
+        "has_ci": has_ci,
+        "shared_boundary_evidence": boundary_evidence,
+        "stable_capability_count": stable_caps,
+        "candidate_capability_count": candidate_caps,
+        "provisional_capability_count": provisional_caps,
+        "provisional_owner_ratio": round(provisional_ratio, 4),
+        "heuristic_public_entry_ratio": round(heuristic_ratio, 4),
+        "generated_only_ratio": round(generated_ratio, 4),
+        "test_file_count": tests_total,
+        "module_with_tests_count": module_tests,
+        "evaluation_mode": eval_mode,
+        "branch_mode": branch_mode,
+    }
+    return stage, {
+        "repo_stage": stage,
+        "stage_score": score,
+        "stage_reasons": reasons,
+        "signals": signal_payload,
+    }
+
+
 def discover_repositories(repo_root: Path, modules: list[ModuleEntry]) -> list[dict[str, Any]]:
     repositories = [{"id": repo_root.name, "path": ".", "type": detect_repo_manifest_kind(repo_root)}]
     top_level_paths = {module.path.split("/")[0] for module in modules if module.path not in {".", ""}}
@@ -1142,12 +1411,8 @@ def profile_ownership_for_path(rel_path: str, profile: dict[str, Any]) -> Option
 
 def default_owner_name(module: ModuleEntry) -> str:
     if module.domain and module.domain not in {"root", "workspace"}:
-        return f"{stable_slug(module.domain)}-owners"
-    if module.layer == "ui":
-        return "frontend-owners"
-    if module.layer == "infra":
-        return "platform-owners"
-    return "platform-owners"
+        return f"provisional:{stable_slug(module.domain)}"
+    return "unassigned"
 
 
 def assign_module_ownership(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> None:
@@ -1175,6 +1440,27 @@ def infer_public_entries_from_modules(modules: list[ModuleEntry]) -> list[str]:
         if normalized not in dedup:
             dedup.append(normalized)
     return dedup[:8]
+
+
+def capability_stage_for_generated(modules: list[ModuleEntry], public_entries: list[str], repo_stage: str) -> tuple[str, str]:
+    if repo_stage == "seed":
+        return "provisional", "provisional"
+    if any(module.layer == "shared-capability" for module in modules) and len(modules) >= 2:
+        return "stable", "stable"
+    if repo_stage in {"structured", "governed"} and len(modules) >= 2 and public_entries and any(module.owner not in {"unassigned"} and not module.owner.startswith("provisional:") for module in modules):
+        return "stable", "stable"
+    if repo_stage == "emerging" and public_entries:
+        return "candidate", "candidate"
+    return "provisional", "provisional"
+
+
+def public_entry_semantics(entries: list[str], repo_stage: str, profile_backed: bool) -> dict[str, Any]:
+    heuristic_entries = [entry for entry in entries if entry.split("/")[-1].lower() in {"__init__.py", "index.ts", "index.js", "index.tsx", "index.jsx"}]
+    if profile_backed:
+        return {"kind": "declared_public_entry", "heuristic_entries": heuristic_entries}
+    if repo_stage in {"seed", "emerging"}:
+        return {"kind": "heuristic_public_entry", "heuristic_entries": heuristic_entries}
+    return {"kind": "stable_public_entry", "heuristic_entries": heuristic_entries}
 
 
 def infer_extension_points(repo_root: Path, modules: list[ModuleEntry], ignore_patterns: Iterable[str]) -> list[str]:
@@ -1229,12 +1515,15 @@ def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], prof
         if not matched:
             continue
         consumed_modules.update(module.path for module in matched)
+        profile_stage = item.get("stage", "governed-capability" if item.get("status", "stable") == "stable" else "stable")
+        profile_status = item.get("status", "stable")
         capabilities.append(
             CapabilityEntry(
                 id=item["id"],
                 name=item.get("name", title_from_slug(item["id"])),
-                status=item.get("status", "stable"),
+                status=profile_status,
                 maturity=item.get("maturity", "curated"),
+                stage=profile_stage,
                 source_of_truth="profile",
                 intent_keywords=list(dict.fromkeys(item.get("keywords", []) + item.get("intent_keywords", []))),
                 aliases=item.get("aliases", []),
@@ -1254,14 +1543,21 @@ def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], prof
                 forbidden_patterns=item.get("forbidden_patterns", []),
                 dependent_modules=[],
                 anti_patterns=item.get("anti_patterns", []),
-                lifecycle={"profile_id": profile.get("profile_id")},
+                lifecycle={
+                    "profile_id": profile.get("profile_id"),
+                    "public_entry_semantics": public_entry_semantics(
+                        list(dict.fromkeys(item.get("public_entries", []) + infer_public_entries_from_modules(matched))),
+                        "governed",
+                        True,
+                    ),
+                },
                 last_verified_at=today_date(),
             )
         )
     return capabilities, consumed_modules
 
 
-def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> list[CapabilityEntry]:
+def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any], repo_stage: str) -> list[CapabilityEntry]:
     profile_caps, consumed = apply_profile_capabilities(repo_root, modules, profile)
     grouped: dict[str, list[ModuleEntry]] = defaultdict(list)
     for module in modules:
@@ -1290,14 +1586,15 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
             flat_keywords.append(module.domain)
             flat_keywords.extend(public_import_names(module))
         keywords = sorted({keyword for keyword in flat_keywords if keyword})
-        has_strong_surface = bool(public_entries) and any(module.owner not in {"unassigned", "platform-owners"} for module in grouped_modules)
-        maturity = "stable" if len(grouped_modules) > 1 or any(module.layer == "shared-capability" for module in grouped_modules) or has_strong_surface else "candidate"
+        stage, maturity = capability_stage_for_generated(grouped_modules, public_entries, repo_stage)
+        status = "stable" if stage in {"stable", "governed-capability"} else "candidate"
         capabilities.append(
             CapabilityEntry(
                 id=cap_id,
                 name=f"{title_from_slug(domain)} Capability",
-                status="stable" if maturity == "stable" else "candidate",
+                status=status,
                 maturity=maturity,
+                stage=stage,
                 source_of_truth="generated",
                 intent_keywords=list(dict.fromkeys(text_tokens(" ".join(flat_keywords))))[:20],
                 aliases=sorted({Path(module.path).name for module in grouped_modules})[:8],
@@ -1310,7 +1607,7 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
                 owner_modules=[module.path for module in grouped_modules],
                 public_entries=public_entries,
                 extension_points=extension_points,
-                route_defaults={"preferred_action": "reuse" if maturity == "stable" else "review"},
+                route_defaults={"preferred_action": "reuse" if stage in {"stable", "governed-capability"} else "review"},
                 contracts=[],
                 related_tests=related_tests,
                 test_bindings=[
@@ -1324,8 +1621,11 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
                 ] if related_tests else [],
                 forbidden_patterns=[],
                 dependent_modules=sorted(dependent_modules),
-                anti_patterns=["copying core logic outside owner modules"] if maturity == "stable" else [],
-                lifecycle={"generated_from": [module.path for module in grouped_modules]},
+                anti_patterns=["copying core logic outside owner modules"] if stage in {"stable", "governed-capability"} else [],
+                lifecycle={
+                    "generated_from": [module.path for module in grouped_modules],
+                    "public_entry_semantics": public_entry_semantics(public_entries, repo_stage, False),
+                },
                 last_verified_at=today_date(),
             )
         )
@@ -1352,8 +1652,8 @@ def build_module_map(repo_root: Path, config: dict[str, Any], profile: dict[str,
     }
 
 
-def build_capability_catalog(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> dict[str, Any]:
-    capabilities = infer_capabilities_from_modules(repo_root, modules, profile)
+def build_capability_catalog(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any], repo_stage: str) -> dict[str, Any]:
+    capabilities = infer_capabilities_from_modules(repo_root, modules, profile, repo_stage)
     return {
         "schema_version": 1,
         "generated_at": iso_now(),
@@ -1364,10 +1664,10 @@ def build_capability_catalog(repo_root: Path, modules: list[ModuleEntry], profil
     }
 
 
-def build_ownership(capabilities: list[CapabilityEntry], modules: list[ModuleEntry]) -> dict[str, Any]:
+def build_ownership(capabilities: list[CapabilityEntry], modules: list[ModuleEntry], repo_stage: str) -> dict[str, Any]:
     owners: list[dict[str, Any]] = []
     for capability in capabilities:
-        primary = modules[0].owner if modules else "platform-owners"
+        primary = modules[0].owner if modules else "unassigned"
         for module in modules:
             if module.path in capability.owner_modules:
                 primary = module.owner
@@ -1379,6 +1679,7 @@ def build_ownership(capabilities: list[CapabilityEntry], modules: list[ModuleEnt
                 "primary": primary,
                 "reviewers": [primary],
                 "escalation_group": primary,
+                "provisional": repo_stage in {"seed", "emerging"} or primary == "unassigned" or str(primary).startswith("provisional:"),
             }
         )
     for module in modules:
@@ -1389,6 +1690,7 @@ def build_ownership(capabilities: list[CapabilityEntry], modules: list[ModuleEnt
                 "primary": module.owner,
                 "reviewers": [module.owner],
                 "escalation_group": module.owner,
+                "provisional": repo_stage in {"seed", "emerging"} or module.owner == "unassigned" or str(module.owner).startswith("provisional:"),
             }
         )
     return {
@@ -1410,8 +1712,17 @@ def high_risk_capability_ids(capabilities: list[CapabilityEntry], profile: dict[
     return sorted(ids)
 
 
-def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, Any]) -> dict[str, Any]:
+def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, Any], repo_stage: str) -> dict[str, Any]:
     risk_profile = profile.get("risk", {})
+    if repo_stage == "seed":
+        auto_threshold = 0.95
+        guarded_threshold = 0.80
+    elif repo_stage == "emerging":
+        auto_threshold = 0.88
+        guarded_threshold = 0.68
+    else:
+        auto_threshold = 0.78
+        guarded_threshold = 0.58
     return {
         "schema_version": 1,
         "generated_at": iso_now(),
@@ -1419,8 +1730,8 @@ def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, A
         "source_repository": "workspace",
         "source_commit": None,
         "confidence": {
-            "auto_route_threshold": 0.78,
-            "guarded_route_threshold": 0.58,
+            "auto_route_threshold": auto_threshold,
+            "guarded_route_threshold": guarded_threshold,
         },
         "high_risk_conditions": list(
             dict.fromkeys(
@@ -1438,12 +1749,12 @@ def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, A
         "route_rules": [
             {
                 "name": "prefer-reuse-for-stable-capability",
-                "when": {"capability_status": "stable", "matching_intent": True, "path_proximity_gte": 0.6},
+                "when": {"capability_stage": "stable", "matching_intent": True, "path_proximity_gte": 0.6},
                 "action": "reuse",
             },
             {
                 "name": "prefer-extend-when-additive-change-is-clear",
-                "when": {"capability_status": "stable", "extension_point_or_public_api": True, "request_has_change_verb": True},
+                "when": {"capability_stage": "stable", "extension_point_or_public_api": True, "request_has_change_verb": True},
                 "action": "extend",
             },
             {
@@ -1462,11 +1773,12 @@ def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, A
             "high_risk_override": "review",
             "human_override_allowed": True,
             "human_override_must_record_reason": True,
+            "repo_stage": repo_stage,
         },
     }
 
 
-def build_router_config(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> dict[str, Any]:
+def build_router_config(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any], stage_info: dict[str, Any]) -> dict[str, Any]:
     manifest_kind = detect_repo_manifest_kind(repo_root)
     supported_languages = discover_languages(repo_root, modules)
     discovery_profile = profile.get("discovery", {})
@@ -1486,6 +1798,10 @@ def build_router_config(repo_root: Path, modules: list[ModuleEntry], profile: di
             "strategies": ["maven", "node", "python", "generic"],
             "profile_id": profile.get("profile_id"),
         },
+        "repo_stage": stage_info["repo_stage"],
+        "repo_stage_score": stage_info["stage_score"],
+        "repo_stage_reasons": stage_info["stage_reasons"],
+        "repo_stage_signals": stage_info["signals"],
         "freshness_windows": {
             "capability_catalog_days": 30,
             "module_map_days": 30,
@@ -1496,6 +1812,7 @@ def build_router_config(repo_root: Path, modules: list[ModuleEntry], profile: di
             "top1_accuracy_threshold": 0.80,
             "review_precision_threshold": 0.90,
             "minimum_case_count": 12,
+            "mode": stage_info["signals"].get("evaluation_mode", "generated_only"),
         },
         "route_reports_dir": "reports/route-decisions",
         "rebuild_reports_dir": "reports/index-rebuild",
@@ -1515,19 +1832,19 @@ def build_exception_registry(repo_root: Path, profile: dict[str, Any]) -> dict[s
     }
 
 
-def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[str, Any]) -> dict[str, Any]:
+def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[str, Any], repo_stage: str) -> dict[str, Any]:
     modules = [ModuleEntry(**item) for item in module_map.get("modules", [])]
-    stable_caps = [cap for cap in capabilities if cap.status == "stable"] or capabilities[:]
+    stable_caps = [cap for cap in capabilities if cap.stage in {"stable", "governed-capability"} or cap.status == "stable"] or capabilities[:]
     cases: list[dict[str, Any]] = []
     for capability in stable_caps[:10]:
-        is_stable = capability.status == "stable"
+        is_stable = capability.stage in {"stable", "governed-capability"} or capability.status == "stable"
         is_risky = match_strength(capability.id, DEFAULT_HIGH_RISK_KEYWORDS) >= 1.0
         can_extract = is_stable and len(capability.owner_modules) >= 2
         cases.append(
             {
                 "id": f"{capability.id}-reuse",
                 "request": f"Reuse the existing {capability.name.lower()} entry point without changing its core behavior.",
-                "expected_action": "reuse" if is_stable else "review",
+                "expected_action": "reuse" if is_stable and repo_stage != "seed" else "review",
                 "expected_capabilities": [capability.id],
                 "expected_modules": capability.owner_modules[:2],
                 "expected_reads": capability.public_entries[:2],
@@ -1539,7 +1856,7 @@ def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[s
             {
                 "id": f"{capability.id}-extend",
                 "request": f"Extend the existing {capability.name.lower()} capability with a compatible new behavior.",
-                "expected_action": "extend" if is_stable and not is_risky else "review",
+                "expected_action": "extend" if is_stable and not is_risky and repo_stage in {"structured", "governed"} else "review",
                 "expected_capabilities": [capability.id],
                 "expected_modules": capability.owner_modules[:2],
                 "expected_reads": capability.public_entries[:2],
@@ -1556,7 +1873,7 @@ def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[s
             {
                 "id": f"{capability.id}-extract",
                 "request": f"Extract repeated {capability.name.lower()} logic into a shared reusable entry point.",
-                "expected_action": "extract" if can_extract and not match_strength(capability.id, DEFAULT_HIGH_RISK_KEYWORDS) >= 1.0 else "review",
+                "expected_action": "extract" if can_extract and not match_strength(capability.id, DEFAULT_HIGH_RISK_KEYWORDS) >= 1.0 and repo_stage in {"structured", "governed"} else "review",
                 "expected_capabilities": [capability.id],
                 "expected_modules": capability.owner_modules[:2],
                 "expected_reads": capability.public_entries[:2],
@@ -1608,7 +1925,7 @@ def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[s
             {
                 "id": f"extra-{len(cases)+1}",
                 "request": f"Reuse the existing {capability.name.lower()} capability from a nearby integration point.",
-                "expected_action": "reuse" if capability.status == "stable" else "review",
+                "expected_action": "reuse" if (capability.stage in {"stable", "governed-capability"} or capability.status == "stable") and repo_stage != "seed" else "review",
                 "expected_capabilities": [capability.id],
                 "expected_modules": capability.owner_modules[:2],
                 "expected_reads": capability.public_entries[:2],
@@ -1649,7 +1966,8 @@ def capability_conflicts(bundle: dict[str, Any]) -> list[str]:
 def build_router_bundle(repo_root: Path) -> dict[str, Any]:
     profile = load_active_profile(repo_root)
     preliminary_modules = discover_modules(repo_root, {}, profile)
-    config = build_router_config(repo_root, preliminary_modules, profile)
+    initial_stage, initial_stage_info = classify_repo_stage(preliminary_modules, [], profile, repo_root)
+    config = build_router_config(repo_root, preliminary_modules, profile, initial_stage_info)
     module_map = {
         "schema_version": 1,
         "generated_at": iso_now(),
@@ -1659,12 +1977,14 @@ def build_router_bundle(repo_root: Path) -> dict[str, Any]:
         "modules": [module.to_dict() for module in preliminary_modules],
     }
     modules = [ModuleEntry(**item) for item in module_map["modules"]]
-    capability_catalog = build_capability_catalog(repo_root, modules, profile)
+    capability_catalog = build_capability_catalog(repo_root, modules, profile, initial_stage)
     capabilities = [CapabilityEntry(**item) for item in capability_catalog["capabilities"]]
-    ownership = build_ownership(capabilities, modules)
-    change_rules = build_change_rules(capabilities, profile)
+    repo_stage, stage_info = classify_repo_stage(modules, capabilities, profile, repo_root)
+    config = build_router_config(repo_root, modules, profile, stage_info)
+    ownership = build_ownership(capabilities, modules, repo_stage)
+    change_rules = build_change_rules(capabilities, profile, repo_stage)
     exception_registry = build_exception_registry(repo_root, profile)
-    evaluation_set = build_evaluation_set(capabilities, module_map)
+    evaluation_set = build_evaluation_set(capabilities, module_map, repo_stage)
     bundle = {
         "config": config,
         "module_map": module_map,
@@ -1978,9 +2298,14 @@ def determine_action(
     threshold = bundle.get("change_rules", {}).get("confidence", {})
     auto_threshold = float(threshold.get("auto_route_threshold", 0.78))
     guarded_threshold = float(threshold.get("guarded_route_threshold", 0.58))
+    repo_stage = bundle.get("config", {}).get("repo_stage", "emerging")
     duplicate_signal, duplicate_count = request_duplicate_signal(request_text, changed_paths)
     request_has_change_verb = any(word in request_text.lower() for word in CHANGE_VERBS)
-    stable_candidates = [cap for cap, score, _ in sorted_scores if score >= guarded_threshold and cap.status == "stable"]
+    stable_candidates = [
+        cap
+        for cap, score, _ in sorted_scores
+        if score >= guarded_threshold and (cap.stage in {"stable", "governed-capability"} or cap.status == "stable")
+    ]
     coordination_required = len(stable_candidates) > 1
     composite_required = len({module.path for module in changed_modules}) > 1 and coordination_required
     secondary = [cap.id for cap, score, _ in sorted_scores[1:] if score >= guarded_threshold]
@@ -1997,6 +2322,12 @@ def determine_action(
     if stale_bundle or has_conflict:
         reasoning.append("routing bundle is stale or internally inconsistent")
         return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if repo_stage == "seed":
+        if not changed_paths and not targets_existing:
+            reasoning.append("seed-stage repository defaults to new capability suggestions")
+            return "new", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        reasoning.append("seed-stage repository does not auto-route into existing capability boundaries")
+        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
     if not changed_paths and not targets_existing and best_score < auto_threshold:
         reasoning.append("request is not anchored to an existing capability or changed surface")
         return "new", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
@@ -2006,7 +2337,16 @@ def determine_action(
     if explicit_review or composite_required:
         reasoning.append("request spans multiple capability surfaces or explicitly asks for review")
         return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+    if repo_stage == "emerging" and best_cap.stage == "provisional":
+        if not changed_paths and not targets_existing:
+            reasoning.append("emerging repository avoids promoting provisional capability guesses into new boundaries")
+            return "new", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
+        reasoning.append("emerging repository treats provisional capabilities as review-only")
+        return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
     if extract_intent:
+        if repo_stage in {"seed", "emerging"}:
+            reasoning.append("early-stage repository requires manual review before extraction")
+            return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
         if len(changed_paths) >= 2 or len({module.path for module in changed_modules}) >= 2:
             reasoning.append("explicit extraction intent with repeated changed surfaces")
             return "extract", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
@@ -2015,14 +2355,20 @@ def determine_action(
     if duplicate_signal and duplicate_count >= 2 and (
         len(changed_paths) >= 2 or len({module.path for module in changed_modules}) >= 2
     ):
+        if repo_stage in {"seed", "emerging"}:
+            reasoning.append("early-stage repository defers duplicate extraction to manual review")
+            return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
         reasoning.append("duplicate signal indicates shared extraction work")
         return "extract", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
     if ov >= 0.82:
         reasoning.append("multiple capability candidates overlap too heavily")
         return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
     if best_score < guarded_threshold:
-        if changed_paths and best_signals.get("path_proximity", 0.0) >= 0.8 and not high_risk:
+        if changed_paths and best_signals.get("path_proximity", 0.0) >= 0.8 and not high_risk and repo_stage in {"emerging", "structured", "governed"}:
             if request_has_change_verb:
+                if repo_stage == "emerging" and best_cap.stage not in {"stable", "governed-capability"}:
+                    reasoning.append("emerging repository only allows path-anchored extend on stable capabilities")
+                    return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
                 reasoning.append("path proximity strongly anchors the request to an existing module surface")
                 return "extend", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
             reasoning.append("path proximity strongly anchors the request to an existing module surface")
@@ -2030,16 +2376,19 @@ def determine_action(
         action = "review" if high_risk else "new"
         reasoning.append("no candidate exceeded the guarded routing threshold")
         return action, best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
-    if best_cap.status == "stable":
+    if best_cap.stage in {"stable", "governed-capability"} or best_cap.status == "stable":
         if request_has_change_verb and (best_cap.extension_points or best_cap.public_entries) and (best_score >= auto_threshold or targets_existing):
+            if repo_stage == "emerging" and best_cap.stage == "candidate":
+                reasoning.append("emerging repository will not extend candidate capability boundaries automatically")
+                return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
             reasoning.append("stable capability selected for additive extension")
             return "extend", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
         reasoning.append("stable capability selected for reuse")
         return "reuse", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
-    if request_has_change_verb and (best_cap.extension_points or best_cap.public_entries):
+    if repo_stage in {"structured", "governed"} and request_has_change_verb and (best_cap.extension_points or best_cap.public_entries):
         reasoning.append("candidate capability can be extended but still needs caution")
         return "extend", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
-    reasoning.append("candidate capability selected but confidence is not high enough for automatic routing")
+    reasoning.append("capability remains below the maturity threshold for automatic routing")
     return "review", best_cap, secondary, best_score, ov, coordination_required, composite_required, reasoning
 
 
@@ -2073,6 +2422,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
             "id": capability.id,
             "name": capability.name,
             "status": capability.status,
+            "stage": capability.stage,
             "score": round(score, 4),
             "signals": signals,
         }

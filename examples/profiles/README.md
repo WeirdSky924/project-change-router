@@ -16,6 +16,13 @@
 
 示例文件：
 
+- `early-repo.project-change-router.yaml`
 - `python-monorepo.project-change-router.yaml`
 - `ts-workspace.project-change-router.yaml`
 - `mixed-repo.project-change-router.yaml`
+
+早期仓库建议：
+
+- 先只写 `ownership_rules`
+- 尽量不要一开始就写完整 `capabilities`
+- 把 owner 写成 `provisional:<name>`，避免误导成正式治理结构
