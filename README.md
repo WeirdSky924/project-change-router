@@ -189,6 +189,11 @@ python scripts/run_evaluation.py --repo <repo-root> --format json
 
 Route 输出现在还会显式给出：
 
+- `decision_basis`
+- `routing_confidence`
+- `routing_confidence_level`
+- `decision_confidence`
+- `decision_confidence_level`
 - `confidence_level`
 - `confidence_reasons`
 - `veto_reasons`
@@ -204,6 +209,16 @@ Route 输出现在还会显式给出：
 - `high`：有较强 profile / 边界 / 结构证据
 - `medium`：有部分结构证据，但仍需谨慎
 - `low`：证据不足，默认应理解为 `review`
+
+注意：
+
+- `routing_confidence` 表示“自动落到某个 capability 的证据强度”
+- `decision_confidence` 表示“当前 action 本身是否应被执行/停止的把握”
+- 因此在 `seed` 仓里出现：
+  - `action = review`
+  - `routing_confidence = 0.0 ~ 0.25`
+  - `decision_confidence = high`
+  是合理的
 
 使用建议：
 
@@ -317,6 +332,7 @@ project-change-router.profile.yml
 真实样例见：
 
 - route report: [examples/outputs/resolve-entry.pass.json](./examples/outputs/resolve-entry.pass.json)
+- seed new capability route: [examples/outputs/resolve-entry.seed-new-capability.json](./examples/outputs/resolve-entry.seed-new-capability.json)
 - `check_deps.py`: [examples/outputs/check-deps.pass.json](./examples/outputs/check-deps.pass.json)
 - `check_public_api.py`: [examples/outputs/check-public-api.pass.json](./examples/outputs/check-public-api.pass.json)
 - `check_reuse.py`: [examples/outputs/check-reuse.pass.json](./examples/outputs/check-reuse.pass.json)
@@ -336,6 +352,11 @@ project-change-router.profile.yml
 
 关键字段还包括：
 
+- `decision_basis`
+- `routing_confidence`
+- `routing_confidence_level`
+- `decision_confidence`
+- `decision_confidence_level`
 - `confidence_level`
 - `confidence_reasons`
 - `veto_reasons`

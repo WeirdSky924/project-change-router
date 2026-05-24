@@ -181,6 +181,11 @@ Do not treat generated capabilities, owners, or public entries as final architec
 
 Route outputs now also include:
 
+- `decision_basis`
+- `routing_confidence`
+- `routing_confidence_level`
+- `decision_confidence`
+- `decision_confidence_level`
 - `confidence_level`
 - `confidence_reasons`
 - `veto_reasons`
@@ -196,6 +201,15 @@ Interpretation:
 - `high`: strong profile, boundary, and structure evidence
 - `medium`: partial structure evidence, still needs care
 - `low`: insufficient evidence, usually should be treated as `review`
+
+Important distinction:
+
+- `routing_confidence` means how strong the evidence is for automatically routing into a specific capability
+- `decision_confidence` means how certain the system is about the final action itself
+- therefore in a `seed` repo it is reasonable to see:
+  - `action = review`
+  - `routing_confidence = 0.0 ~ 0.25`
+  - `decision_confidence = high`
 
 Usage:
 
@@ -309,6 +323,7 @@ Minimal bundle samples:
 Real sample outputs:
 
 - route report: [examples/outputs/resolve-entry.pass.json](./examples/outputs/resolve-entry.pass.json)
+- seed new capability route: [examples/outputs/resolve-entry.seed-new-capability.json](./examples/outputs/resolve-entry.seed-new-capability.json)
 - `check_deps.py`: [examples/outputs/check-deps.pass.json](./examples/outputs/check-deps.pass.json)
 - `check_public_api.py`: [examples/outputs/check-public-api.pass.json](./examples/outputs/check-public-api.pass.json)
 - `check_reuse.py`: [examples/outputs/check-reuse.pass.json](./examples/outputs/check-reuse.pass.json)
@@ -328,6 +343,11 @@ Typical failure signals:
 
 Important fields:
 
+- `decision_basis`
+- `routing_confidence`
+- `routing_confidence_level`
+- `decision_confidence`
+- `decision_confidence_level`
 - `confidence_level`
 - `confidence_reasons`
 - `veto_reasons`

@@ -186,6 +186,11 @@ class RouteDecision:
     request_summary: str
     repo_stage: str
     action: str
+    decision_basis: str
+    routing_confidence: float
+    routing_confidence_level: str
+    decision_confidence: float
+    decision_confidence_level: str
     confidence: float
     confidence_level: str
     overlap_score: float
@@ -307,6 +312,37 @@ def confidence_level_for(score: float) -> str:
     if score >= 0.55:
         return "medium"
     return "low"
+
+
+def decision_confidence_for(
+    action: str,
+    repo_stage: str,
+    routing_confidence: float,
+    veto_reasons: list[str],
+    high_risk: bool,
+) -> tuple[float, str, str]:
+    if action == "review":
+        if repo_stage == "seed" and veto_reasons:
+            return 0.95, "high", "policy_guardrail"
+        if veto_reasons or high_risk:
+            return 0.9, "high", "policy_guardrail"
+        if routing_confidence < 0.55:
+            return 0.8, "medium", "insufficient_route_evidence"
+        return 0.7, "medium", "guarded_review"
+    if action == "new":
+        if repo_stage == "seed":
+            return 0.9, "high", "policy_guardrail"
+        if routing_confidence < 0.55:
+            return 0.75, "medium", "capability_gap"
+        return 0.7, "medium", "capability_gap"
+    if action == "reuse":
+        score = max(0.7, routing_confidence)
+        return score, confidence_level_for(score), "capability_match"
+    if action == "extend":
+        score = max(0.72, routing_confidence)
+        return score, confidence_level_for(score), "capability_match"
+    score = max(0.72, routing_confidence)
+    return score, confidence_level_for(score), "capability_match"
 
 
 def text_tokens(text: str) -> list[str]:
@@ -2638,12 +2674,23 @@ def determine_action(
         veto_reasons.append("bundle is stale or conflicts exist")
         return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if repo_stage == "seed":
-        if not changed_paths and not targets_existing:
+        if not targets_existing:
             reasoning.append("seed-stage repository defaults to new capability suggestions")
             confidence_reasons.append("seed-stage repositories do not trust auto-reuse without changed surfaces")
             return "new", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         reasoning.append("seed-stage repository does not auto-route into existing capability boundaries")
         veto_reasons.append("repo_stage=seed blocks auto-route into existing boundaries")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
+    if extract_intent:
+        if repo_stage in {"seed", "emerging"}:
+            reasoning.append("early-stage repository requires manual review before extraction")
+            veto_reasons.append("extract is blocked in early-stage repositories")
+            return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
+        if len(changed_paths) >= 2 or len({module.path for module in changed_modules}) >= 2:
+            reasoning.append("explicit extraction intent with repeated changed surfaces")
+            return "extract", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
+        reasoning.append("explicit extraction intent without enough repeated surface evidence")
+        veto_reasons.append("extract lacks enough repeated-surface evidence")
         return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if not changed_paths and not targets_existing and best_score < auto_threshold:
         reasoning.append("request is not anchored to an existing capability or changed surface")
@@ -2664,17 +2711,6 @@ def determine_action(
             return "new", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         reasoning.append("emerging repository treats provisional capabilities as review-only")
         veto_reasons.append("repo_stage=emerging blocks auto-routing to provisional capability")
-        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
-    if extract_intent:
-        if repo_stage in {"seed", "emerging"}:
-            reasoning.append("early-stage repository requires manual review before extraction")
-            veto_reasons.append("extract is blocked in early-stage repositories")
-            return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
-        if len(changed_paths) >= 2 or len({module.path for module in changed_modules}) >= 2:
-            reasoning.append("explicit extraction intent with repeated changed surfaces")
-            return "extract", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
-        reasoning.append("explicit extraction intent without enough repeated surface evidence")
-        veto_reasons.append("extract lacks enough repeated-surface evidence")
         return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if duplicate_signal and duplicate_count >= 2 and (
         len(changed_paths) >= 2 or len({module.path for module in changed_modules}) >= 2
@@ -2742,7 +2778,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         "stale_bundle": bundle_stale(bundle_root, bundle),
         "has_conflict": bool(capability_conflicts(bundle)),
     }
-    action, primary_capability, secondary_capabilities, confidence, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons = determine_action(
+    action, primary_capability, secondary_capabilities, routing_confidence, routing_confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons = determine_action(
         request_text,
         normalized_changed_paths,
         changed_modules,
@@ -2776,12 +2812,19 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
     positive_signals = best_signals.get("positive_signals", {}) if route_scores else {}
     negative_signals = best_signals.get("negative_signals", {}) if route_scores else {}
     risk_signals = best_signals.get("risk_signals", {}) if route_scores else {}
+    decision_confidence, decision_confidence_level, decision_basis = decision_confidence_for(
+        action,
+        bundle.get("config", {}).get("repo_stage", "emerging"),
+        routing_confidence,
+        veto_reasons,
+        high_risk,
+    )
     request_has_change_verb = any(word in request_text.lower() for word in CHANGE_VERBS)
     why_not_actions = build_why_not_actions(
         action,
         bundle.get("config", {}).get("repo_stage", "emerging"),
         primary_capability,
-        confidence_level,
+        routing_confidence_level,
         request_has_change_verb,
         request_prefers_extract(request_text),
         normalized_changed_paths,
@@ -2794,7 +2837,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
     recommended_next_action, recommended_next_steps = build_recommended_next_action(
         action,
         bundle.get("config", {}).get("repo_stage", "emerging"),
-        confidence_level,
+        routing_confidence_level,
         required_reads,
         required_checks,
         negative_signals,
@@ -2807,8 +2850,13 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         request_summary=request_text.strip().splitlines()[0][:180] if request_text.strip() else "",
         repo_stage=bundle.get("config", {}).get("repo_stage", "emerging"),
         action=action,
-        confidence=round(confidence, 4),
-        confidence_level=confidence_level,
+        decision_basis=decision_basis,
+        routing_confidence=round(routing_confidence, 4),
+        routing_confidence_level=routing_confidence_level,
+        decision_confidence=round(decision_confidence, 4),
+        decision_confidence_level=decision_confidence_level,
+        confidence=round(routing_confidence, 4),
+        confidence_level=routing_confidence_level,
         overlap_score=round(ov, 4),
         primary_capability=primary_capability.id if primary_capability else None,
         primary_capability_stage=primary_capability.stage if primary_capability else None,

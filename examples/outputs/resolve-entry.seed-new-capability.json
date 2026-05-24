@@ -1,0 +1,68 @@
+{
+  "decision_id": "route-sample-seed-new-001",
+  "timestamp": "2026-05-24T08:40:00Z",
+  "request_type": "feature-addition",
+  "request_summary": "Create a brand-new memory subsystem for this repository",
+  "repo_stage": "seed",
+  "action": "new",
+  "decision_basis": "policy_guardrail",
+  "routing_confidence": 0.0,
+  "routing_confidence_level": "low",
+  "decision_confidence": 0.95,
+  "decision_confidence_level": "high",
+  "confidence": 0.0,
+  "confidence_level": "low",
+  "overlap_score": 0.0,
+  "primary_capability": null,
+  "primary_capability_stage": null,
+  "secondary_capabilities": [],
+  "candidate_capabilities": [],
+  "candidate_modules": [],
+  "required_reads": [],
+  "required_checks": [
+    "check-reuse",
+    "check-deps",
+    "check-public-api",
+    "check-index-freshness"
+  ],
+  "forbidden_paths": [],
+  "review_required": false,
+  "coordination_required": false,
+  "composite_route_required": false,
+  "recommended_next_action": "create_new_capability_or_module",
+  "recommended_next_steps": [
+    "Create the new capability in an isolated module boundary first",
+    "Update profile or ownership rules once the boundary is confirmed",
+    "Treat this route as advisory and require manual confirmation before editing",
+    "Keep repository-local routing data provisional until boundaries stabilize"
+  ],
+  "why_not_actions": {
+    "reuse": [
+      "request asks for a brand-new capability instead of reusing an existing one",
+      "seed-stage repositories do not trust existing boundaries enough for auto-reuse"
+    ],
+    "extend": [
+      "there is no trusted existing capability boundary to extend",
+      "early-stage repositories restrict automatic extension"
+    ],
+    "extract": [
+      "this is a new capability request, not a repeated implementation extraction",
+      "early-stage repositories avoid auto-extraction"
+    ],
+    "review": [
+      "policy allows direct new-capability suggestion in seed stage when no existing anchoring exists"
+    ]
+  },
+  "confidence_reasons": [
+    "no candidate capabilities were discovered",
+    "seed-stage repositories do not trust auto-reuse without changed surfaces"
+  ],
+  "veto_reasons": [],
+  "positive_signals": {},
+  "negative_signals": {},
+  "risk_signals": {},
+  "reasoning": [
+    "seed-stage repository defaults to new capability suggestions"
+  ],
+  "source_of_truths": {}
+}

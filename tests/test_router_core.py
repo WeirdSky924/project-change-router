@@ -185,6 +185,11 @@ def test_python_repo_root_detection_and_resolution(tmp_path: Path) -> None:
     assert decision.primary_capability in {"payments", "billing"}
     assert decision.action in {"extend", "review", "reuse"}
     assert decision.required_reads
+    assert decision.routing_confidence >= 0.0
+    assert decision.decision_confidence >= 0.0
+    assert decision.routing_confidence_level in {"low", "medium", "high"}
+    assert decision.decision_confidence_level in {"low", "medium", "high"}
+    assert isinstance(decision.decision_basis, str)
     assert decision.confidence_level in {"low", "medium", "high"}
     assert isinstance(decision.confidence_reasons, list)
     assert isinstance(decision.positive_signals, dict)
@@ -236,9 +241,26 @@ def test_seed_repo_stage_is_conservative(tmp_path: Path) -> None:
         repo / "project-change-router",
     )
     assert decision.action == "review"
-    assert decision.confidence_level == "low"
+    assert decision.routing_confidence_level == "low"
+    assert decision.decision_confidence_level == "high"
+    assert decision.decision_basis == "policy_guardrail"
     assert decision.veto_reasons
     assert decision.recommended_next_action == "request_human_review"
+
+
+def test_seed_repo_new_feature_prefers_new_over_review(tmp_path: Path) -> None:
+    repo = create_seed_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    decision = router_core.resolve_request(
+        "Create a brand-new memory subsystem for this repository",
+        ["memory.py"],
+        bundle,
+        repo / "project-change-router",
+    )
+    assert decision.action == "new"
+    assert decision.routing_confidence_level == "low"
+    assert decision.decision_confidence_level == "high"
+    assert decision.decision_basis == "policy_guardrail"
 
 
 def test_emerging_repo_limits_provisional_capabilities(tmp_path: Path) -> None:
@@ -254,7 +276,7 @@ def test_emerging_repo_limits_provisional_capabilities(tmp_path: Path) -> None:
         repo / "project-change-router",
     )
     if bundle["config"]["repo_stage"] in {"seed", "emerging"}:
-        assert decision.action == "review"
+        assert decision.action in {"review", "new"}
     else:
         assert decision.action in {"review", "extract"}
     assert "extract" in decision.why_not_actions
