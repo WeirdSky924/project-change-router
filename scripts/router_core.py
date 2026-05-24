@@ -2673,14 +2673,6 @@ def determine_action(
         reasoning.append("routing bundle is stale or internally inconsistent")
         veto_reasons.append("bundle is stale or conflicts exist")
         return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
-    if repo_stage == "seed":
-        if not targets_existing:
-            reasoning.append("seed-stage repository defaults to new capability suggestions")
-            confidence_reasons.append("seed-stage repositories do not trust auto-reuse without changed surfaces")
-            return "new", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
-        reasoning.append("seed-stage repository does not auto-route into existing capability boundaries")
-        veto_reasons.append("repo_stage=seed blocks auto-route into existing boundaries")
-        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if extract_intent:
         if repo_stage in {"seed", "emerging"}:
             reasoning.append("early-stage repository requires manual review before extraction")
@@ -2703,6 +2695,14 @@ def determine_action(
     if explicit_review or composite_required:
         reasoning.append("request spans multiple capability surfaces or explicitly asks for review")
         veto_reasons.append("explicit review requested or multi-capability request detected")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
+    if repo_stage == "seed":
+        if not targets_existing and not composite_required and len(changed_paths) <= 1:
+            reasoning.append("seed-stage repository defaults to new capability suggestions")
+            confidence_reasons.append("seed-stage repositories do not trust auto-reuse without changed surfaces")
+            return "new", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
+        reasoning.append("seed-stage repository does not auto-route into existing capability boundaries")
+        veto_reasons.append("repo_stage=seed blocks auto-route into existing boundaries")
         return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if repo_stage == "emerging" and best_cap.stage == "provisional":
         if not changed_paths and not targets_existing:
