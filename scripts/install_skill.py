@@ -49,11 +49,15 @@ def claude_hint_block() -> str:
     return f"""
 ## Claude Code Skill Hint: {SKILL_NAME}
 
-When a request involves deciding whether a repository change should reuse, extend, extract, introduce, or stop for review before editing code, explicitly invoke:
+When a request involves feature-level create, modify, delete, migration, reuse, extraction, or architecture-sensitive placement, explicitly invoke:
 
 `/{SKILL_NAME}`
 
-Prefer this for large repositories, architecture-sensitive changes, and any request that would benefit from repository-local routing, capability boundary checks, governance health checks, or guardrail validation.
+Use it as a direction index and guardrail system, not as an automatic architecture decision engine.
+
+Mandatory: respect capability ownership, canonical roots, `must_read_before_edit`, `allowed_write_paths`, `forbidden_write_paths`, veto signals, lifecycle review requirements, and duplicate-implementation warnings before writing product code.
+
+Advisory: treat `action`, `recommended_next_steps`, `analysis_directions`, `safe_next_steps`, and `why_not_actions` as structured unblock guidance. They inform source-code analysis and user-confirmed engineering decisions; they do not replace them.
 """
 
 
@@ -61,11 +65,15 @@ def codex_hint_block() -> str:
     return f"""
 ## Skill Hint: {SKILL_NAME}
 
-When a request involves deciding whether a repository change should reuse, extend, extract, introduce, or stop for review before editing code, explicitly invoke:
+When a request involves feature-level create, modify, delete, migration, reuse, extraction, or architecture-sensitive placement, explicitly invoke:
 
 `$project-change-router`
 
-Prefer this for large repositories, architecture-sensitive changes, and any request that would benefit from repository-local routing, capability boundary checks, governance health checks, or guardrail validation.
+Use it as a direction index and guardrail system, not as an automatic architecture decision engine.
+
+Mandatory: respect capability ownership, canonical roots, `must_read_before_edit`, `allowed_write_paths`, `forbidden_write_paths`, veto signals, lifecycle review requirements, and duplicate-implementation warnings before writing product code.
+
+Advisory: treat `action`, `recommended_next_steps`, `analysis_directions`, `safe_next_steps`, and `why_not_actions` as structured unblock guidance. They inform source-code analysis and user-confirmed engineering decisions; they do not replace them.
 """
 
 

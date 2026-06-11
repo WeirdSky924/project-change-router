@@ -4,12 +4,14 @@ The repository-local bundle includes `references/evaluation-set.yaml`.
 
 ## Purpose
 
-The evaluation set prevents routing logic from drifting silently. It provides:
+The evaluation set prevents routing logic from drifting silently. It evaluates advisory routing behavior and capability coverage; it is not a verdict that the whole guardrail model is usable or unusable.
 
 - expected route actions
 - expected primary capabilities
 - expected module reads
 - review cases for ambiguous or high-risk changes
+
+Action accuracy failures usually mean the advice layer needs calibration. They do not automatically invalidate mandatory guardrails such as owners, canonical roots, read/write constraints, veto signals, or duplicate-implementation checks.
 
 ## Minimum Expectations
 
@@ -29,7 +31,7 @@ The evaluation set prevents routing logic from drifting silently. It provides:
 
 ## Recommended Policy
 
-Do not expand hard enforcement until the evaluation set passes the configured thresholds.
+Do not expand unattended hard enforcement from advisory actions until the evaluation set passes the configured thresholds. Mandatory boundary checks and write constraints can still protect the agent while the advice layer is being calibrated.
 
 Generated evaluation now covers every generated or profile-backed capability that the bundle can identify. For mature repositories, promote real route regressions into curated cases so `generated_only` does not become a false signal of architecture maturity.
 

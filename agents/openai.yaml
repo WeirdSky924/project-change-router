@@ -1,9 +1,9 @@
 interface:
   display_name: "Project Change Router"
-  short_description: "Route repo changes to the right capability entry"
+  short_description: "Guard repo changes with routing direction and boundaries"
   icon_small: "./assets/router-icon.svg"
   icon_large: "./assets/router-icon.svg"
   brand_color: "#0F766E"
-  default_prompt: "Use $project-change-router to route the change, pick the correct capability entry, run governance health checks when capability coverage is unclear, and apply the required guardrails before editing code."
+  default_prompt: "Use $project-change-router before code edits to get capability direction, canonical-root and owner signals, mandatory read/write boundaries, duplicate-implementation risks, and advisory action guidance. Respect guardrails; use actions and unblock suggestions as input to source-code analysis, not as final architecture decisions."
 policy:
   allow_implicit_invocation: true

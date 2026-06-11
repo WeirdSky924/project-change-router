@@ -1,8 +1,31 @@
 # Governance Outputs
 
-Route reports are intentionally split into seven governance output groups. These groups are not an external feature bolted onto the router. They are first-class parts of the same `resolve_entry` route decision contract and must be read together with `action`, `primary_capability`, confidence, and required checks.
+Route reports are intentionally split into seven governance output groups. These groups are not an external feature bolted onto the router. They are first-class parts of the same `resolve_entry` route contract and must be read together with `action`, `primary_capability`, confidence, and required checks.
 
 The goal is not to make the router behave like a full architecture agent. The goal is to give the agent enough durable, low-token context to avoid writing in the wrong place, duplicating a capability, or treating weak generated evidence as architecture truth.
+
+## Mandatory vs Advisory
+
+Mandatory fields are execution guardrails. The agent must obey them before product-code writes:
+
+- `allowed_write_paths`
+- `forbidden_write_paths`
+- `must_read_before_edit`
+- `veto_reasons`
+- lifecycle review requirements
+- confirmed owners, public entries, canonical roots, and dependency direction
+
+Advisory fields are structured direction. The agent should use them to decide what to inspect, repair, or ask next, but they are not a substitute for source-code analysis:
+
+- `action`
+- `recommended_next_action`
+- `recommended_next_steps`
+- `safe_next_steps`
+- `analysis_directions`
+- `why_not_actions`
+- `profile_repair_hints`
+
+If these layers appear to conflict, guardrails win. For example, `action=extend` does not permit writes outside `allowed_write_paths`, and `action=review` does not mean the task is impossible; it means automatic product-code writes need more evidence, profile repair, or a scoped user confirmation.
 
 ## 1. Review Handling
 
@@ -28,6 +51,7 @@ Expected agent behavior:
 Do not:
 
 - Turn a `review` into an automatic `new` route just to keep working.
+- Treat `review` as a final architecture decision without doing the recommended investigation.
 - Reuse an override from a previous phase.
 - Treat `decision_confidence=high` as permission to write when `action=review`.
 

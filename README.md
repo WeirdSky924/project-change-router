@@ -2,7 +2,7 @@
 
 中文默认版。英文版见 [README.en.md](./README.en.md)。
 
-`project-change-router` 是一个面向大型仓库的 AI coding skill，可用于 Codex 和 Claude Code。它的目标不是让 agent 更大胆地猜架构，而是让 agent 更少乱猜：在真正修改代码之前，先用仓库本地的路由 bundle 判断当前变更应该 `reuse`、`extend`、`extract`、`new`，还是停在 `review` 等待更多证据。
+`project-change-router` 是一个面向大型仓库的 AI coding skill，可用于 Codex 和 Claude Code。它的目标不是让 agent 更大胆地猜架构，而是让 agent 更少乱猜：在真正修改代码之前，先用仓库本地的路由 bundle 获取能力归属、canonical root、owner、读写边界、复用风险和处理倾向。
 
 它解决的核心问题是大型项目开发中常见的结构漂移：
 
@@ -12,7 +12,7 @@
 - 本该进入底层共享能力的代码可能被写到 facade、API、UI 或临时目录里。
 - 空仓、早期仓和重构仓的边界不稳定，自动推断很容易把临时结构当成长期架构事实。
 
-这个 skill 提供的是一个低 token、可验证、可校准的“项目变更路由层”。它不替代 agent 的详细工程分析，也不替用户做最终架构决策；它负责在动手前给出路线、证据、约束、停机原因和后续校准方向。
+这个 skill 提供的是一个低 token、可验证、可校准的“项目变更方向索引与边界护栏”。它不替代 agent 的详细工程分析，也不替用户做最终架构决策；它负责在动手前给出路线、证据、强约束、风险原因和后续校准方向。
 
 ![Project Change Router overview](./assets/readme-hero.svg)
 
@@ -25,8 +25,26 @@
 - 结构证据优先于名字相似。路径、owner、public API、依赖关系、测试绑定比语义相似更可靠。
 - 早期仓库默认保守。`seed` / `emerging` 阶段不应轻易自动 `extend` 或 `extract`。
 - `review` 不是失败。它是保护机制，表示当前不能安全自动写代码，但可以进行只读分析和人工确认。
-- 路由输出是一体化契约。`action`、双置信度、`primary_capability`、写入约束、复合路由、生命周期和 closeout 必须一起解读。
+- 路由输出是一体化契约。强约束字段必须遵守，`action` 和解阻建议用于辅助判断，不能替代源码分析。
 - 结果必须能持续变准。人工 override、误判、profile 修正和真实案例应沉淀到 feedback 与 evaluation。
+
+## 两层使用模型
+
+PCR 的输出分为两层，使用时不要混在一起理解。
+
+必须执行层：
+
+- 必须尊重 `allowed_write_paths`、`forbidden_write_paths` 和 `must_read_before_edit`。
+- 必须识别并保护已有 owner、public entry、canonical root 和依赖方向。
+- 不能在已有能力可能存在时新建第二套平行实现中心。
+- 出现 `veto_reasons`、生命周期 review、低路由置信度、provisional 边界、高风险重叠时，必须先停下做确认、只读分析或 profile 修复，再写产品代码。
+
+参考建议层：
+
+- `action` 是当前证据下的处理倾向，不是最终工程命令。
+- `recommended_next_steps`、`safe_next_steps`、`analysis_directions`、`why_not_actions` 和 `profile_repair_hints` 是解阻方向和调查提示。
+- `action=review` 不等于永远不能做；它表示当前证据不足以自动写代码，需要补证据、补 profile、读源码、请求 scoped override 或进入更高级 gate。
+- 最终实现方案仍必须来自真实源码分析、依赖追踪、测试和用户确认。
 
 ## 能力范围
 
@@ -34,7 +52,7 @@
 
 - 为目标仓库生成本地 `project-change-router/` bundle。
 - 识别仓库模块、capability、owner、public entry、路径归属和依赖方向。
-- 根据请求和 changed paths 输出 route decision report。
+- 根据请求和 changed paths 输出 route report，包含强约束和建议动作。
 - 对重复实现、错误边界、public API 绕过和依赖方向问题做 guardrail 检查。
 - 通过 `path-to-capability-map.yaml` 暴露路径归属、共享归属和未覆盖模块。
 - 用 schema 校验 bundle 与报告。
@@ -45,22 +63,23 @@
 它不应该：
 
 - 替代详细代码阅读、依赖追踪、测试设计和架构分析。
-- 在 `review` 后自动继续写代码。
+- 把 `action` 当成无需分析即可执行的最终命令。
+- 在 `review` 后绕开证据补充、用户确认或 scoped override 自动继续写产品代码。
 - 把 generated-only bundle 当作成熟架构事实。
 - 因为名字相似就强行复用或扩展已有 capability。
 - 在没有确认 canonical root 时创建第二套实现中心。
 
 ## 路由动作
 
-`resolve_entry.py` 会输出五类动作：
+`resolve_entry.py` 会输出五类动作。这些动作是处理建议和调查方向，不是最终架构命令：
 
 - `reuse`：使用已有 capability，不修改核心实现。
 - `extend`：在已有共享 capability 或兼容扩展点上增加行为。
 - `extract`：先把重复逻辑抽到共享 capability，再让调用方复用。
 - `new`：没有合适复用目标，应建立新的隔离 capability 边界。
-- `review`：证据不足、风险过高或跨多能力，需要人工确认后再写。
+- `review`：证据不足、风险过高或跨多能力，需要补证据、补 profile、人工确认或 scoped override 后再写。
 
-`review` 需要特别理解：它不是“系统没用”，而是“系统很确定当前不应自动写”。在空仓或早期仓里，可能出现：
+`review` 需要特别理解：它不是“系统没用”，也不是永久阻塞，而是“系统很确定当前不应自动写”。在空仓或早期仓里，可能出现：
 
 ```json
 {
@@ -72,7 +91,7 @@
 }
 ```
 
-这表示：系统对“应该落到哪个 capability”没有把握，但对“现在应该停下来确认”很有把握。
+这表示：系统对“应该落到哪个 capability”没有把握，但对“现在应该先停下来补证据或确认”很有把握。agent 可以继续做只读分析、profile 修复建议、调用方追踪和用户确认，但不应直接写产品代码。
 
 ## 仓库阶段策略
 
@@ -95,7 +114,7 @@ capability 自身也有阶段：
 
 ## 一体化路由报告
 
-route report 不是只给一个 action。它是一个完整决策契约，核心字段包括：
+route report 不是只给一个 action。它是一个完整路由契约，核心字段包括：
 
 - `action`
 - `decision_basis`
@@ -277,20 +296,24 @@ python scripts/resolve_entry.py --repo <repo-root> --request-file request.md --c
 
 解析后执行规则：
 
-- 如果 `action=review`：不要写代码，只执行 `safe_next_steps`，必要时向用户请求 scoped override。
-- 如果 `action=reuse`：优先读取 `must_read_before_edit` 和 `required_reads`，不要改核心实现。
-- 如果 `action=extend`：只在 `allowed_write_paths` 内扩展，避免绕过 public entry。
-- 如果 `action=extract`：先确认重复面、调用方和测试，再抽共享能力。
-- 如果 `action=new`：先命名隔离边界，不要在已有 capability 旁边生成第二套平行中心。
+- 如果 `action=review`：不要自动写产品代码；先执行 `safe_next_steps`、补证据、做只读分析，必要时向用户请求 scoped override。
+- 如果 `action=reuse`：把它当成复用倾向；优先读取 `must_read_before_edit` 和 `required_reads`，不要改核心实现。
+- 如果 `action=extend`：把它当成扩展倾向；只在 `allowed_write_paths` 内扩展，避免绕过 public entry。
+- 如果 `action=extract`：把它当成抽取倾向；先确认重复面、调用方和测试，再抽共享能力。
+- 如果 `action=new`：把它当成新边界倾向；先命名隔离边界，不要在已有 capability 旁边生成第二套平行中心。
 
 ## Codex / Claude Code 提示词
 
 建议在无人值守计划或长期任务中加入：
 
 ```text
-Before any feature-level create, modify, delete, merge, deprecate, or migration work, invoke project-change-router for the target repository. Treat the route report as an integrated contract: action, routing_confidence, decision_confidence, primary_capability, write constraints, composite_route, lifecycle metadata, and post_change_closeout must be considered together.
+Before any feature-level create, modify, delete, merge, deprecate, or migration work, invoke project-change-router for the target repository. Use it as a direction index and guardrail system, not as an automatic architecture decision engine.
 
-If action=review, do not implement product code. Only perform safe_next_steps and read-only analysis unless the user provides a scoped override for the current task, phase, or changed paths. Do not reuse an override from an earlier phase.
+Treat mandatory guardrails as binding: must_read_before_edit, allowed_write_paths, forbidden_write_paths, veto_reasons, canonical root, owner, public entry, lifecycle review, and duplicate-implementation warnings must be respected before product-code writes.
+
+Treat action, recommended_next_steps, safe_next_steps, analysis_directions, profile_repair_hints, and why_not_actions as structured guidance for source-code analysis and user-confirmed decisions, not final architecture commands.
+
+If action=review, do not implement product code automatically. Continue only with safe_next_steps, read-only analysis, profile repair proposals, or a scoped user override for the current task, phase, or changed paths. Do not reuse an override from an earlier phase.
 
 Do not create a second implementation center when an existing capability or canonical root may exist. If routing evidence is weak, repair the profile or ask for confirmation instead of guessing.
 
@@ -472,8 +495,9 @@ GitHub Actions workflow 位于 [.github/workflows/ci.yml](./.github/workflows/ci
 - 首次 bootstrap 只是 first pass。
 - 没有 profile 时，结果会偏保守。
 - generated-only evaluation 只能说明系统自洽，不代表架构成熟。
-- `review_required=true` 或 `forbidden_write_paths=["**"]` 时，agent 不应写产品代码。
+- `review_required=true` 或 `forbidden_write_paths=["**"]` 时，agent 不应自动写产品代码；可以做只读分析、补证据、修 profile 建议或请求 scoped override。
 - `decision_confidence=high` 不代表可以写；它可能代表“很确定应该停”。
+- `action` 是建议动作，不是最终工程命令；写入边界、veto、owner、canonical root 和生命周期约束优先级更高。
 - 生命周期操作，例如 delete、merge、deprecate、replace、migrate，必须 review-first。
 - 这个 skill 给方向、证据和约束，最终实现方案仍应来自真实代码分析、测试和用户确认。
 

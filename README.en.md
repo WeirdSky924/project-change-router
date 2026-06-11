@@ -2,7 +2,7 @@
 
 English version. The default Chinese README is [README.md](./README.md).
 
-`project-change-router` is an AI coding skill for large repositories, usable from both Codex and Claude Code. Its goal is not to make agents guess architecture more aggressively. Its goal is to make agents guess less: before editing code, the agent should use a repository-local router bundle to decide whether the change should `reuse`, `extend`, `extract`, create something `new`, or stop at `review` until there is enough evidence.
+`project-change-router` is an AI coding skill for large repositories, usable from both Codex and Claude Code. Its goal is not to make agents guess architecture more aggressively. Its goal is to make agents guess less: before editing code, the agent should use a repository-local router bundle to get capability ownership, canonical-root signals, owners, read/write boundaries, reuse risks, and action guidance.
 
 It addresses common structural drift in large projects:
 
@@ -12,7 +12,7 @@ It addresses common structural drift in large projects:
 - Code that belongs in a shared lower-level capability can drift into a facade, API route, UI layer, or temporary folder.
 - Empty, early, and rebuild repositories have unstable boundaries, so automatic inference can easily freeze temporary structure as architecture fact.
 
-This skill provides a low-token, verifiable, calibratable project change-routing layer. It does not replace detailed engineering analysis, and it does not make final architecture decisions for the user. It gives the agent a route, evidence, constraints, stop reasons, and calibration guidance before implementation starts.
+This skill provides a low-token, verifiable, calibratable project direction index and boundary guardrail. It does not replace detailed engineering analysis, and it does not make final architecture decisions for the user. It gives the agent direction, evidence, mandatory constraints, risk reasons, and calibration guidance before implementation starts.
 
 ![Project Change Router overview](./assets/readme-hero.svg)
 
@@ -25,8 +25,26 @@ Design principles:
 - Prefer structural evidence over name similarity. Paths, owners, public APIs, dependencies, and test bindings are more reliable than semantic similarity.
 - Be conservative for early repositories. `seed` and `emerging` repositories should not automatically `extend` or `extract` too easily.
 - `review` is not a failure. It is a safety mechanism: automatic writes are unsafe, but read-only analysis and human confirmation can continue.
-- Route output is an integrated contract. `action`, dual confidence, `primary_capability`, write constraints, composite routing, lifecycle metadata, and closeout must be read together.
+- Route output is an integrated contract. Mandatory guardrail fields must be followed; `action` and unblock suggestions guide the agent but do not replace source-code analysis.
 - Results must get better over time. Human overrides, misroutes, profile fixes, and real cases should be written back into feedback and evaluation data.
+
+## Two-Layer Usage Model
+
+PCR output has two layers. Do not interpret them as the same thing.
+
+Mandatory guardrail layer:
+
+- Respect `allowed_write_paths`, `forbidden_write_paths`, and `must_read_before_edit`.
+- Identify and protect existing owners, public entries, canonical roots, and dependency direction.
+- Do not create a second parallel implementation center when an existing capability may already exist.
+- When `veto_reasons`, lifecycle review, low routing confidence, provisional boundaries, or high-risk overlaps appear, stop for confirmation, read-only analysis, or profile repair before writing product code.
+
+Advisory direction layer:
+
+- `action` is the router's current processing tendency, not a final engineering command.
+- `recommended_next_steps`, `safe_next_steps`, `analysis_directions`, `why_not_actions`, and `profile_repair_hints` are unblock directions and investigation prompts.
+- `action=review` does not mean the task is impossible. It means the current evidence is insufficient for automatic product-code writes, so the agent should gather evidence, repair profile data, read source code, request a scoped override, or pass through a higher gate.
+- The final implementation plan must still come from real source analysis, dependency tracing, tests, and user confirmation.
 
 ## Scope
 
@@ -34,7 +52,7 @@ This skill can:
 
 - Bootstrap a repository-local `project-change-router/` bundle.
 - Discover modules, capabilities, owners, public entries, path ownership, and dependency direction.
-- Produce a route decision report from a request and changed path hints.
+- Produce a route report from a request and changed path hints, including mandatory guardrails and advisory actions.
 - Run guardrails for duplicate implementation, wrong boundaries, public API bypasses, and dependency direction.
 - Generate `path-to-capability-map.yaml` to expose direct path ownership, shared ownership, and uncovered modules.
 - Validate bundles and reports with schemas.
@@ -45,22 +63,23 @@ This skill can:
 It should not:
 
 - Replace detailed code reading, dependency tracing, test design, or architecture analysis.
-- Continue writing code automatically after `review`.
+- Treat `action` as a final command that can be executed without analysis.
+- Continue writing product code automatically after `review` without evidence gathering, user confirmation, or a scoped override.
 - Treat a generated-only bundle as mature architecture fact.
 - Reuse or extend a capability only because its name looks similar.
 - Create a second implementation center before confirming the canonical root.
 
 ## Route Actions
 
-`resolve_entry.py` emits five route actions:
+`resolve_entry.py` emits five route actions. These actions are processing guidance and investigation direction, not final architecture commands:
 
 - `reuse`: use an existing capability without modifying its core implementation.
 - `extend`: add behavior through an existing shared capability or compatible extension point.
 - `extract`: move repeated logic into a shared capability before callers reuse it.
 - `new`: create a new isolated capability boundary because no safe reuse target exists.
-- `review`: stop for human confirmation because evidence is weak, risk is high, or multiple capabilities are involved.
+- `review`: gather evidence, repair profile data, request confirmation, or use a scoped override before writing because evidence is weak, risk is high, or multiple capabilities are involved.
 
-`review` needs special interpretation. It does not mean the system is useless. It means the system is confident that automatic writing is unsafe. In an empty or early repository, a valid route can look like:
+`review` needs special interpretation. It does not mean the system is useless, and it is not a permanent block. It means the system is confident that automatic writing is unsafe. In an empty or early repository, a valid route can look like:
 
 ```json
 {
@@ -72,7 +91,7 @@ It should not:
 }
 ```
 
-This means the router has no confidence about which capability should receive the change, but high confidence that the agent should stop and confirm before writing.
+This means the router has no confidence about which capability should receive the change, but high confidence that the agent should pause for evidence or confirmation before writing. The agent can still perform read-only analysis, propose profile repairs, trace callers, and ask for confirmation.
 
 ## Repository Stage Policy
 
@@ -95,7 +114,7 @@ Do not freeze generated capabilities too early. For early repositories, start wi
 
 ## Integrated Route Report
 
-A route report is not just an action. It is a complete decision contract. Core fields include:
+A route report is not just an action. It is a complete route contract. Core fields include:
 
 - `action`
 - `decision_basis`
@@ -277,20 +296,24 @@ python scripts/resolve_entry.py --repo <repo-root> --request-file request.md --c
 
 Execution rules after resolution:
 
-- If `action=review`: do not write code; only perform `safe_next_steps`, and ask the user for a scoped override if needed.
-- If `action=reuse`: read `must_read_before_edit` and `required_reads` first; do not modify the core implementation.
-- If `action=extend`: write only inside `allowed_write_paths` and avoid bypassing public entries.
-- If `action=extract`: confirm repeated surfaces, callers, and tests before extracting a shared capability.
-- If `action=new`: name an isolated boundary first; do not create a second parallel center next to an existing capability.
+- If `action=review`: do not automatically write product code; run `safe_next_steps`, gather evidence, perform read-only analysis, and ask for a scoped override if needed.
+- If `action=reuse`: treat it as a reuse tendency; read `must_read_before_edit` and `required_reads` first, and do not modify the core implementation.
+- If `action=extend`: treat it as an extension tendency; write only inside `allowed_write_paths` and avoid bypassing public entries.
+- If `action=extract`: treat it as an extraction tendency; confirm repeated surfaces, callers, and tests before extracting a shared capability.
+- If `action=new`: treat it as a new-boundary tendency; name an isolated boundary first and do not create a second parallel center next to an existing capability.
 
 ## Codex / Claude Code Prompt
 
 Recommended text for unattended plans or long-running tasks:
 
 ```text
-Before any feature-level create, modify, delete, merge, deprecate, or migration work, invoke project-change-router for the target repository. Treat the route report as an integrated contract: action, routing_confidence, decision_confidence, primary_capability, write constraints, composite_route, lifecycle metadata, and post_change_closeout must be considered together.
+Before any feature-level create, modify, delete, merge, deprecate, or migration work, invoke project-change-router for the target repository. Use it as a direction index and guardrail system, not as an automatic architecture decision engine.
 
-If action=review, do not implement product code. Only perform safe_next_steps and read-only analysis unless the user provides a scoped override for the current task, phase, or changed paths. Do not reuse an override from an earlier phase.
+Treat mandatory guardrails as binding: must_read_before_edit, allowed_write_paths, forbidden_write_paths, veto_reasons, canonical root, owner, public entry, lifecycle review, and duplicate-implementation warnings must be respected before product-code writes.
+
+Treat action, recommended_next_steps, safe_next_steps, analysis_directions, profile_repair_hints, and why_not_actions as structured guidance for source-code analysis and user-confirmed decisions, not final architecture commands.
+
+If action=review, do not implement product code automatically. Continue only with safe_next_steps, read-only analysis, profile repair proposals, or a scoped user override for the current task, phase, or changed paths. Do not reuse an override from an earlier phase.
 
 Do not create a second implementation center when an existing capability or canonical root may exist. If routing evidence is weak, repair the profile or ask for confirmation instead of guessing.
 
@@ -472,8 +495,9 @@ Be explicit about these limits:
 - First bootstrap is only a first pass.
 - Without a profile, results intentionally skew conservative.
 - Generated-only evaluation only proves system self-consistency, not architecture maturity.
-- When `review_required=true` or `forbidden_write_paths=["**"]`, agents should not write product code.
+- When `review_required=true` or `forbidden_write_paths=["**"]`, agents should not automatically write product code; they may perform read-only analysis, gather evidence, propose profile repairs, or request a scoped override.
 - `decision_confidence=high` does not mean writing is allowed; it may mean the router is highly confident that the agent should stop.
+- `action` is advisory direction, not a final engineering command; write boundaries, vetoes, owners, canonical roots, and lifecycle constraints have higher priority.
 - Lifecycle operations such as delete, merge, deprecate, replace, and migrate must be review-first.
 - This skill provides direction, evidence, and constraints. The final implementation plan still must come from real code analysis, tests, and user confirmation.
 

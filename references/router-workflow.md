@@ -11,7 +11,7 @@ Use this workflow whenever the user asks to:
 ## Operating Model
 
 1. Identify the repository root.
-2. If `project-change-router/router-config.yaml` does not exist, bootstrap the bundle with `scripts/bootstrap_router.py`.
+2. If `project-change-router/router-config.yaml` does not exist, bootstrap the bundle with `scripts/bootstrap_router.py` only when the user wants durable repository-local routing metadata.
 3. Use `scripts/resolve_entry.py` with the request text and known changed paths.
 4. Read the routed capability entries before editing.
 5. Run the required checks:
@@ -23,9 +23,32 @@ Use this workflow whenever the user asks to:
 6. If route confidence is low or multiple stable capabilities overlap, return `review`.
 7. After changes, update the bundle if the change created a new capability or changed public boundaries.
 
+## Two-Layer Contract
+
+PCR is not an automatic architecture decision engine. It separates mandatory guardrails from advisory routing guidance.
+
+Mandatory guardrails:
+
+- `allowed_write_paths`, `forbidden_write_paths`, and `must_read_before_edit`
+- canonical roots, owners, public entries, and dependency direction
+- duplicate implementation warnings
+- `veto_reasons`, lifecycle review requirements, low routing confidence, provisional boundaries, and high-risk overlaps
+
+Advisory guidance:
+
+- `action`
+- `recommended_next_action`
+- `recommended_next_steps`
+- `safe_next_steps`
+- `analysis_directions`
+- `why_not_actions`
+- `profile_repair_hints`
+
+Use advisory fields to decide what to inspect next and how to unblock the route. Final implementation choices still require source-code analysis, tests, and user-confirmed scope.
+
 ## Route Outputs
 
-The resolver emits one integrated route decision report. Governance fields are not an optional side channel; they are part of the route contract and must be interpreted with `action`, `primary_capability`, and confidence.
+The resolver emits one integrated route report. Governance fields are not an optional side channel; they are part of the route contract and must be interpreted with `action`, `primary_capability`, and confidence. Mandatory guardrails take precedence over advisory actions.
 
 The report includes:
 
@@ -48,9 +71,9 @@ The detailed contract for these integrated outputs is in `references/governance-
 
 ## Review Handling
 
-When `action=review`, the agent must not start implementation. It may only follow `safe_next_steps`, inspect the referenced bundle files, and ask at most the suggested questions that are relevant to the task.
+When `action=review`, the agent must not start product-code implementation automatically. It may follow `safe_next_steps`, inspect the referenced bundle files, repair routing metadata after confirmation, and ask the suggested questions that are relevant to the task.
 
-The skill gives direction, not final architecture decisions. Use `analysis_directions` to decide what to inspect next, then make the engineering call from real code, profile data, and user confirmation.
+The skill gives direction, not final architecture decisions. Use `analysis_directions` to decide what to inspect next, then make the engineering call from real code, profile data, tests, and user confirmation.
 
 To continue after a stop, the user override should be scoped by current task, phase, or changed paths and should record the reason. Do not reuse a Phase 0 override for later phases.
 

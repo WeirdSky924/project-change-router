@@ -2,6 +2,20 @@
 
 These examples show how an agent should use the route report as an integrated contract before editing code. They are intentionally written as execution patterns, not theory.
 
+PCR is a direction index and guardrail system, not an automatic architecture decision engine.
+
+Mandatory guardrails:
+
+- Respect `allowed_write_paths`, `forbidden_write_paths`, and `must_read_before_edit`.
+- Protect confirmed owners, public entries, canonical roots, dependency direction, and lifecycle review requirements.
+- Stop or ask for confirmation when `veto_reasons`, low routing confidence, provisional boundaries, or high-risk overlaps appear.
+
+Advisory guidance:
+
+- Treat `action`, `recommended_next_steps`, `safe_next_steps`, `analysis_directions`, `why_not_actions`, and `profile_repair_hints` as investigation and unblock guidance.
+- Do not treat `action` as a final engineering command.
+- Do not treat `action=review` as permanent refusal; it means automatic product-code writes need more evidence or scoped confirmation.
+
 ## 1. Route Before Editing
 
 User request:
@@ -32,6 +46,7 @@ Correct behavior:
 
 - Read `required_reads` and `must_read_before_edit` before editing.
 - Write only under `allowed_write_paths`.
+- Treat `action` as a route tendency while using source analysis to confirm the implementation plan.
 - Run the checks listed in `required_checks`.
 - Follow `post_change_closeout` before reporting completion.
 
@@ -67,6 +82,7 @@ Correct behavior:
 - Read `project-change-router/references/path-to-capability-map.yaml`.
 - Read `project-change-router/references/capability-catalog.yaml`.
 - Ask the user only the relevant `suggested_questions`.
+- Treat the review as an evidence-gathering gate, not as a final refusal.
 
 Acceptable scoped override:
 
@@ -77,6 +93,7 @@ I authorize overriding this router stop only for the current task and these chan
 Wrong behavior:
 
 - Converting `review` into `new` just to keep working.
+- Treating `review` as proof that the task cannot be implemented.
 - Reusing an override from a previous phase.
 - Treating `decision_confidence=high` as write permission.
 
