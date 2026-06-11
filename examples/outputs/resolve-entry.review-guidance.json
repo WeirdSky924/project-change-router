@@ -1,6 +1,6 @@
 {
-  "decision_id": "route-20260611-122834-cf37f769",
-  "timestamp": "2026-06-11T12:28:34Z",
+  "decision_id": "route-20260611-122846-cf37f769",
+  "timestamp": "2026-06-11T12:28:46Z",
   "request_type": "feature-modification",
   "request_summary": "Extend the existing router capability with repo profile support",
   "repo_stage": "seed",

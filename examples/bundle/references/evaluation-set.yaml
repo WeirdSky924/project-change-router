@@ -3,6 +3,7 @@ generated_at: "2026-05-23T13:57:18Z"
 generated_by: bootstrap_router
 source_repository: workspace
 source_commit: null
+mode: generated_only
 cases:
   - id: billing-reuse
     request: Reuse the existing billing capability entry point without changing its core behavior.

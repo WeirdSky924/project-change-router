@@ -11,6 +11,19 @@ capabilities:
       - cart
     aliases:
       - checkout
+    public_entries:
+      - "packages/checkout/src/index.ts"
+    contracts:
+      - "Scope: owns checkout flow orchestration, cart-to-order handoff, and checkout UI state under packages/checkout."
+      - "Boundary: does not own payment provider adapters, billing ledger updates, or inventory reservation internals."
+      - "Risk: changes to exported checkout hooks or order submission payloads require review."
+    lifecycle:
+      definition_version: "1.0"
+      status: stable
+      stage: stable
+      changelog:
+        - date: "2026-05-23"
+          event: initial-ts-workspace-template
 
 ownership_rules:
   - path_patterns:

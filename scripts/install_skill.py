@@ -47,13 +47,13 @@ def ensure_marked_block(path: Path, marker_name: str, body: str) -> None:
 
 def claude_hint_block() -> str:
     return f"""
-## Codex Skill Hint: {SKILL_NAME}
+## Claude Code Skill Hint: {SKILL_NAME}
 
 When a request involves deciding whether a repository change should reuse, extend, extract, introduce, or stop for review before editing code, explicitly invoke:
 
 `/{SKILL_NAME}`
 
-Prefer this for large repositories, architecture-sensitive changes, and any request that would benefit from repository-local routing, capability boundary checks, or guardrail validation.
+Prefer this for large repositories, architecture-sensitive changes, and any request that would benefit from repository-local routing, capability boundary checks, governance health checks, or guardrail validation.
 """
 
 
@@ -65,7 +65,7 @@ When a request involves deciding whether a repository change should reuse, exten
 
 `$project-change-router`
 
-Prefer this for large repositories, architecture-sensitive changes, and any request that would benefit from repository-local routing, capability boundary checks, or guardrail validation.
+Prefer this for large repositories, architecture-sensitive changes, and any request that would benefit from repository-local routing, capability boundary checks, governance health checks, or guardrail validation.
 """
 
 

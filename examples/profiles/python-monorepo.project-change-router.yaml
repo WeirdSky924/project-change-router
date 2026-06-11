@@ -12,6 +12,25 @@ capabilities:
     aliases:
       - billing
       - payments
+    public_entries:
+      - "services/billing/__init__.py"
+    contracts:
+      - "Scope: owns billing invoice calculation, payment intent preparation, and billing-facing orchestration under services/billing."
+      - "Boundary: does not own provider SDK adapters, webhook transport, or account identity policy."
+      - "Risk: changes to public billing exports, invoice schema, or money movement behavior require review."
+    test_bindings:
+      - id: billing-core-tests
+        label: Billing core tests
+        when_actions: ["extend", "extract", "review"]
+        when_changed_paths: ["services/billing/**"]
+        related_tests: ["tests/test_billing.py"]
+    lifecycle:
+      definition_version: "1.0"
+      status: stable
+      stage: stable
+      changelog:
+        - date: "2026-05-23"
+          event: initial-profile-template
 
 ownership_rules:
   - path_patterns:

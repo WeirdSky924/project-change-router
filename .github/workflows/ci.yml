@@ -42,5 +42,6 @@ jobs:
         run: |
           python scripts/bootstrap_router.py --repo . --format json
           python scripts/validate_router_bundle.py --repo . --format json
+          python scripts/check_bundle_governance.py --repo . --format json
           python scripts/check_index_freshness.py --repo . --format json
           python scripts/run_evaluation.py --repo . --format json

@@ -15,15 +15,19 @@ Use this skill to turn a large repository into a governed change-routing system.
 2. Find the repository root and look for an existing `project-change-router/` bundle.
 3. If the bundle is missing and the user explicitly wants durable routing metadata, bootstrap one from the current repository structure.
 4. Resolve the route action with the repository-local catalog and module map.
-5. Read the required capability entries and public code entry points before editing.
-6. Apply the change only in the routed layer.
-7. Run the required guardrails and capability-bound tests.
-8. If the route is `review`, stop automatic editing and report the ambiguity or risk.
-9. If the change reveals stale indexes, ownership gaps, or missing capability coverage, rebuild the bundle and record the outcome.
+5. Treat the route action, review guidance, write constraints, lifecycle metadata, composite route metadata, and closeout steps as one integrated route contract.
+6. Read the required capability entries and public code entry points before editing.
+7. Apply the change only in the routed layer.
+8. Run the required guardrails and capability-bound tests.
+9. If the route is `review`, stop automatic editing and report `block_reason`, `missing_evidence`, `analysis_directions`, `safe_next_steps`, and scoped `override_requirements`.
+10. Apply writes only inside `allowed_write_paths`, never inside `forbidden_write_paths`, and read `must_read_before_edit` first.
+11. If the change reveals stale indexes, ownership gaps, or missing capability coverage, run the governance audit before deciding whether to rebuild.
+12. Rebuild the bundle only when routing references are stale or the user explicitly asks to refresh repository-local routing data.
+13. After a routed change, follow `post_change_closeout` and record feedback or evaluation regressions when review, override, delete, merge, or capability correction happened.
 
 ## Execution Modes
 
-- Read-only mode: use `scripts/resolve_entry.py`, `scripts/check_reuse.py`, `scripts/check_deps.py`, `scripts/check_public_api.py`, `scripts/check_index_freshness.py`, and `scripts/run_evaluation.py`
+- Read-only mode: use `scripts/resolve_entry.py`, `scripts/check_reuse.py`, `scripts/check_deps.py`, `scripts/check_public_api.py`, `scripts/check_index_freshness.py`, `scripts/check_bundle_governance.py`, and `scripts/run_evaluation.py`
 - Write mode: use `scripts/bootstrap_router.py` or `scripts/rebuild_index.py` only when the user explicitly asks to create or refresh repository-local routing data
 
 Do not silently create or rebuild `project-change-router/` during an unrelated code-edit request.
@@ -36,12 +40,17 @@ Do not silently create or rebuild `project-change-router/` during an unrelated c
 - `new`: introduce a new capability because no acceptable shared fit exists
 - `review`: stop automatic routing because the request is ambiguous, high-risk, or multi-capability
 
+`review` is not an implementation decision. It is a request for more evidence. The skill should provide analysis directions and safe read-only next steps, while leaving the deeper engineering decision to the agent and user.
+
+The governance outputs are not a separate add-on. They are first-class fields of the same route decision report and must be interpreted together with `action`, `primary_capability`, and confidence.
+
 ## Repository Bundle
 
 The skill can create or validate a repository-local bundle named `project-change-router/` with:
 
 - `router-config.yaml`
 - `references/`
+- `references/path-to-capability-map.yaml`
 - `profiles/` overrides from the repository root when present
 - `schemas/`
 - `reports/`
@@ -64,6 +73,7 @@ These overrides can define capability mappings, ownership rules, risk rules, and
 - `references/repo-discovery.md`
 - `references/schema-overview.md`
 - `references/evaluation.md`
+- `references/governance-outputs.md`
 
 ## Resources
 
@@ -74,6 +84,7 @@ These overrides can define capability mappings, ownership rules, risk rules, and
 - `scripts/check_deps.py`
 - `scripts/check_public_api.py`
 - `scripts/check_index_freshness.py`
+- `scripts/check_bundle_governance.py`
 - `scripts/run_evaluation.py`
 - `scripts/sync_feedback.py`
 - `scripts/validate_router_bundle.py`

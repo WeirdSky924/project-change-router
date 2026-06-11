@@ -8,6 +8,7 @@ capabilities:
     name: Billing Capability
     status: stable
     maturity: stable
+    stage: stable
     source_of_truth: generated
     intent_keywords: ["billing", "invoice", "payment"]
     aliases: ["billing"]
@@ -29,4 +30,18 @@ capabilities:
     anti_patterns: []
     lifecycle:
       generated_from: ["services/billing"]
+      definition_version: "1.0"
+      status: stable
+      stage: stable
+      changelog:
+        - date: "2026-05-23"
+          event: generated_from_repository_structure
+      public_entry_semantics:
+        kind: generated
+      confirmation_count: 0
+      promotion_criteria:
+        - profile-backed ownership rule
+        - confirmed public entry
+        - at least two successful route confirmations
+        - curated evaluation case coverage
     last_verified_at: "2026-05-23"

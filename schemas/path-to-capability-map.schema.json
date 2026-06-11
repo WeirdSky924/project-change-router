@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "generated_by", "source_repository", "source_commit", "path_index", "lookup", "ambiguous_patterns", "uncovered_modules"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "generated_at": { "type": "string" },
+    "generated_by": { "type": "string" },
+    "source_repository": { "type": "string" },
+    "source_commit": { "type": ["string", "null"] },
+    "path_index": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path_pattern", "capabilities", "relationship", "sources", "modules", "code_file_count", "dependent_capabilities"],
+        "properties": {
+          "path_pattern": { "type": "string" },
+          "capabilities": { "type": "array", "items": { "type": "string" } },
+          "relationship": { "type": "string" },
+          "sources": { "type": "array", "items": { "type": "string" } },
+          "modules": { "type": "array", "items": { "type": "string" } },
+          "code_file_count": { "type": "integer" },
+          "dependent_capabilities": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "lookup": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "ambiguous_patterns": { "type": "array", "items": { "type": "object" } },
+    "uncovered_modules": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}

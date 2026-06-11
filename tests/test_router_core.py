@@ -127,6 +127,48 @@ ownership_rules:
     return repo
 
 
+def create_composite_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "composite-repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("[project]\nname = 'composite-repo'\nversion = '0.1.0'\n", encoding="utf-8")
+    (repo / "services" / "billing").mkdir(parents=True)
+    (repo / "services" / "billing" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "services" / "billing" / "service.py").write_text("def invoice():\n    return True\n", encoding="utf-8")
+    (repo / "services" / "shipping").mkdir(parents=True)
+    (repo / "services" / "shipping" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "services" / "shipping" / "service.py").write_text("def ship():\n    return True\n", encoding="utf-8")
+    (repo / "frontend" / "billing").mkdir(parents=True)
+    (repo / "frontend" / "billing" / "view.ts").write_text("export const invoiceView = true;\n", encoding="utf-8")
+    (repo / ".project-change-router.yaml").write_text(
+        """
+profile_id: composite
+capabilities:
+  - id: billing-core
+    name: Billing Core
+    path_patterns: ["services/billing/**"]
+    keywords: ["billing", "invoice"]
+    public_entries: ["services/billing/service.py"]
+    stage: stable
+    status: stable
+  - id: billing-ui
+    name: Billing UI
+    path_patterns: ["frontend/**"]
+    keywords: ["billing", "invoice", "ui", "display"]
+    public_entries: ["frontend/billing/view.ts"]
+    stage: stable
+    status: stable
+ownership_rules:
+  - path_patterns: ["services/billing/**"]
+    owner: billing-core-team
+  - path_patterns: ["frontend/**"]
+    owner: frontend-team
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return repo
+
+
 def create_seed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "seed-repo"
     repo.mkdir(parents=True)
@@ -198,6 +240,20 @@ def test_python_repo_root_detection_and_resolution(tmp_path: Path) -> None:
     assert isinstance(decision.recommended_next_action, str)
     assert isinstance(decision.recommended_next_steps, list)
     assert isinstance(decision.why_not_actions, dict)
+    assert isinstance(decision.block_reason, dict)
+    assert isinstance(decision.missing_evidence, list)
+    assert isinstance(decision.analysis_directions, list)
+    assert isinstance(decision.safe_next_steps, list)
+    assert isinstance(decision.suggested_questions, list)
+    assert isinstance(decision.profile_repair_hints, list)
+    assert isinstance(decision.override_requirements, list)
+    assert isinstance(decision.allowed_write_paths, list)
+    assert isinstance(decision.forbidden_write_paths, list)
+    assert isinstance(decision.must_read_before_edit, list)
+    assert isinstance(decision.post_change_closeout, list)
+    assert isinstance(decision.composite_route, dict)
+    assert isinstance(decision.capability_lifecycle_action, dict)
+    assert isinstance(decision.evaluation_regression_hints, list)
 
 
 def test_typescript_workspace_dependency_mapping(tmp_path: Path) -> None:
@@ -246,6 +302,12 @@ def test_seed_repo_stage_is_conservative(tmp_path: Path) -> None:
     assert decision.decision_basis == "policy_guardrail"
     assert decision.veto_reasons
     assert decision.recommended_next_action == "request_human_review"
+    assert decision.block_reason["code"] in {"early_repo_policy_guardrail", "missing_capability_candidate"}
+    assert decision.allowed_write_paths == []
+    assert "**" in decision.forbidden_write_paths
+    assert decision.safe_next_steps
+    assert decision.override_requirements
+    assert decision.evaluation_regression_hints
 
 
 def test_seed_repo_new_feature_prefers_new_over_review(tmp_path: Path) -> None:
@@ -287,6 +349,116 @@ def test_validate_bundle(tmp_path: Path) -> None:
     router_core.bootstrap_bundle(repo, write=True)
     errors = router_core.validate_bundle_files(repo / "project-change-router")
     assert errors == []
+    assert (repo / "project-change-router" / "references" / "path-to-capability-map.yaml").exists()
+
+
+def test_governance_audit_reports_path_index_and_profile_health(tmp_path: Path) -> None:
+    repo = create_profiled_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    path_map = bundle["path_to_capability_map"]
+    assert path_map["lookup"]["services/payments/**"] == ["payment-core"]
+    report = router_core.audit_bundle_governance(repo, bundle)
+    assert report["severity_counts"]["P0"] == 0
+    assert report["summary"]["profile_backed_capability_count"] >= 1
+    assert "findings" in report
+    assert "repair_suggestions" in report
+
+
+def test_governance_audit_flags_profile_catalog_drift(tmp_path: Path) -> None:
+    repo = create_python_repo(tmp_path)
+    (repo / ".project-change-router.yaml").write_text(
+        """
+profile_id: drift
+capabilities:
+  - id: ghost-capability
+    name: Ghost Capability
+    path_patterns: ["missing/**"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    report = router_core.audit_bundle_governance(repo, bundle)
+    assert report["status"] == "fail"
+    assert any(finding["rule"] == "profile-capability-not-in-catalog" for finding in report["findings"])
+    assert any(suggestion["kind"] == "profile_path_pattern_fix" for suggestion in report["repair_suggestions"])
+
+
+def test_capability_lifecycle_changes_are_review_only(tmp_path: Path) -> None:
+    repo = create_profiled_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    decision = router_core.resolve_request(
+        "Deprecate the existing payment-core capability and replace it with billing-runtime",
+        ["services/payments/service.py"],
+        bundle,
+        repo / "project-change-router",
+    )
+    assert decision.action == "review"
+    assert decision.block_reason["code"] == "capability_lifecycle_change"
+    assert decision.capability_lifecycle_action["intent"] == "deprecate"
+    assert decision.capability_lifecycle_action["review_required"] is True
+    assert "superseded_by" in decision.capability_lifecycle_action["required_metadata"]
+    assert decision.profile_repair_hints
+
+
+def test_composite_route_metadata_marks_cross_stack_review(tmp_path: Path) -> None:
+    repo = create_composite_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    decision = router_core.resolve_request(
+        "Modify billing invoice behavior and UI display together",
+        ["services/billing/service.py", "frontend/billing/view.ts"],
+        bundle,
+        repo / "project-change-router",
+    )
+    assert decision.action == "review"
+    assert decision.composite_route_required is True
+    assert decision.coordination_required is True
+    assert decision.composite_route["required"] is True
+    assert decision.composite_route["primary"] == "billing-core"
+    assert "billing-ui" in decision.composite_route["secondary"]
+    assert decision.composite_route["coordination_policy"] == "review_before_write"
+    assert {participant["capability"] for participant in decision.composite_route["participants"]} >= {"billing-core", "billing-ui"}
+    assert decision.allowed_write_paths == []
+    assert "**" in decision.forbidden_write_paths
+
+
+def test_route_decision_report_schema_includes_guidance(tmp_path: Path) -> None:
+    repo = create_seed_repo(tmp_path)
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    decision = router_core.resolve_request(
+        "Extend the existing platform capability with a new behavior",
+        ["app.py"],
+        bundle,
+        repo / "project-change-router",
+    )
+    errors = router_core.validate_against_schema(
+        decision.to_dict(),
+        SKILL_ROOT / "schemas" / "route-decision-report.schema.json",
+    )
+    assert errors == []
+
+
+def test_governance_report_schema_includes_repair_suggestions(tmp_path: Path) -> None:
+    repo = create_python_repo(tmp_path)
+    (repo / ".project-change-router.yaml").write_text(
+        """
+profile_id: drift
+capabilities:
+  - id: ghost-capability
+    name: Ghost Capability
+    path_patterns: ["missing/**"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    report = router_core.audit_bundle_governance(repo, bundle)
+    errors = router_core.validate_against_schema(
+        report,
+        SKILL_ROOT / "schemas" / "governance-report.schema.json",
+    )
+    assert errors == []
+    assert report["repair_suggestions"]
 
 
 def test_evaluation_runs(tmp_path: Path) -> None:

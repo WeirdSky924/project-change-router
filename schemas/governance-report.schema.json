@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["report_id", "timestamp", "status", "severity_counts", "summary", "findings", "repair_suggestions"],
+  "properties": {
+    "report_id": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "status": { "type": "string", "enum": ["pass", "warn", "fail"] },
+    "severity_counts": {
+      "type": "object",
+      "required": ["P0", "P1", "P2"],
+      "properties": {
+        "P0": { "type": "integer" },
+        "P1": { "type": "integer" },
+        "P2": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "summary": { "type": "object" },
+    "repair_suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "target", "suggestion", "confidence"],
+        "properties": {
+          "kind": { "type": "string" },
+          "target": { "type": ["string", "null"] },
+          "suggestion": { "type": "string" },
+          "confidence": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "rule", "target", "message", "recommendation"],
+        "properties": {
+          "severity": { "type": "string", "enum": ["P0", "P1", "P2"] },
+          "rule": { "type": "string" },
+          "target": { "type": "string" },
+          "message": { "type": "string" },
+          "recommendation": { "type": "string" },
+          "details": { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

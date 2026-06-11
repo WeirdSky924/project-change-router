@@ -15,6 +15,7 @@ The generated bundle contains:
 - `references/module-map.yaml`
 - `references/ownership.yaml`
 - `references/change-rules.yaml`
+- `references/path-to-capability-map.yaml`
 - `references/exception-registry.yaml`
 - `references/evaluation-set.yaml`
 - `schemas/*.json`
@@ -34,8 +35,15 @@ The bootstrap script must:
 - discover repository modules from Java, Python, TypeScript, or mixed layouts
 - classify modules into architecture layers
 - infer a first-pass capability catalog
+- generate a path-to-capability map with uncovered and ambiguous path diagnostics
 - generate a starter evaluation set
 - copy validation schemas
 - create empty report directories
 
-The first bundle is a starting point. The repository owner still needs to curate mature shared capabilities.
+After bootstrap, run:
+
+```powershell
+python scripts/check_bundle_governance.py --repo <repo-root>
+```
+
+The first bundle is a starting point. The repository owner still needs to curate mature shared capabilities, contracts, lifecycle metadata, and evaluation coverage.

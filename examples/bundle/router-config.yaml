@@ -31,6 +31,15 @@ evaluation:
   top1_accuracy_threshold: 0.8
   review_precision_threshold: 0.9
   minimum_case_count: 12
+  minimum_capability_coverage_ratio: 0.8
+repo_stage: structured
+repo_stage_score: 0.72
+repo_stage_reasons:
+  - sample profile-backed capability present
+repo_stage_signals:
+  has_profile: true
+  profile_capability_count: 1
+  evaluation_mode: curated
 route_reports_dir: reports/route-decisions
 rebuild_reports_dir: reports/index-rebuild
 guardrail_reports_dir: reports/guardrail-results

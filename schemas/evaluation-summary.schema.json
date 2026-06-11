@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["run_id", "timestamp", "case_count", "top1_action_accuracy", "top1_capability_accuracy", "review_precision", "review_recall", "false_positive_count", "false_negative_count", "per_case_results", "status"],
+  "required": ["run_id", "timestamp", "case_count", "top1_action_accuracy", "top1_capability_accuracy", "review_precision", "review_recall", "false_positive_count", "false_negative_count", "capability_count", "covered_capability_count", "capability_coverage_ratio", "uncovered_capabilities", "per_case_results", "evaluation_mode", "status", "status_reasons"],
   "properties": {
     "run_id": { "type": "string" },
     "timestamp": { "type": "string" },
@@ -12,8 +12,14 @@
     "review_recall": { "type": "number" },
     "false_positive_count": { "type": "integer" },
     "false_negative_count": { "type": "integer" },
+    "capability_count": { "type": "integer" },
+    "covered_capability_count": { "type": "integer" },
+    "capability_coverage_ratio": { "type": "number" },
+    "uncovered_capabilities": { "type": "array", "items": { "type": "string" } },
     "per_case_results": { "type": "array", "items": { "type": "object" } },
-    "status": { "type": "string" }
+    "evaluation_mode": { "type": "string" },
+    "status": { "type": "string" },
+    "status_reasons": { "type": "array", "items": { "type": "string" } }
   },
   "additionalProperties": true
 }

@@ -1,6 +1,6 @@
 {
-  "decision_id": "route-sample-seed-new-001",
-  "timestamp": "2026-05-24T08:40:00Z",
+  "decision_id": "route-20260611-123326-62157c21",
+  "timestamp": "2026-06-11T12:33:26Z",
   "request_type": "feature-addition",
   "request_summary": "Create a brand-new memory subsystem for this repository",
   "repo_stage": "seed",
@@ -8,7 +8,7 @@
   "decision_basis": "policy_guardrail",
   "routing_confidence": 0.0,
   "routing_confidence_level": "low",
-  "decision_confidence": 0.95,
+  "decision_confidence": 0.9,
   "decision_confidence_level": "high",
   "confidence": 0.0,
   "confidence_level": "low",
@@ -17,7 +17,20 @@
   "primary_capability_stage": null,
   "secondary_capabilities": [],
   "candidate_capabilities": [],
-  "candidate_modules": [],
+  "candidate_modules": [
+    {
+      "path": "scripts",
+      "id": "module-scripts",
+      "layer": "domain-service",
+      "domain": "scripts"
+    },
+    {
+      "path": "tests",
+      "id": "module-tests",
+      "layer": "domain-service",
+      "domain": "tests"
+    }
+  ],
   "required_reads": [],
   "required_checks": [
     "check-reuse",
@@ -38,31 +51,108 @@
   ],
   "why_not_actions": {
     "reuse": [
-      "request asks for a brand-new capability instead of reusing an existing one",
+      "request asks for behavior change, not just reuse",
       "seed-stage repositories do not trust existing boundaries enough for auto-reuse"
     ],
     "extend": [
-      "there is no trusted existing capability boundary to extend",
       "early-stage repositories restrict automatic extension"
     ],
     "extract": [
-      "this is a new capability request, not a repeated implementation extraction",
-      "early-stage repositories avoid auto-extraction"
+      "early-stage repositories avoid auto-extraction",
+      "request does not provide strong extraction or duplicate signals",
+      "not enough repeated changed surfaces to justify extraction"
     ],
     "review": [
-      "policy allows direct new-capability suggestion in seed stage when no existing anchoring exists"
+      "no hard veto condition forced manual review"
     ]
   },
+  "block_reason": {
+    "code": "not_blocked",
+    "severity": "none",
+    "summary": "Route does not require manual review."
+  },
+  "missing_evidence": [],
+  "analysis_directions": [],
+  "safe_next_steps": [
+    "Run check-reuse",
+    "Run check-deps",
+    "Run check-public-api",
+    "Run check-index-freshness",
+    "Choose and name the isolated new capability boundary before writing code."
+  ],
+  "suggested_questions": [],
+  "profile_repair_hints": [],
+  "override_requirements": [],
+  "allowed_write_paths": [
+    "<new-isolated-capability-boundary-after-confirmation>"
+  ],
+  "forbidden_write_paths": [],
+  "must_read_before_edit": [],
+  "post_change_closeout": [
+    {
+      "step": "rebuild_index_if_boundary_changed",
+      "command": "python scripts/rebuild_index.py --repo <repo-root>",
+      "when": "after confirmed capability, module, public entry, or lifecycle boundary changes"
+    },
+    {
+      "step": "validate_bundle",
+      "command": "python scripts/validate_router_bundle.py --repo <repo-root> --format json",
+      "when": "after any routed change"
+    },
+    {
+      "step": "governance_audit",
+      "command": "python scripts/check_bundle_governance.py --repo <repo-root> --format json",
+      "when": "after capability, ownership, public entry, lifecycle, or path boundary changes"
+    },
+    {
+      "step": "route_evaluation",
+      "command": "python scripts/run_evaluation.py --repo <repo-root> --format json",
+      "when": "after route-affecting changes or before committing router metadata"
+    },
+    {
+      "step": "record_feedback",
+      "command": "python scripts/sync_feedback.py --repo <repo-root> --feedback-file <feedback.json> --format json",
+      "when": "after human review or override"
+    }
+  ],
+  "composite_route": {
+    "required": false,
+    "primary": null,
+    "secondary": [],
+    "participants": [],
+    "coordination_policy": "single_route_or_not_required"
+  },
+  "capability_lifecycle_action": {
+    "intent": "none",
+    "review_required": false,
+    "required_metadata": []
+  },
+  "evaluation_regression_hints": [],
   "confidence_reasons": [
-    "no candidate capabilities were discovered",
-    "seed-stage repositories do not trust auto-reuse without changed surfaces"
+    "no candidate capabilities were discovered"
   ],
   "veto_reasons": [],
   "positive_signals": {},
   "negative_signals": {},
   "risk_signals": {},
   "reasoning": [
-    "seed-stage repository defaults to new capability suggestions"
+    "no capability candidates were discovered"
   ],
-  "source_of_truths": {}
+  "source_of_truths": {
+    "capability_catalog": {
+      "generated_by": "bootstrap_router",
+      "generated_at": "2026-06-11T12:32:55Z",
+      "source_commit": "f4b7c90b77828d5cad306acf7ec8d84962926744"
+    },
+    "module_map": {
+      "generated_by": "bootstrap_router",
+      "generated_at": "2026-06-11T12:32:55Z",
+      "source_commit": "f4b7c90b77828d5cad306acf7ec8d84962926744"
+    },
+    "exception_registry": {
+      "generated_by": "bootstrap_router",
+      "generated_at": "2026-06-11T12:32:56Z",
+      "source_commit": "f4b7c90b77828d5cad306acf7ec8d84962926744"
+    }
+  }
 }

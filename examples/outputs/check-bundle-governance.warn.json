@@ -1,0 +1,59 @@
+{
+  "report_id": "governance-20260611-123326",
+  "timestamp": "2026-06-11T12:33:26Z",
+  "status": "warn",
+  "severity_counts": {
+    "P0": 0,
+    "P1": 2,
+    "P2": 0
+  },
+  "summary": {
+    "module_count": 2,
+    "capability_count": 2,
+    "profile_capability_count": 0,
+    "profile_backed_capability_count": 0,
+    "generated_capability_count": 2,
+    "evaluation_case_count": 12,
+    "path_index_count": 2,
+    "repair_suggestion_count": 2
+  },
+  "findings": [
+    {
+      "severity": "P1",
+      "rule": "large-capability-contracts-too-thin",
+      "target": "scripts",
+      "message": "A large capability has too few contracts for its code surface.",
+      "recommendation": "Add concrete boundary and risk contracts before trusting automatic extend/extract decisions.",
+      "details": {
+        "code_file_count": 14,
+        "contract_count": 0,
+        "minimum": 4
+      }
+    },
+    {
+      "severity": "P1",
+      "rule": "large-capability-forbidden-density-too-low",
+      "target": "scripts",
+      "message": "A large capability has very few forbidden patterns or anti-patterns.",
+      "recommendation": "Add forbidden patterns for duplicate implementations, bypassed public APIs, and misplaced local caches.",
+      "details": {
+        "code_file_count": 14,
+        "forbidden_count": 0
+      }
+    }
+  ],
+  "repair_suggestions": [
+    {
+      "kind": "contract_completion",
+      "target": "scripts",
+      "suggestion": "Add scope, boundary, cross-capability, and risk contracts. Keep each contract concrete and enforceable.",
+      "confidence": "high"
+    },
+    {
+      "kind": "forbidden_pattern_completion",
+      "target": "scripts",
+      "suggestion": "Add forbidden patterns for duplicate implementation centers, bypassed public APIs, misplaced caches, and cross-layer writes.",
+      "confidence": "medium"
+    }
+  ]
+}

@@ -19,12 +19,15 @@ Use this workflow whenever the user asks to:
    - `scripts/check_deps.py`
    - `scripts/check_public_api.py`
    - `scripts/check_index_freshness.py`
+   - `scripts/check_bundle_governance.py`
 6. If route confidence is low or multiple stable capabilities overlap, return `review`.
 7. After changes, update the bundle if the change created a new capability or changed public boundaries.
 
 ## Route Outputs
 
-The resolver emits:
+The resolver emits one integrated route decision report. Governance fields are not an optional side channel; they are part of the route contract and must be interpreted with `action`, `primary_capability`, and confidence.
+
+The report includes:
 
 - route action
 - confidence
@@ -33,5 +36,36 @@ The resolver emits:
 - required reads
 - required checks
 - whether coordination or review is required
+- block reason and missing evidence when review is required
+- safe read-only next steps and suggested human questions
+- allowed and forbidden write paths
+- post-change closeout steps
+- lifecycle action requirements for delete, merge, deprecate, or migrate requests
+- composite route participants for cross-stack changes
+- evaluation regression hints for human-confirmed routing outcomes
+
+The detailed contract for these integrated outputs is in `references/governance-outputs.md`.
+
+## Review Handling
+
+When `action=review`, the agent must not start implementation. It may only follow `safe_next_steps`, inspect the referenced bundle files, and ask at most the suggested questions that are relevant to the task.
+
+The skill gives direction, not final architecture decisions. Use `analysis_directions` to decide what to inspect next, then make the engineering call from real code, profile data, and user confirmation.
+
+To continue after a stop, the user override should be scoped by current task, phase, or changed paths and should record the reason. Do not reuse a Phase 0 override for later phases.
+
+## Write Constraints
+
+Before editing, read `must_read_before_edit`. Writes are allowed only under `allowed_write_paths` and must avoid `forbidden_write_paths`. For `review`, `allowed_write_paths` is empty and `forbidden_write_paths` includes `**`.
+
+## Closeout
+
+After implementation, follow `post_change_closeout`. If capability boundaries, public entries, ownership, lifecycle metadata, or generated files changed, run rebuild/validate/governance/evaluation and record feedback where needed.
+
+## Governance Checks
+
+Run `scripts/check_bundle_governance.py` when onboarding a repository, after a large structure change, or when route results repeatedly stop with missing capability candidates.
+
+Treat P0 findings as blockers. P1 findings should usually become profile/catalog or evaluation-set work before unattended execution continues. P2 findings are maintenance items.
 
 The resolver should never treat the catalog as infallible. Real code remains the final source of truth.

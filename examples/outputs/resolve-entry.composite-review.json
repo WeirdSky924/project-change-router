@@ -1,0 +1,347 @@
+{
+  "decision_id": "route-example-composite-review",
+  "timestamp": "2026-06-11T12:40:49Z",
+  "request_type": "feature-modification",
+  "request_summary": "Modify billing invoice behavior and UI display together",
+  "repo_stage": "emerging",
+  "action": "review",
+  "decision_basis": "policy_guardrail",
+  "routing_confidence": 0.7,
+  "routing_confidence_level": "medium",
+  "decision_confidence": 0.9,
+  "decision_confidence_level": "high",
+  "confidence": 0.7,
+  "confidence_level": "medium",
+  "overlap_score": 1.0,
+  "primary_capability": "billing-core",
+  "primary_capability_stage": "stable",
+  "secondary_capabilities": [
+    "billing-ui"
+  ],
+  "candidate_capabilities": [
+    {
+      "id": "billing-core",
+      "name": "Billing Core",
+      "status": "stable",
+      "stage": "stable",
+      "score": 0.7,
+      "signals": {
+        "intent_match": 1.0,
+        "path_proximity": 0.5,
+        "dependency_proximity": 0.0,
+        "public_entry_available": 1.0,
+        "extension_point_available": 0.0,
+        "owner_coverage": 1.0,
+        "raw_score": 0.7,
+        "penalty": 0.0,
+        "candidate_score": 0.7,
+        "positive_signals": {
+          "profile_backed": true,
+          "path_proximity": 0.5,
+          "dependency_proximity": 0.0,
+          "has_public_entries": true,
+          "has_extension_points": false,
+          "owner_modules_count": 1,
+          "matching_intent": true,
+          "repo_stage": "emerging"
+        },
+        "negative_signals": {
+          "capability_stage": "stable",
+          "provisional_stage": false,
+          "heuristic_public_entry": false,
+          "owner_unclear": false,
+          "generated_only": false,
+          "profile_missing": false,
+          "multi_module_span": true
+        },
+        "risk_signals": {
+          "keyword_hit": true,
+          "high_risk_capability": true,
+          "repo_stage": "emerging",
+          "request_requires_review": false,
+          "duplicate_signal": false
+        }
+      }
+    },
+    {
+      "id": "billing-ui",
+      "name": "Billing UI",
+      "status": "stable",
+      "stage": "stable",
+      "score": 0.7,
+      "signals": {
+        "intent_match": 1.0,
+        "path_proximity": 0.5,
+        "dependency_proximity": 0.0,
+        "public_entry_available": 1.0,
+        "extension_point_available": 0.0,
+        "owner_coverage": 1.0,
+        "raw_score": 0.7,
+        "penalty": 0.0,
+        "candidate_score": 0.7,
+        "positive_signals": {
+          "profile_backed": true,
+          "path_proximity": 0.5,
+          "dependency_proximity": 0.0,
+          "has_public_entries": true,
+          "has_extension_points": false,
+          "owner_modules_count": 1,
+          "matching_intent": true,
+          "repo_stage": "emerging"
+        },
+        "negative_signals": {
+          "capability_stage": "stable",
+          "provisional_stage": false,
+          "heuristic_public_entry": false,
+          "owner_unclear": false,
+          "generated_only": false,
+          "profile_missing": false,
+          "multi_module_span": true
+        },
+        "risk_signals": {
+          "keyword_hit": true,
+          "high_risk_capability": true,
+          "repo_stage": "emerging",
+          "request_requires_review": false,
+          "duplicate_signal": false
+        }
+      }
+    }
+  ],
+  "candidate_modules": [
+    {
+      "path": "services/billing",
+      "id": "module-services-billing",
+      "layer": "shared-capability",
+      "domain": "billing"
+    },
+    {
+      "path": "frontend",
+      "id": "module-frontend",
+      "layer": "ui",
+      "domain": "frontend"
+    }
+  ],
+  "required_reads": [
+    "services/billing/service.py",
+    "services/billing/__init__.py"
+  ],
+  "required_checks": [
+    "check-reuse",
+    "check-deps",
+    "check-public-api",
+    "check-index-freshness"
+  ],
+  "forbidden_paths": [],
+  "review_required": true,
+  "coordination_required": true,
+  "composite_route_required": true,
+  "recommended_next_action": "request_human_review",
+  "recommended_next_steps": [
+    "Read services/billing/service.py",
+    "Read services/billing/__init__.py",
+    "Record the final decision with sync_feedback.py after human review",
+    "Keep repository-local routing data provisional until boundaries stabilize",
+    "Reason for caution: high-risk capability or overlapping high-risk candidates"
+  ],
+  "why_not_actions": {
+    "reuse": [
+      "request asks for behavior change, not just reuse"
+    ],
+    "extend": [
+      "early-stage repositories restrict automatic extension"
+    ],
+    "extract": [
+      "early-stage repositories avoid auto-extraction"
+    ],
+    "new": [
+      "existing structure evidence is strong enough to avoid creating a brand-new capability",
+      "cross-module change should be reviewed before creating a new capability"
+    ]
+  },
+  "block_reason": {
+    "code": "high_risk_surface",
+    "severity": "P0",
+    "summary": "The request touches a high-risk surface."
+  },
+  "missing_evidence": [],
+  "analysis_directions": [
+    "Inspect the path-to-capability map and capability catalog before making any code changes.",
+    "Classify the changed surface as core capability, facade, adapter, UI transport, test, or governance metadata.",
+    "Compare candidate capabilities by owner_modules, public_entries, contracts, and dependency_priority.",
+    "Review contracts and forbidden patterns for billing-core before proposing implementation work.",
+    "Trace imports and callers for the changed paths to verify whether this is reuse, extension, extraction, or a new boundary."
+  ],
+  "safe_next_steps": [
+    "Read project-change-router/references/path-to-capability-map.yaml for the changed paths.",
+    "Read project-change-router/references/capability-catalog.yaml for candidate capabilities.",
+    "Read services/billing/service.py",
+    "Read services/billing/__init__.py",
+    "Run python scripts/check_bundle_governance.py --repo <repo-root> --format json before editing.",
+    "Run python scripts/validate_router_bundle.py --repo <repo-root> --format json if the bundle may be stale."
+  ],
+  "suggested_questions": [
+    "Which candidate is the primary route for this change: billing-core, billing-ui?",
+    "Is this phase limited to routing/governance scaffolding, or is product behavior implementation allowed?"
+  ],
+  "profile_repair_hints": [
+    {
+      "kind": "evaluation_case",
+      "suggestion": "After the human decision, add a curated evaluation case for this routing scenario.",
+      "confidence": "high"
+    }
+  ],
+  "override_requirements": [
+    {
+      "scope": "current_task",
+      "required_text": "I authorize overriding this router stop only for the current task after recording the reason.",
+      "must_record_reason": true,
+      "expires_after": "current_task"
+    },
+    {
+      "scope": "paths",
+      "allowed_paths": [
+        "services/billing/service.py",
+        "frontend/billing/view.ts"
+      ],
+      "must_record_reason": true,
+      "expires_after": "current_task"
+    }
+  ],
+  "allowed_write_paths": [],
+  "forbidden_write_paths": [
+    "**"
+  ],
+  "must_read_before_edit": [
+    "services/billing/service.py",
+    "services/billing/__init__.py",
+    "services/billing"
+  ],
+  "post_change_closeout": [
+    {
+      "step": "validate_bundle",
+      "command": "python scripts/validate_router_bundle.py --repo <repo-root> --format json",
+      "when": "after any routed change"
+    },
+    {
+      "step": "governance_audit",
+      "command": "python scripts/check_bundle_governance.py --repo <repo-root> --format json",
+      "when": "after capability, ownership, public entry, lifecycle, or path boundary changes"
+    },
+    {
+      "step": "route_evaluation",
+      "command": "python scripts/run_evaluation.py --repo <repo-root> --format json",
+      "when": "after route-affecting changes or before committing router metadata"
+    },
+    {
+      "step": "record_feedback",
+      "command": "python scripts/sync_feedback.py --repo <repo-root> --feedback-file <feedback.json> --format json",
+      "when": "after human review or override"
+    },
+    {
+      "step": "capability_summary",
+      "command": "Report whether owner_modules, public_entries, contracts, lifecycle, or evaluation cases changed.",
+      "when": "before closing work on billing-core"
+    },
+    {
+      "step": "gitignore_inclusion_check",
+      "command": "Check whether generated or report directories should be ignored before commit.",
+      "when": "after creating files"
+    }
+  ],
+  "composite_route": {
+    "required": true,
+    "primary": "billing-core",
+    "secondary": [
+      "billing-ui"
+    ],
+    "participants": [
+      {
+        "capability": "billing-core",
+        "role": "primary",
+        "stage": "stable",
+        "score": 0.7
+      },
+      {
+        "capability": "billing-ui",
+        "role": "secondary",
+        "stage": "stable",
+        "score": 0.7
+      }
+    ],
+    "coordination_policy": "review_before_write"
+  },
+  "capability_lifecycle_action": {
+    "intent": "none",
+    "review_required": false,
+    "required_metadata": []
+  },
+  "evaluation_regression_hints": [
+    {
+      "kind": "route_regression_case",
+      "suggested_id": "high-risk-surface-modify-billing-invoice-behavior-and-ui-display-t",
+      "expected_action": "review",
+      "expected_capabilities": [
+        "billing-core"
+      ],
+      "changed_paths": [
+        "services/billing/service.py",
+        "frontend/billing/view.ts"
+      ],
+      "reason": "Capture this route outcome after human confirmation so future agents do not repeat the same ambiguity."
+    }
+  ],
+  "confidence_reasons": [
+    "profile-backed capability mapping",
+    "public entry evidence exists"
+  ],
+  "veto_reasons": [
+    "high-risk capability or overlapping high-risk candidates"
+  ],
+  "positive_signals": {
+    "profile_backed": true,
+    "path_proximity": 0.5,
+    "dependency_proximity": 0.0,
+    "has_public_entries": true,
+    "has_extension_points": false,
+    "owner_modules_count": 1,
+    "matching_intent": true,
+    "repo_stage": "emerging"
+  },
+  "negative_signals": {
+    "capability_stage": "stable",
+    "provisional_stage": false,
+    "heuristic_public_entry": false,
+    "owner_unclear": false,
+    "generated_only": false,
+    "profile_missing": false,
+    "multi_module_span": true
+  },
+  "risk_signals": {
+    "keyword_hit": true,
+    "high_risk_capability": true,
+    "repo_stage": "emerging",
+    "request_requires_review": false,
+    "duplicate_signal": false
+  },
+  "reasoning": [
+    "high-risk request requires manual review"
+  ],
+  "source_of_truths": {
+    "capability_catalog": {
+      "generated_by": "bootstrap_router",
+      "generated_at": "2026-06-11T12:40:49Z",
+      "source_commit": null
+    },
+    "module_map": {
+      "generated_by": "bootstrap_router",
+      "generated_at": "2026-06-11T12:40:49Z",
+      "source_commit": null
+    },
+    "exception_registry": {
+      "generated_by": "bootstrap_router",
+      "generated_at": "2026-06-11T12:40:49Z",
+      "source_commit": null
+    }
+  }
+}

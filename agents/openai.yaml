@@ -4,6 +4,6 @@ interface:
   icon_small: "./assets/router-icon.svg"
   icon_large: "./assets/router-icon.svg"
   brand_color: "#0F766E"
-  default_prompt: "Use $project-change-router to route the change, pick the correct capability entry, and apply the required guardrails before editing code."
+  default_prompt: "Use $project-change-router to route the change, pick the correct capability entry, run governance health checks when capability coverage is unclear, and apply the required guardrails before editing code."
 policy:
   allow_implicit_invocation: true

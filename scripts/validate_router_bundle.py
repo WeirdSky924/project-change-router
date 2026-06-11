@@ -5,7 +5,7 @@ import argparse
 import json
 from pathlib import Path
 
-from router_core import resolve_bundle_root, validate_bundle_files
+from router_core import audit_bundle_governance, load_bundle, resolve_bundle_root, validate_bundle_files
 
 
 def main() -> int:
@@ -18,10 +18,17 @@ def main() -> int:
     repo_root = Path(args.repo).resolve()
     bundle_root = resolve_bundle_root(repo_root)
     errors = validate_bundle_files(bundle_root)
+    bundle = load_bundle(bundle_root)
+    governance = audit_bundle_governance(repo_root, bundle) if bundle else {}
     report = {
         "status": "pass" if not errors else "fail",
         "bundle_root": str(bundle_root),
         "errors": errors,
+        "governance": {
+            "status": governance.get("status"),
+            "severity_counts": governance.get("severity_counts", {}),
+            "finding_count": len(governance.get("findings", [])),
+        },
     }
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

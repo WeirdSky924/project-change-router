@@ -1,0 +1,24 @@
+schema_version: 1
+generated_at: "2026-05-23T13:57:18Z"
+generated_by: bootstrap_router
+source_repository: sample-repo
+source_commit: null
+path_index:
+  - path_pattern: "services/billing/**"
+    capabilities:
+      - billing
+    relationship: unique
+    sources:
+      - owner_modules
+      - scope.paths
+    modules:
+      - services/billing
+    code_file_count: 2
+    dependent_capabilities: []
+    capability_stage: stable
+    capability_source_of_truth: generated
+lookup:
+  "services/billing/**":
+    - billing
+ambiguous_patterns: []
+uncovered_modules: []

@@ -9,6 +9,119 @@ confidence:
 high_risk_conditions:
   - auth-or-payment-change
   - public-contract-change
+high_risk_capability_ids: []
+high_risk_module_patterns: []
+dependency_priority:
+  billing: 1
+new_capability_policy:
+  minimum_positive_conditions: 2
+  positive_conditions:
+    - new service or package boundary contains at least two source modules
+    - path patterns do not overlap any existing non-deprecated capability
+    - independent tests or evaluation cases can be attached to the new boundary
+    - the new boundary exposes a public entry that other capabilities can reuse
+  non_qualifying_patterns:
+    - single CRUD shell without domain behavior
+    - facade-only route that delegates entirely to an existing capability
+    - temporary bootstrap or migration scaffold
+    - name similarity without path, owner, or public-entry evidence
+  required_sections:
+    - id
+    - name
+    - path_patterns
+    - owner_modules
+    - public_entries
+    - contracts
+    - test_bindings
+    - lifecycle
+  default_action_when_conditions_not_met: review
+contract_quality_policy:
+  recommended_contract_types:
+    - scope
+    - boundary
+    - cross-capability
+    - risk
+  min_contracts_for_profile_capability: 3
+  min_contracts_for_large_capability: 4
+  large_capability_file_threshold: 10
+  recommended_contract_chars:
+    min: 50
+    max: 240
+capability_lifecycle_policy:
+  stages:
+    - provisional
+    - candidate
+    - stable
+    - governed-capability
+    - deprecated
+  promotion_rules:
+    - provisional -> candidate requires a profile-backed owner or one confirmed route
+    - candidate -> stable requires confirmed public entries and at least two successful route confirmations
+    - stable -> governed-capability requires curated evaluation coverage and active guardrails
+    - deprecated capabilities must set superseded_by, deprecation_date, and migration_note
+capability_retirement_policy:
+  delete_requires_review: true
+  merge_requires_review: true
+  deprecate_requires_metadata:
+    - superseded_by
+    - deprecation_date
+    - migration_note
+    - affected_callers
+    - regression_tests
+  must_check_before_removal:
+    - public_entries
+    - dependent_modules
+    - related_tests
+    - path_to_capability_map
+    - evaluation_cases
+composite_route_policy:
+  primary_selection_order:
+    - dependency_priority
+    - profile_backed
+    - path_proximity
+    - public_entry
+    - stage
+  facade_and_ui_changes_should_delegate_to_core: true
+  multi_capability_core_changes_require_review: true
+  allowed_roles:
+    - primary
+    - facade
+    - adapter
+    - ui
+    - test
+    - migration
+    - governance
+post_change_closeout_policy:
+  required_steps:
+    - rebuild_index_if_boundary_changed
+    - validate_bundle
+    - governance_audit
+    - route_evaluation
+    - record_feedback_after_review_or_override
+  report_required_fields:
+    - capability_changed
+    - public_entry_changed
+    - owner_changed
+    - evaluation_case_added
+    - generated_files_gitignore_checked
+regression_capture_policy:
+  capture_on:
+    - review
+    - override
+    - false_positive
+    - false_negative
+    - manual_capability_correction
+  case_sources:
+    - route_report
+    - manual_feedback
+    - governance_finding
+  minimum_case_fields:
+    - id
+    - request
+    - expected_action
+    - expected_capabilities
+    - changed_paths
+    - risk_level
 route_rules:
   - name: prefer-reuse-for-stable-capability
     when:

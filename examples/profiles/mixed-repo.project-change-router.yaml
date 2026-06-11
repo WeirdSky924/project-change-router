@@ -12,6 +12,20 @@ capabilities:
       - listing
     aliases:
       - catalog
+    public_entries:
+      - "services/catalog/__init__.py"
+      - "packages/web/src/index.ts"
+    contracts:
+      - "Scope: coordinates catalog domain behavior across backend catalog services and the web package entry point."
+      - "Boundary: does not own checkout, billing, or unrelated app-shell navigation state."
+      - "Cross-capability: frontend transport may call this capability through public API clients only."
+    lifecycle:
+      definition_version: "1.0"
+      status: candidate
+      stage: candidate
+      changelog:
+        - date: "2026-05-23"
+          event: initial-mixed-template
 
 ownership_rules:
   - path_patterns:

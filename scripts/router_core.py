@@ -208,6 +208,20 @@ class RouteDecision:
     recommended_next_action: str
     recommended_next_steps: list[str]
     why_not_actions: dict[str, Any]
+    block_reason: dict[str, Any]
+    missing_evidence: list[dict[str, Any]]
+    analysis_directions: list[str]
+    safe_next_steps: list[str]
+    suggested_questions: list[str]
+    profile_repair_hints: list[dict[str, Any]]
+    override_requirements: list[dict[str, Any]]
+    allowed_write_paths: list[str]
+    forbidden_write_paths: list[str]
+    must_read_before_edit: list[str]
+    post_change_closeout: list[dict[str, Any]]
+    composite_route: dict[str, Any]
+    capability_lifecycle_action: dict[str, Any]
+    evaluation_regression_hints: list[dict[str, Any]]
     confidence_reasons: list[str]
     veto_reasons: list[str]
     positive_signals: dict[str, Any]
@@ -503,6 +517,7 @@ def load_bundle(bundle_root: Path) -> dict[str, Any]:
         "module_map": load_yaml_file(references / "module-map.yaml"),
         "ownership": load_yaml_file(references / "ownership.yaml"),
         "change_rules": load_yaml_file(references / "change-rules.yaml"),
+        "path_to_capability_map": load_yaml_file(references / "path-to-capability-map.yaml"),
         "exception_registry": load_yaml_file(references / "exception-registry.yaml"),
         "evaluation_set": load_yaml_file(references / "evaluation-set.yaml"),
     }
@@ -567,6 +582,7 @@ def validate_bundle(bundle_root: Path, skill_root: Optional[Path] = None) -> lis
         (refs / "module-map.yaml", schema_root / "module-map.schema.json"),
         (refs / "ownership.yaml", schema_root / "ownership.schema.json"),
         (refs / "change-rules.yaml", schema_root / "change-rules.schema.json"),
+        (refs / "path-to-capability-map.yaml", schema_root / "path-to-capability-map.schema.json"),
         (refs / "exception-registry.yaml", schema_root / "exception-registry.schema.json"),
         (refs / "evaluation-set.yaml", schema_root / "evaluation-set.schema.json"),
     ]
@@ -1629,6 +1645,23 @@ def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], prof
         consumed_modules.update(module.path for module in matched)
         profile_stage = item.get("stage", "governed-capability" if item.get("status", "stable") == "stable" else "stable")
         profile_status = item.get("status", "stable")
+        item_lifecycle = dict(item.get("lifecycle", {}))
+        item_lifecycle.setdefault("profile_id", profile.get("profile_id"))
+        item_lifecycle.setdefault("definition_version", item.get("version", "1.0"))
+        item_lifecycle.setdefault("status", profile_status)
+        item_lifecycle.setdefault("stage", profile_stage)
+        item_lifecycle.setdefault("changelog", item.get("changelog", []))
+        if item.get("superseded_by"):
+            item_lifecycle["superseded_by"] = item["superseded_by"]
+        if item.get("deprecation_date"):
+            item_lifecycle["deprecation_date"] = item["deprecation_date"]
+        if item.get("migration_note"):
+            item_lifecycle["migration_note"] = item["migration_note"]
+        item_lifecycle["public_entry_semantics"] = public_entry_semantics(
+            list(dict.fromkeys(item.get("public_entries", []) + infer_public_entries_from_modules(matched))),
+            "governed",
+            True,
+        )
         capabilities.append(
             CapabilityEntry(
                 id=item["id"],
@@ -1655,14 +1688,7 @@ def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], prof
                 forbidden_patterns=item.get("forbidden_patterns", []),
                 dependent_modules=[],
                 anti_patterns=item.get("anti_patterns", []),
-                lifecycle={
-                    "profile_id": profile.get("profile_id"),
-                    "public_entry_semantics": public_entry_semantics(
-                        list(dict.fromkeys(item.get("public_entries", []) + infer_public_entries_from_modules(matched))),
-                        "governed",
-                        True,
-                    ),
-                },
+                lifecycle=item_lifecycle,
                 last_verified_at=today_date(),
             )
         )
@@ -1744,8 +1770,23 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
                 anti_patterns=["copying core logic outside owner modules"] if stage in {"stable", "governed-capability"} else [],
                 lifecycle={
                     "generated_from": [module.path for module in grouped_modules],
+                    "definition_version": "1.0",
+                    "status": status,
+                    "stage": stage,
+                    "changelog": [
+                        {
+                            "date": today_date(),
+                            "event": "generated_from_repository_structure",
+                        }
+                    ],
                     "public_entry_semantics": public_entry_semantics(public_entries, repo_stage, False),
                     "confirmation_count": confirmation_count,
+                    "promotion_criteria": [
+                        "profile-backed ownership rule",
+                        "confirmed public entry",
+                        "at least two successful route confirmations",
+                        "curated evaluation case coverage",
+                    ],
                 },
                 last_verified_at=today_date(),
             )
@@ -1824,6 +1865,139 @@ def build_ownership(capabilities: list[CapabilityEntry], modules: list[ModuleEnt
     }
 
 
+def module_path_pattern(module_path: str) -> str:
+    normalized = module_path.replace("\\", "/").strip("/")
+    if not normalized or normalized == ".":
+        return "**"
+    return f"{normalized}/**"
+
+
+def build_path_to_capability_map(repo_root: Path, capabilities: list[CapabilityEntry], modules: list[ModuleEntry]) -> dict[str, Any]:
+    module_by_path = {module.path: module for module in modules}
+    claims: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    capability_by_id = {capability.id: capability for capability in capabilities}
+
+    for capability in capabilities:
+        for owner in capability.owner_modules:
+            claims[module_path_pattern(owner)].append(
+                {
+                    "capability": capability.id,
+                    "source": "owner_modules",
+                    "module": owner,
+                }
+            )
+        for path in capability.scope.get("paths", []):
+            pattern = module_path_pattern(str(path))
+            if not any(item["capability"] == capability.id for item in claims.get(pattern, [])):
+                claims[pattern].append(
+                    {
+                        "capability": capability.id,
+                        "source": "scope.paths",
+                        "module": str(path),
+                    }
+                )
+
+    covered_modules = {
+        item["module"]
+        for claim_items in claims.values()
+        for item in claim_items
+        if item.get("module") in module_by_path
+    }
+    uncovered_modules = sorted(module.path for module in modules if module.path not in covered_modules)
+    for module_path in uncovered_modules:
+        claims[module_path_pattern(module_path)].append(
+            {
+                "capability": None,
+                "source": "uncovered_module",
+                "module": module_path,
+            }
+        )
+
+    dependency_impacts: dict[str, list[str]] = defaultdict(list)
+    for capability in capabilities:
+        for dependent in capability.dependent_modules:
+            dependency_impacts[module_path_pattern(dependent)].append(capability.id)
+
+    path_index: list[dict[str, Any]] = []
+    lookup: dict[str, list[str]] = {}
+    for pattern, claim_items in sorted(claims.items()):
+        capability_ids = sorted({str(item["capability"]) for item in claim_items if item.get("capability")})
+        sources = sorted({str(item["source"]) for item in claim_items})
+        modules_for_pattern = sorted({str(item["module"]) for item in claim_items if item.get("module")})
+        code_file_count = 0
+        for module_path in modules_for_pattern:
+            module = module_by_path.get(module_path)
+            if not module:
+                continue
+            code_file_count += code_file_count_for_rel_path(repo_root, module.path)
+        relationship = "unmapped"
+        if len(capability_ids) == 1:
+            relationship = "unique"
+        elif len(capability_ids) > 1:
+            relationship = "shared"
+        entry = {
+            "path_pattern": pattern,
+            "capabilities": capability_ids,
+            "relationship": relationship,
+            "sources": sources,
+            "modules": modules_for_pattern,
+            "code_file_count": code_file_count,
+            "dependent_capabilities": sorted(set(dependency_impacts.get(pattern, []))),
+        }
+        if len(capability_ids) == 1:
+            capability = capability_by_id.get(capability_ids[0])
+            if capability:
+                entry["capability_stage"] = capability.stage
+                entry["capability_source_of_truth"] = capability.source_of_truth
+        path_index.append(entry)
+        lookup[pattern] = capability_ids
+
+    return {
+        "schema_version": 1,
+        "generated_at": iso_now(),
+        "generated_by": "bootstrap_router",
+        "source_repository": repo_root.name,
+        "source_commit": current_git_commit(repo_root),
+        "path_index": path_index,
+        "lookup": lookup,
+        "ambiguous_patterns": [entry for entry in path_index if entry["relationship"] == "shared"],
+        "uncovered_modules": uncovered_modules,
+    }
+
+
+def infer_dependency_priority(capabilities: list[CapabilityEntry], profile: dict[str, Any]) -> dict[str, int]:
+    configured = profile.get("dependency_priority") or profile.get("routing", {}).get("dependency_priority") or {}
+    if configured:
+        return {str(key): int(value) for key, value in configured.items()}
+    layer_priority = {
+        "infra": 0,
+        "shared-capability": 1,
+        "domain-service": 2,
+        "feature-module": 3,
+        "adapter": 4,
+        "ui": 5,
+    }
+    module_to_capability = {
+        module: capability.id
+        for capability in capabilities
+        for module in capability.owner_modules
+    }
+    dependency_targets = {
+        module_to_capability[module]
+        for capability in capabilities
+        for module in capability.dependent_modules
+        if module in module_to_capability
+    }
+    priorities: dict[str, int] = {}
+    for capability in capabilities:
+        layers = capability.scope.get("layers", [])
+        base = min((layer_priority.get(str(layer), 3) for layer in layers), default=3)
+        if capability.id in dependency_targets:
+            base = min(base, 1)
+        priorities[capability.id] = base
+    return dict(sorted(priorities.items(), key=lambda item: (item[1], item[0])))
+
+
 def high_risk_capability_ids(capabilities: list[CapabilityEntry], profile: dict[str, Any]) -> list[str]:
     ids = set(profile.get("risk", {}).get("capability_ids", []))
     for capability in capabilities:
@@ -1867,6 +2041,93 @@ def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, A
         ),
         "high_risk_capability_ids": high_risk_capability_ids(capabilities, profile),
         "high_risk_module_patterns": risk_profile.get("path_patterns", []),
+        "dependency_priority": infer_dependency_priority(capabilities, profile),
+        "new_capability_policy": {
+            "minimum_positive_conditions": 2,
+            "positive_conditions": [
+                "new service or package boundary contains at least two source modules",
+                "path patterns do not overlap any existing non-deprecated capability",
+                "independent tests or evaluation cases can be attached to the new boundary",
+                "the new boundary exposes a public entry that other capabilities can reuse",
+            ],
+            "non_qualifying_patterns": [
+                "single CRUD shell without domain behavior",
+                "facade-only route that delegates entirely to an existing capability",
+                "temporary bootstrap or migration scaffold",
+                "name similarity without path, owner, or public-entry evidence",
+            ],
+            "required_sections": [
+                "id",
+                "name",
+                "path_patterns",
+                "owner_modules",
+                "public_entries",
+                "contracts",
+                "test_bindings",
+                "lifecycle",
+            ],
+            "default_action_when_conditions_not_met": "review",
+        },
+        "contract_quality_policy": {
+            "recommended_contract_types": [
+                "scope",
+                "boundary",
+                "cross-capability",
+                "risk",
+            ],
+            "min_contracts_for_profile_capability": 3,
+            "min_contracts_for_large_capability": 4,
+            "large_capability_file_threshold": 10,
+            "recommended_contract_chars": {"min": 50, "max": 240},
+        },
+        "capability_lifecycle_policy": {
+            "stages": ["provisional", "candidate", "stable", "governed-capability", "deprecated"],
+            "promotion_rules": [
+                "provisional -> candidate requires a profile-backed owner or one confirmed route",
+                "candidate -> stable requires confirmed public entries and at least two successful route confirmations",
+                "stable -> governed-capability requires curated evaluation coverage and active guardrails",
+                "deprecated capabilities must set superseded_by, deprecation_date, and migration_note",
+            ],
+        },
+        "capability_retirement_policy": {
+            "delete_requires_review": True,
+            "merge_requires_review": True,
+            "deprecate_requires_metadata": ["superseded_by", "deprecation_date", "migration_note", "affected_callers", "regression_tests"],
+            "must_check_before_removal": [
+                "public_entries",
+                "dependent_modules",
+                "related_tests",
+                "path_to_capability_map",
+                "evaluation_cases",
+            ],
+        },
+        "composite_route_policy": {
+            "primary_selection_order": ["dependency_priority", "profile_backed", "path_proximity", "public_entry", "stage"],
+            "facade_and_ui_changes_should_delegate_to_core": True,
+            "multi_capability_core_changes_require_review": True,
+            "allowed_roles": ["primary", "facade", "adapter", "ui", "test", "migration", "governance"],
+        },
+        "post_change_closeout_policy": {
+            "required_steps": [
+                "rebuild_index_if_boundary_changed",
+                "validate_bundle",
+                "governance_audit",
+                "route_evaluation",
+                "record_feedback_after_review_or_override",
+            ],
+            "report_required_fields": [
+                "capability_changed",
+                "public_entry_changed",
+                "owner_changed",
+                "evaluation_case_added",
+                "generated_files_gitignore_checked",
+            ],
+        },
+        "regression_capture_policy": {
+            "capture_on": ["review", "override", "false_positive", "false_negative", "manual_capability_correction"],
+            "case_sources": ["route_report", "manual_feedback", "governance_finding"],
+            "minimum_case_fields": ["id", "request", "expected_action", "expected_capabilities", "changed_paths", "risk_level"],
+        },
         "route_rules": [
             {
                 "name": "prefer-reuse-for-stable-capability",
@@ -1933,6 +2194,7 @@ def build_router_config(repo_root: Path, modules: list[ModuleEntry], profile: di
             "top1_accuracy_threshold": 0.80,
             "review_precision_threshold": 0.90,
             "minimum_case_count": 12,
+            "minimum_capability_coverage_ratio": 0.80,
             "mode": stage_info["signals"].get("evaluation_mode", "generated_only"),
         },
         "route_reports_dir": "reports/route-decisions",
@@ -1957,10 +2219,9 @@ def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[s
     modules = [ModuleEntry(**item) for item in module_map.get("modules", [])]
     stable_caps = [cap for cap in capabilities if cap.stage in {"stable", "governed-capability"} or cap.status == "stable"] or capabilities[:]
     cases: list[dict[str, Any]] = []
-    for capability in stable_caps[:10]:
+    for capability in stable_caps:
         is_stable = capability.stage in {"stable", "governed-capability"} or capability.status == "stable"
         is_risky = match_strength(capability.id, DEFAULT_HIGH_RISK_KEYWORDS) >= 1.0
-        can_extract = is_stable and len(capability.owner_modules) >= 2
         cases.append(
             {
                 "id": f"{capability.id}-reuse",
@@ -1985,7 +2246,10 @@ def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[s
                 "risk_level": "high",
             }
         )
-    for capability in stable_caps[:5]:
+    for capability in stable_caps:
+        is_stable = capability.stage in {"stable", "governed-capability"} or capability.status == "stable"
+        is_risky = match_strength(capability.id, DEFAULT_HIGH_RISK_KEYWORDS) >= 1.0
+        can_extract = is_stable and len(capability.owner_modules) >= 2
         if len(capability.owner_modules) >= 2:
             changed = capability.owner_modules[:2]
         else:
@@ -1994,7 +2258,7 @@ def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[s
             {
                 "id": f"{capability.id}-extract",
                 "request": f"Extract repeated {capability.name.lower()} logic into a shared reusable entry point.",
-                "expected_action": "extract" if can_extract and not match_strength(capability.id, DEFAULT_HIGH_RISK_KEYWORDS) >= 1.0 and repo_stage in {"structured", "governed"} else "review",
+                "expected_action": "extract" if can_extract and not is_risky and repo_stage in {"structured", "governed"} else "review",
                 "expected_capabilities": [capability.id],
                 "expected_modules": capability.owner_modules[:2],
                 "expected_reads": capability.public_entries[:2],
@@ -2111,6 +2375,442 @@ def capability_conflicts(bundle: dict[str, Any]) -> list[str]:
     return conflicts
 
 
+def code_file_count_for_rel_path(repo_root: Path, rel_path: str) -> int:
+    path = repo_root / rel_path
+    if rel_path == ".":
+        path = repo_root
+    if path.is_file():
+        return 1 if path.suffix.lower() in CODE_SUFFIXES else 0
+    if path.is_dir():
+        return len(directory_code_files(path, CODE_SUFFIXES))
+    return 0
+
+
+def capability_code_file_count(repo_root: Path, capability: CapabilityEntry) -> int:
+    return sum(code_file_count_for_rel_path(repo_root, module_path) for module_path in capability.owner_modules)
+
+
+def profile_capability_ids(profile: dict[str, Any]) -> set[str]:
+    return {str(item.get("id")) for item in profile.get("capabilities", []) if item.get("id")}
+
+
+def add_governance_finding(
+    findings: list[dict[str, Any]],
+    severity: str,
+    rule: str,
+    message: str,
+    target: str,
+    recommendation: str,
+    details: Optional[dict[str, Any]] = None,
+) -> None:
+    findings.append(
+        {
+            "severity": severity,
+            "rule": rule,
+            "target": target,
+            "message": message,
+            "recommendation": recommendation,
+            "details": details or {},
+        }
+    )
+
+
+def ownership_rule_granularity(pattern: str) -> str:
+    normalized = pattern.replace("\\", "/")
+    if normalized in {"**", "**/*", "*"}:
+        return "repository"
+    if normalized.endswith("/**"):
+        depth = len([part for part in normalized[:-3].split("/") if part])
+        if depth <= 1:
+            return "broad-directory"
+        return "directory"
+    if Path(normalized).suffix:
+        return "file"
+    return "path"
+
+
+def build_governance_repair_suggestions(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    suggestions: list[dict[str, Any]] = []
+    for finding in findings:
+        rule = finding.get("rule")
+        details = finding.get("details", {})
+        if rule == "profile-capability-not-in-catalog":
+            for capability in details.get("missing_capabilities", []):
+                suggestions.append(
+                    {
+                        "kind": "profile_path_pattern_fix",
+                        "target": capability,
+                        "suggestion": "Fix path_patterns so this profile capability matches discovered modules, or remove the stale capability entry.",
+                        "confidence": "high",
+                    }
+                )
+        elif rule == "change-rule-references-unknown-capability":
+            for capability in details.get("unknown_capabilities", []):
+                suggestions.append(
+                    {
+                        "kind": "change_rules_reference_fix",
+                        "target": capability,
+                        "suggestion": "Remove this stale capability reference or add the missing capability before trusting routing rules.",
+                        "confidence": "high",
+                    }
+                )
+        elif rule == "catalog-has-unprofiled-capabilities":
+            for capability in details.get("generated_capabilities", []):
+                suggestions.append(
+                    {
+                        "kind": "promote_generated_capability",
+                        "target": capability,
+                        "suggestion": "If this boundary is real, add a profile capability with contracts, public_entries, ownership, lifecycle, and tests.",
+                        "confidence": "medium",
+                    }
+                )
+        elif rule in {"module-without-capability-path-index", "path-to-capability-map-missing"}:
+            for module in details.get("uncovered_modules", []) or ["project-change-router/references/path-to-capability-map.yaml"]:
+                suggestions.append(
+                    {
+                        "kind": "path_index_rebuild_or_owner_rule",
+                        "target": module,
+                        "suggestion": "Rebuild the bundle and add ownership/capability rules for uncovered stable module roots.",
+                        "confidence": "high" if rule == "path-to-capability-map-missing" else "medium",
+                    }
+                )
+        elif rule in {"profile-capability-contracts-too-thin", "large-capability-contracts-too-thin"}:
+            suggestions.append(
+                {
+                    "kind": "contract_completion",
+                    "target": finding.get("target"),
+                    "suggestion": "Add scope, boundary, cross-capability, and risk contracts. Keep each contract concrete and enforceable.",
+                    "confidence": "high",
+                }
+            )
+        elif rule == "large-capability-forbidden-density-too-low":
+            suggestions.append(
+                {
+                    "kind": "forbidden_pattern_completion",
+                    "target": finding.get("target"),
+                    "suggestion": "Add forbidden patterns for duplicate implementation centers, bypassed public APIs, misplaced caches, and cross-layer writes.",
+                    "confidence": "medium",
+                }
+            )
+        elif rule == "dependency-priority-incomplete":
+            suggestions.append(
+                {
+                    "kind": "dependency_priority_completion",
+                    "target": "references/change-rules.yaml",
+                    "suggestion": "Assign lower priority numbers to foundation/core capabilities and higher numbers to facade, adapter, and UI capabilities.",
+                    "confidence": "high",
+                }
+            )
+        elif rule == "profile-capability-without-evaluation-case":
+            for capability in details.get("uncovered_capabilities", []):
+                suggestions.append(
+                    {
+                        "kind": "evaluation_case_completion",
+                        "target": capability,
+                        "suggestion": "Add at least one positive route case and one boundary or review case for this capability.",
+                        "confidence": "high",
+                    }
+                )
+        elif rule == "deprecated-capability-migration-metadata-missing":
+            suggestions.append(
+                {
+                    "kind": "lifecycle_metadata_completion",
+                    "target": finding.get("target"),
+                    "suggestion": "Add superseded_by, deprecation_date, migration_note, affected callers, and migration tests.",
+                    "confidence": "high",
+                }
+            )
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for suggestion in suggestions:
+        key = (str(suggestion.get("kind")), str(suggestion.get("target")))
+        if key not in seen:
+            seen.add(key)
+            deduped.append(suggestion)
+    return deduped[:50]
+
+
+def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str, Any]:
+    profile = load_active_profile(repo_root)
+    capabilities = capability_entries(bundle)
+    modules = module_entries(bundle)
+    capability_ids = {capability.id for capability in capabilities}
+    profile_ids = profile_capability_ids(profile)
+    generated_ids = {capability.id for capability in capabilities if capability.source_of_truth == "generated"}
+    profile_backed_ids = {capability.id for capability in capabilities if capability.source_of_truth == "profile"}
+    findings: list[dict[str, Any]] = []
+
+    profile_missing_from_catalog = sorted(profile_ids - capability_ids)
+    if profile_missing_from_catalog:
+        add_governance_finding(
+            findings,
+            "P0",
+            "profile-capability-not-in-catalog",
+            "Profile declares capabilities that are absent from the generated capability catalog.",
+            "profile.capabilities",
+            "Fix path_patterns or module discovery so profile capabilities match real modules, then rebuild the bundle.",
+            {"missing_capabilities": profile_missing_from_catalog},
+        )
+
+    referenced_capabilities = set(bundle.get("change_rules", {}).get("high_risk_capability_ids", []))
+    referenced_capabilities.update(str(key) for key in bundle.get("change_rules", {}).get("dependency_priority", {}).keys())
+    unknown_references = sorted(referenced_capabilities - capability_ids)
+    if unknown_references:
+        add_governance_finding(
+            findings,
+            "P0",
+            "change-rule-references-unknown-capability",
+            "Change rules reference capabilities that are not present in the capability catalog.",
+            "references/change-rules.yaml",
+            "Remove stale references or add the missing capabilities to the profile/catalog before trusting route rules.",
+            {"unknown_capabilities": unknown_references},
+        )
+
+    if profile and generated_ids:
+        severity = "P1" if bundle.get("config", {}).get("repo_stage") in {"structured", "governed"} else "P2"
+        add_governance_finding(
+            findings,
+            severity,
+            "catalog-has-unprofiled-capabilities",
+            "The capability catalog contains generated capabilities that are not profile-backed.",
+            "references/capability-catalog.yaml",
+            "Review generated capabilities and promote stable boundaries into the repository profile.",
+            {
+                "generated_capability_count": len(generated_ids),
+                "generated_capabilities": sorted(generated_ids)[:20],
+            },
+        )
+
+    path_map = bundle.get("path_to_capability_map", {})
+    if capabilities and not path_map.get("path_index"):
+        add_governance_finding(
+            findings,
+            "P0",
+            "path-to-capability-map-missing",
+            "The bundle does not include a path-to-capability map.",
+            "references/path-to-capability-map.yaml",
+            "Rebuild the bundle with the current skill version so path ownership can be audited.",
+        )
+    uncovered_modules = list(path_map.get("uncovered_modules", []))
+    if uncovered_modules:
+        add_governance_finding(
+            findings,
+            "P0",
+            "module-without-capability-path-index",
+            "Some discovered modules are not covered by the path-to-capability map.",
+            "references/path-to-capability-map.yaml",
+            "Add profile capability or ownership rules for uncovered modules, then rebuild the bundle.",
+            {"uncovered_modules": uncovered_modules[:50]},
+        )
+
+    ambiguous_patterns = list(path_map.get("ambiguous_patterns", []))
+    if ambiguous_patterns:
+        add_governance_finding(
+            findings,
+            "P1",
+            "ambiguous-path-capability-ownership",
+            "Some path patterns are claimed by multiple capabilities.",
+            "references/path-to-capability-map.yaml",
+            "Split broad capabilities or mark shared ownership explicitly in profile contracts.",
+            {"ambiguous_pattern_count": len(ambiguous_patterns), "examples": ambiguous_patterns[:10]},
+        )
+
+    owner_rules = profile.get("ownership_rules", [])
+    broad_rules = []
+    file_rules = []
+    for rule in owner_rules:
+        for pattern in rule.get("path_patterns", []):
+            granularity = ownership_rule_granularity(str(pattern))
+            if granularity in {"repository", "broad-directory"}:
+                broad_rules.append(pattern)
+            elif granularity == "file":
+                file_rules.append(pattern)
+    if broad_rules:
+        add_governance_finding(
+            findings,
+            "P1",
+            "ownership-rule-too-broad",
+            "Ownership rules include broad repository or top-level directory patterns.",
+            "profile.ownership_rules",
+            "Prefer domain-level directory globs so routing can distinguish affected capabilities.",
+            {"patterns": broad_rules[:20]},
+        )
+    if file_rules and len(file_rules) > max(3, len(owner_rules)):
+        add_governance_finding(
+            findings,
+            "P2",
+            "ownership-rule-too-file-grained",
+            "Ownership rules rely heavily on file-level patterns and may miss sibling files.",
+            "profile.ownership_rules",
+            "Use stable directory-level globs for modules with multiple source files.",
+            {"file_patterns": file_rules[:20]},
+        )
+
+    contract_policy = bundle.get("change_rules", {}).get("contract_quality_policy", {})
+    min_profile_contracts = int(contract_policy.get("min_contracts_for_profile_capability", 3))
+    min_large_contracts = int(contract_policy.get("min_contracts_for_large_capability", 4))
+    large_threshold = int(contract_policy.get("large_capability_file_threshold", 10))
+    char_policy = contract_policy.get("recommended_contract_chars", {})
+    min_chars = int(char_policy.get("min", 50))
+    max_chars = int(char_policy.get("max", 240))
+    for capability in capabilities:
+        file_count = capability_code_file_count(repo_root, capability)
+        contract_count = len(capability.contracts)
+        if capability.source_of_truth == "profile" and contract_count < min_profile_contracts:
+            add_governance_finding(
+                findings,
+                "P1",
+                "profile-capability-contracts-too-thin",
+                "A profile-backed capability does not have enough explicit contracts.",
+                capability.id,
+                "Add scope, boundary, cross-capability, and risk contracts to the capability profile.",
+                {"contract_count": contract_count, "minimum": min_profile_contracts},
+            )
+        if file_count >= large_threshold and contract_count < min_large_contracts:
+            add_governance_finding(
+                findings,
+                "P1",
+                "large-capability-contracts-too-thin",
+                "A large capability has too few contracts for its code surface.",
+                capability.id,
+                "Add concrete boundary and risk contracts before trusting automatic extend/extract decisions.",
+                {"code_file_count": file_count, "contract_count": contract_count, "minimum": min_large_contracts},
+            )
+        if capability.contracts:
+            lengths = [len(contract) for contract in capability.contracts]
+            avg_len = sum(lengths) / len(lengths)
+            if avg_len < min_chars:
+                add_governance_finding(
+                    findings,
+                    "P2",
+                    "contracts-too-short",
+                    "Capability contracts are unusually short and may read like labels rather than constraints.",
+                    capability.id,
+                    "Rewrite contracts as concrete scope, boundary, interaction, or risk statements.",
+                    {"average_contract_chars": round(avg_len, 1), "recommended_min": min_chars},
+                )
+            if avg_len > max_chars:
+                add_governance_finding(
+                    findings,
+                    "P2",
+                    "contracts-too-long",
+                    "Capability contracts are unusually long and may mix explanation with enforceable constraints.",
+                    capability.id,
+                    "Split long prose into shorter enforceable contract statements.",
+                    {"average_contract_chars": round(avg_len, 1), "recommended_max": max_chars},
+                )
+
+        forbidden_count = len(capability.forbidden_patterns)
+        if file_count >= large_threshold and forbidden_count < 3:
+            add_governance_finding(
+                findings,
+                "P1",
+                "large-capability-forbidden-density-too-low",
+                "A large capability has very few forbidden patterns or anti-patterns.",
+                capability.id,
+                "Add forbidden patterns for duplicate implementations, bypassed public APIs, and misplaced local caches.",
+                {"code_file_count": file_count, "forbidden_count": forbidden_count},
+            )
+        if file_count <= 3 and forbidden_count >= 12:
+            add_governance_finding(
+                findings,
+                "P2",
+                "small-capability-forbidden-density-too-high",
+                "A small capability has unusually many forbidden patterns.",
+                capability.id,
+                "Review whether broad restrictions belong in shared policies instead of a narrow capability.",
+                {"code_file_count": file_count, "forbidden_count": forbidden_count},
+            )
+
+        lifecycle = capability.lifecycle or {}
+        if not lifecycle.get("definition_version"):
+            add_governance_finding(
+                findings,
+                "P2",
+                "capability-lifecycle-version-missing",
+                "A capability lacks lifecycle definition_version metadata.",
+                capability.id,
+                "Add lifecycle.definition_version and changelog when curating the profile entry.",
+            )
+        if capability.status == "deprecated" or lifecycle.get("status") == "deprecated":
+            missing = [field for field in ("superseded_by", "deprecation_date", "migration_note") if not lifecycle.get(field)]
+            if missing:
+                add_governance_finding(
+                    findings,
+                    "P1",
+                    "deprecated-capability-migration-metadata-missing",
+                    "A deprecated capability is missing migration metadata.",
+                    capability.id,
+                    "Set superseded_by, deprecation_date, and migration_note for deprecated capabilities.",
+                    {"missing_fields": missing},
+                )
+
+    dependency_priority = bundle.get("change_rules", {}).get("dependency_priority", {})
+    missing_dependency_priority = sorted(capability_ids - set(dependency_priority.keys()))
+    if missing_dependency_priority:
+        add_governance_finding(
+            findings,
+            "P1",
+            "dependency-priority-incomplete",
+            "Not every capability has an explicit dependency priority.",
+            "references/change-rules.yaml",
+            "Add dependency_priority entries so multi-capability changes can identify the primary route.",
+            {"missing_capabilities": missing_dependency_priority[:50]},
+        )
+
+    eval_cases = bundle.get("evaluation_set", {}).get("cases", [])
+    covered_capabilities = {
+        capability
+        for case in eval_cases
+        for capability in case.get("expected_capabilities", [])
+    }
+    uncovered_profile_cases = sorted(profile_backed_ids - covered_capabilities)
+    if uncovered_profile_cases:
+        add_governance_finding(
+            findings,
+            "P1",
+            "profile-capability-without-evaluation-case",
+            "Profile-backed capabilities are missing evaluation coverage.",
+            "references/evaluation-set.yaml",
+            "Add at least one positive case and one boundary/regression case for each curated capability.",
+            {"uncovered_capabilities": uncovered_profile_cases[:50]},
+        )
+    if bundle.get("evaluation_set", {}).get("mode") == "generated_only" and bundle.get("config", {}).get("repo_stage") in {"structured", "governed"}:
+        add_governance_finding(
+            findings,
+            "P1",
+            "generated-only-evaluation-on-mature-repo",
+            "A mature repository is still using generated-only evaluation cases.",
+            "references/evaluation-set.yaml",
+            "Promote real route regressions and manual feedback into curated evaluation cases.",
+        )
+
+    severity_counts = {
+        severity: sum(1 for finding in findings if finding["severity"] == severity)
+        for severity in ("P0", "P1", "P2")
+    }
+    repair_suggestions = build_governance_repair_suggestions(findings)
+    status = "fail" if severity_counts["P0"] else "warn" if findings else "pass"
+    return {
+        "report_id": f"governance-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+        "timestamp": iso_now(),
+        "status": status,
+        "severity_counts": severity_counts,
+        "summary": {
+            "module_count": len(modules),
+            "capability_count": len(capabilities),
+            "profile_capability_count": len(profile_ids),
+            "profile_backed_capability_count": len(profile_backed_ids),
+            "generated_capability_count": len(generated_ids),
+            "evaluation_case_count": len(eval_cases),
+            "path_index_count": len(path_map.get("path_index", [])),
+            "repair_suggestion_count": len(repair_suggestions),
+        },
+        "findings": findings,
+        "repair_suggestions": repair_suggestions,
+    }
+
+
 def build_router_bundle(repo_root: Path) -> dict[str, Any]:
     profile = load_active_profile(repo_root)
     bundle_root = resolve_bundle_root(repo_root)
@@ -2158,6 +2858,7 @@ def build_router_bundle(repo_root: Path) -> dict[str, Any]:
     config["warnings"] = warnings
     ownership = build_ownership(capabilities, modules, repo_stage)
     change_rules = build_change_rules(capabilities, profile, repo_stage)
+    path_to_capability_map = build_path_to_capability_map(repo_root, capabilities, modules)
     exception_registry = build_exception_registry(repo_root, profile)
     generated_evaluation = build_evaluation_set(capabilities, module_map, repo_stage)
     evaluation_set = merge_curated_evaluation(existing_bundle.get("evaluation_set", {}), generated_evaluation, profile)
@@ -2167,6 +2868,7 @@ def build_router_bundle(repo_root: Path) -> dict[str, Any]:
         "capability_catalog": capability_catalog,
         "ownership": ownership,
         "change_rules": change_rules,
+        "path_to_capability_map": path_to_capability_map,
         "exception_registry": exception_registry,
         "evaluation_set": evaluation_set,
     }
@@ -2291,6 +2993,19 @@ def request_requires_review(request_text: str) -> bool:
         "跨模块",
     )
     return any(phrase in text for phrase in phrases)
+
+
+def request_lifecycle_intent(request_text: str) -> Optional[str]:
+    text = request_text.lower()
+    if any(word in text for word in ("delete capability", "remove capability", "drop capability", "删除能力", "移除能力")):
+        return "delete"
+    if any(word in text for word in ("merge capability", "combine capability", "consolidate capability", "合并能力", "整合能力")):
+        return "merge"
+    if any(word in text for word in ("deprecate", "deprecated", "supersede", "废弃", "弃用", "替代")):
+        return "deprecate"
+    if any(word in text for word in ("rename capability", "move capability", "迁移能力", "重命名能力")):
+        return "migrate"
+    return None
 
 
 def module_path_proximity(capability: CapabilityEntry, changed_paths: list[str]) -> float:
@@ -2431,6 +3146,22 @@ def overlap_score(best: float, second: float) -> float:
     if best <= 0.0:
         return 0.0
     return min(1.0, second / best)
+
+
+def sort_route_scores(
+    route_scores: list[tuple[CapabilityEntry, float, dict[str, Any]]],
+    bundle: dict[str, Any],
+    close_delta: float = 0.08,
+) -> list[tuple[CapabilityEntry, float, dict[str, Any]]]:
+    if len(route_scores) <= 1:
+        return sorted(route_scores, key=lambda item: item[1], reverse=True)
+    priority = bundle.get("change_rules", {}).get("dependency_priority", {})
+    sorted_by_score = sorted(route_scores, key=lambda item: item[1], reverse=True)
+    best_score = sorted_by_score[0][1]
+    close = [item for item in sorted_by_score if best_score - item[1] <= close_delta]
+    rest = [item for item in sorted_by_score if best_score - item[1] > close_delta]
+    close_sorted = sorted(close, key=lambda item: (int(priority.get(item[0].id, 999)), -item[1], item[0].id))
+    return close_sorted + rest
 
 
 def source_of_truth_for(bundle: dict[str, Any], kind: str) -> dict[str, Any]:
@@ -2607,6 +3338,516 @@ def build_recommended_next_action(
     return next_action, deduped[:8]
 
 
+def path_index_capabilities_for_path(bundle: dict[str, Any], path: str) -> list[str]:
+    normalized = path.replace("\\", "/").strip("/")
+    matches: list[str] = []
+    for entry in bundle.get("path_to_capability_map", {}).get("path_index", []):
+        pattern = str(entry.get("path_pattern", "")).replace("\\", "/").strip("/")
+        root = pattern[:-3].rstrip("/") if pattern.endswith("/**") else pattern
+        if normalized == root or glob_match([pattern], normalized):
+            matches.extend(str(capability) for capability in entry.get("capabilities", []) if capability)
+    return sorted(set(matches))
+
+
+def changed_paths_without_index(bundle: dict[str, Any], changed_paths: list[str]) -> list[str]:
+    if not changed_paths:
+        return []
+    return [path for path in changed_paths if not path_index_capabilities_for_path(bundle, path)]
+
+
+def build_block_reason(
+    action: str,
+    repo_stage: str,
+    veto_reasons: list[str],
+    routing_confidence_level: str,
+    primary_capability: Optional[CapabilityEntry],
+    changed_paths: list[str],
+    negative_signals: dict[str, Any],
+    high_risk: bool,
+    overlap: float,
+    bundle: dict[str, Any],
+    request_text: str,
+) -> dict[str, Any]:
+    if action != "review":
+        return {"code": "not_blocked", "severity": "none", "summary": "Route does not require manual review."}
+    joined = " | ".join(veto_reasons).lower()
+    lifecycle_intent = request_lifecycle_intent(request_text)
+    unindexed_paths = changed_paths_without_index(bundle, changed_paths)
+    if lifecycle_intent:
+        code = "capability_lifecycle_change"
+        summary = f"Capability {lifecycle_intent} requires explicit lifecycle review."
+    elif "no capability candidates" in joined or (not primary_capability and changed_paths):
+        code = "missing_capability_candidate"
+        summary = "No capability candidate was discovered for the changed surface."
+    elif unindexed_paths:
+        code = "path_not_indexed"
+        summary = "At least one changed path is not covered by the path-to-capability map."
+    elif "bundle is stale" in joined:
+        code = "stale_bundle"
+        summary = "The routing bundle is stale or internally inconsistent."
+    elif high_risk or "high-risk" in joined:
+        code = "high_risk_surface"
+        summary = "The request touches a high-risk surface."
+    elif repo_stage in {"seed", "emerging"} and "repo_stage" in joined:
+        code = "early_repo_policy_guardrail"
+        summary = "Early repository policy blocks automatic routing."
+    elif overlap >= 0.82 or "overlap" in joined or "multi-capability" in joined:
+        code = "multi_capability_overlap"
+        summary = "Multiple capability candidates overlap too strongly."
+    elif negative_signals.get("provisional_stage") or "provisional" in joined:
+        code = "provisional_capability_boundary"
+        summary = "The candidate capability boundary is still provisional."
+    elif negative_signals.get("owner_unclear"):
+        code = "unclear_owner"
+        summary = "The candidate capability owner is unclear."
+    elif negative_signals.get("heuristic_public_entry") or (primary_capability and not primary_capability.public_entries):
+        code = "missing_public_entry"
+        summary = "The route lacks a confirmed public entry."
+    elif routing_confidence_level == "low" or "confidence_level=low" in joined:
+        code = "low_routing_confidence"
+        summary = "Routing confidence is too low for automatic editing."
+    else:
+        code = "manual_review_required"
+        summary = "Manual review is required before editing."
+    severity = "P0" if code in {"missing_capability_candidate", "path_not_indexed", "stale_bundle", "high_risk_surface", "capability_lifecycle_change"} else "P1"
+    return {"code": code, "severity": severity, "summary": summary}
+
+
+def build_missing_evidence(
+    action: str,
+    block_reason: dict[str, Any],
+    primary_capability: Optional[CapabilityEntry],
+    changed_paths: list[str],
+    negative_signals: dict[str, Any],
+    bundle: dict[str, Any],
+    request_text: str,
+) -> list[dict[str, Any]]:
+    if action != "review":
+        return []
+    evidence: list[dict[str, Any]] = []
+    unindexed_paths = changed_paths_without_index(bundle, changed_paths)
+    for path in unindexed_paths:
+        evidence.append(
+            {
+                "type": "path_index",
+                "target": path,
+                "why_it_matters": "Changed path is not mapped to any capability in path-to-capability-map.yaml.",
+            }
+        )
+    if block_reason.get("code") == "missing_capability_candidate":
+        target = ", ".join(changed_paths) if changed_paths else "<request>"
+        evidence.append(
+            {
+                "type": "capability_mapping",
+                "target": target,
+                "why_it_matters": "The router cannot identify a canonical capability boundary for this change.",
+            }
+        )
+    if negative_signals.get("profile_missing"):
+        evidence.append(
+            {
+                "type": "capability_mapping",
+                "target": primary_capability.id if primary_capability else "<unknown>",
+                "why_it_matters": "The candidate is generated or heuristic rather than profile-backed.",
+            }
+        )
+    if negative_signals.get("owner_unclear") or not (primary_capability and primary_capability.owner_modules):
+        evidence.append(
+            {
+                "type": "owner_rule",
+                "target": primary_capability.id if primary_capability else "<unknown>",
+                "why_it_matters": "Automatic editing needs a stable owner or canonical root.",
+            }
+        )
+    if negative_signals.get("heuristic_public_entry") or (primary_capability and not primary_capability.public_entries):
+        evidence.append(
+            {
+                "type": "public_entry",
+                "target": primary_capability.id if primary_capability else "<unknown>",
+                "why_it_matters": "Reuse or extension is unsafe without a confirmed public entry.",
+            }
+        )
+    if block_reason.get("code") == "multi_capability_overlap":
+        evidence.append(
+            {
+                "type": "dependency_priority",
+                "target": "references/change-rules.yaml",
+                "why_it_matters": "A multi-capability change needs a primary route before implementation.",
+            }
+        )
+    if request_lifecycle_intent(request_text):
+        evidence.append(
+            {
+                "type": "lifecycle_metadata",
+                "target": primary_capability.id if primary_capability else "<unknown>",
+                "why_it_matters": "Deleting, merging, or deprecating a capability requires replacement and migration metadata.",
+            }
+        )
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in evidence:
+        key = (str(item["type"]), str(item["target"]))
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    return deduped
+
+
+def build_analysis_directions(
+    action: str,
+    block_reason: dict[str, Any],
+    primary_capability: Optional[CapabilityEntry],
+    secondary_capabilities: list[str],
+    changed_paths: list[str],
+    request_text: str,
+) -> list[str]:
+    if action != "review":
+        return []
+    directions = [
+        "Inspect the path-to-capability map and capability catalog before making any code changes.",
+        "Classify the changed surface as core capability, facade, adapter, UI transport, test, or governance metadata.",
+    ]
+    code = block_reason.get("code")
+    if code in {"missing_capability_candidate", "path_not_indexed"}:
+        directions.append("Determine whether the changed paths should map to an existing capability or a new capability boundary.")
+    if code == "multi_capability_overlap" or secondary_capabilities:
+        directions.append("Compare candidate capabilities by owner_modules, public_entries, contracts, and dependency_priority.")
+    if code in {"provisional_capability_boundary", "early_repo_policy_guardrail"}:
+        directions.append("Confirm whether the candidate boundary is provisional scaffolding or a stable long-term capability.")
+    if code == "missing_public_entry":
+        directions.append("Find the real public entry or adapter boundary before deciding between reuse and extension.")
+    if code == "capability_lifecycle_change" or request_lifecycle_intent(request_text):
+        directions.append("Identify superseded_by, migration impact, callers, tests, and rollback path before changing lifecycle metadata.")
+    if primary_capability:
+        directions.append(f"Review contracts and forbidden patterns for {primary_capability.id} before proposing implementation work.")
+    if changed_paths:
+        directions.append("Trace imports and callers for the changed paths to verify whether this is reuse, extension, extraction, or a new boundary.")
+    return list(dict.fromkeys(directions))[:8]
+
+
+def build_safe_next_steps(
+    action: str,
+    required_reads: list[str],
+    required_checks: list[str],
+    changed_paths: list[str],
+    block_reason: dict[str, Any],
+) -> list[str]:
+    steps: list[str] = []
+    if action == "review":
+        steps.append("Read project-change-router/references/path-to-capability-map.yaml for the changed paths.")
+        steps.append("Read project-change-router/references/capability-catalog.yaml for candidate capabilities.")
+        steps.extend(f"Read {path}" for path in required_reads[:4])
+        steps.append("Run python scripts/check_bundle_governance.py --repo <repo-root> --format json before editing.")
+        steps.append("Run python scripts/validate_router_bundle.py --repo <repo-root> --format json if the bundle may be stale.")
+        if block_reason.get("code") == "capability_lifecycle_change":
+            steps.append("Inspect callers, tests, and migration notes before proposing any delete or merge operation.")
+    else:
+        steps.extend(f"Read {path}" for path in required_reads[:4])
+        steps.extend(f"Run {check}" for check in required_checks[:4])
+        if action == "new":
+            steps.append("Choose and name the isolated new capability boundary before writing code.")
+    deduped = [step for step in dict.fromkeys(steps) if step]
+    return deduped[:8]
+
+
+def build_suggested_questions(
+    action: str,
+    block_reason: dict[str, Any],
+    primary_capability: Optional[CapabilityEntry],
+    changed_paths: list[str],
+    secondary_capabilities: list[str],
+) -> list[str]:
+    if action != "review":
+        return []
+    target = ", ".join(changed_paths[:3]) if changed_paths else "this request"
+    questions: list[str] = []
+    code = block_reason.get("code")
+    if code in {"missing_capability_candidate", "path_not_indexed"}:
+        questions.append(f"Which capability should own {target}, or should this become a new capability boundary?")
+    if code == "multi_capability_overlap" or secondary_capabilities:
+        caps = ", ".join(([primary_capability.id] if primary_capability else []) + secondary_capabilities[:3])
+        questions.append(f"Which candidate is the primary route for this change: {caps}?")
+    if code in {"missing_public_entry", "provisional_capability_boundary", "unclear_owner"}:
+        cap = primary_capability.id if primary_capability else "the candidate capability"
+        questions.append(f"What is the confirmed owner and public entry for {cap}?")
+    if code == "capability_lifecycle_change":
+        questions.append("What capability supersedes this one, and what migration note should be recorded?")
+    questions.append("Is this phase limited to routing/governance scaffolding, or is product behavior implementation allowed?")
+    return list(dict.fromkeys(questions))[:3]
+
+
+def build_profile_repair_hints(
+    action: str,
+    block_reason: dict[str, Any],
+    primary_capability: Optional[CapabilityEntry],
+    changed_paths: list[str],
+    negative_signals: dict[str, Any],
+    request_text: str,
+) -> list[dict[str, Any]]:
+    if action != "review":
+        return []
+    hints: list[dict[str, Any]] = []
+    if block_reason.get("code") in {"missing_capability_candidate", "path_not_indexed"} and changed_paths:
+        hints.append(
+            {
+                "kind": "ownership_rule",
+                "suggestion": f"After confirming ownership, add an ownership rule for {changed_paths[0]} or its stable directory root.",
+                "confidence": "medium",
+            }
+        )
+        hints.append(
+            {
+                "kind": "capability",
+                "suggestion": "If this is a new long-term boundary, add a capability entry with contracts, public_entries, test_bindings, and lifecycle metadata.",
+                "confidence": "medium",
+            }
+        )
+    if negative_signals.get("profile_missing") and primary_capability:
+        hints.append(
+            {
+                "kind": "capability_profile",
+                "suggestion": f"Promote {primary_capability.id} from generated evidence into the repository profile after human confirmation.",
+                "confidence": "medium",
+            }
+        )
+    if (negative_signals.get("heuristic_public_entry") or (primary_capability and not primary_capability.public_entries)) and primary_capability:
+        hints.append(
+            {
+                "kind": "public_entry",
+                "suggestion": f"Confirm and record public_entries for {primary_capability.id} before allowing automatic reuse or extension.",
+                "confidence": "high",
+            }
+        )
+    if request_lifecycle_intent(request_text) and primary_capability:
+        hints.append(
+            {
+                "kind": "lifecycle",
+                "suggestion": f"Record superseded_by, deprecation_date, migration_note, and evaluation cases before changing {primary_capability.id}.",
+                "confidence": "high",
+            }
+        )
+    hints.append(
+        {
+            "kind": "evaluation_case",
+            "suggestion": "After the human decision, add a curated evaluation case for this routing scenario.",
+            "confidence": "high" if action == "review" else "medium",
+        }
+    )
+    return hints[:6]
+
+
+def build_override_requirements(
+    action: str,
+    block_reason: dict[str, Any],
+    changed_paths: list[str],
+    request_text: str,
+) -> list[dict[str, Any]]:
+    if action != "review":
+        return []
+    requirements = [
+        {
+            "scope": "current_task",
+            "required_text": "I authorize overriding this router stop only for the current task after recording the reason.",
+            "must_record_reason": True,
+            "expires_after": "current_task",
+        }
+    ]
+    if changed_paths:
+        requirements.append(
+            {
+                "scope": "paths",
+                "allowed_paths": changed_paths,
+                "must_record_reason": True,
+                "expires_after": "current_task",
+            }
+        )
+    if request_lifecycle_intent(request_text):
+        requirements.append(
+            {
+                "scope": "capability_lifecycle",
+                "required_text": "I authorize this lifecycle change with superseded_by, migration_note, and test impact recorded.",
+                "must_record_reason": True,
+                "expires_after": "current_task",
+            }
+        )
+    if block_reason.get("code") in {"early_repo_policy_guardrail", "path_not_indexed"}:
+        requirements.append(
+            {
+                "scope": "phase",
+                "required_text": "I authorize this phase-specific router stop override and do not extend it to later phases.",
+                "must_record_reason": True,
+                "expires_after": "current_phase",
+            }
+        )
+    return requirements[:4]
+
+
+def build_write_constraints(
+    action: str,
+    primary_capability: Optional[CapabilityEntry],
+    changed_paths: list[str],
+    forbidden_paths: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    must_read = []
+    allowed: list[str] = []
+    forbidden = list(forbidden_paths)
+    if primary_capability:
+        must_read.extend(primary_capability.public_entries)
+        must_read.extend(primary_capability.owner_modules[:3])
+    if action == "review":
+        forbidden.append("**")
+    elif action == "reuse":
+        allowed.extend(changed_paths)
+        if primary_capability:
+            forbidden.extend(module_path_pattern(path) for path in primary_capability.owner_modules)
+    elif action in {"extend", "extract"}:
+        if primary_capability:
+            allowed.extend(module_path_pattern(path) for path in primary_capability.owner_modules)
+        allowed.extend(changed_paths)
+    elif action == "new":
+        allowed.extend(changed_paths)
+        if not allowed:
+            allowed.append("<new-isolated-capability-boundary-after-confirmation>")
+    return (
+        [item for item in dict.fromkeys(allowed) if item],
+        [item for item in dict.fromkeys(forbidden) if item],
+        [item for item in dict.fromkeys(must_read) if item],
+    )
+
+
+def build_post_change_closeout(
+    action: str,
+    repo_stage: str,
+    primary_capability: Optional[CapabilityEntry],
+    changed_paths: list[str],
+    request_text: str,
+) -> list[dict[str, Any]]:
+    steps = [
+        {
+            "step": "validate_bundle",
+            "command": "python scripts/validate_router_bundle.py --repo <repo-root> --format json",
+            "when": "after any routed change",
+        },
+        {
+            "step": "governance_audit",
+            "command": "python scripts/check_bundle_governance.py --repo <repo-root> --format json",
+            "when": "after capability, ownership, public entry, lifecycle, or path boundary changes",
+        },
+        {
+            "step": "route_evaluation",
+            "command": "python scripts/run_evaluation.py --repo <repo-root> --format json",
+            "when": "after route-affecting changes or before committing router metadata",
+        },
+    ]
+    if action in {"new", "extend", "extract"} or request_lifecycle_intent(request_text):
+        steps.insert(
+            0,
+            {
+                "step": "rebuild_index_if_boundary_changed",
+                "command": "python scripts/rebuild_index.py --repo <repo-root>",
+                "when": "after confirmed capability, module, public entry, or lifecycle boundary changes",
+            },
+        )
+    if action == "review" or repo_stage in {"seed", "emerging"}:
+        steps.append(
+            {
+                "step": "record_feedback",
+                "command": "python scripts/sync_feedback.py --repo <repo-root> --feedback-file <feedback.json> --format json",
+                "when": "after human review or override",
+            }
+        )
+    if primary_capability:
+        steps.append(
+            {
+                "step": "capability_summary",
+                "command": "Report whether owner_modules, public_entries, contracts, lifecycle, or evaluation cases changed.",
+                "when": f"before closing work on {primary_capability.id}",
+            }
+        )
+    if changed_paths:
+        steps.append(
+            {
+                "step": "gitignore_inclusion_check",
+                "command": "Check whether generated or report directories should be ignored before commit.",
+                "when": "after creating files",
+            }
+        )
+    return steps[:7]
+
+
+def build_composite_route(
+    action: str,
+    primary_capability: Optional[CapabilityEntry],
+    candidate_capabilities: list[dict[str, Any]],
+    secondary_capabilities: list[str],
+    composite_required: bool,
+) -> dict[str, Any]:
+    participants = []
+    for candidate in candidate_capabilities[:6]:
+        role = "primary" if primary_capability and candidate["id"] == primary_capability.id else "secondary"
+        participants.append(
+            {
+                "capability": candidate["id"],
+                "role": role,
+                "stage": candidate.get("stage"),
+                "score": candidate.get("score"),
+            }
+        )
+    return {
+        "required": bool(composite_required or secondary_capabilities),
+        "primary": primary_capability.id if primary_capability else None,
+        "secondary": secondary_capabilities,
+        "participants": participants,
+        "coordination_policy": "review_before_write" if action == "review" and (composite_required or secondary_capabilities) else "single_route_or_not_required",
+    }
+
+
+def build_capability_lifecycle_action(
+    request_text: str,
+    action: str,
+    primary_capability: Optional[CapabilityEntry],
+) -> dict[str, Any]:
+    intent = request_lifecycle_intent(request_text)
+    if not intent:
+        return {"intent": "none", "review_required": False, "required_metadata": []}
+    return {
+        "intent": intent,
+        "review_required": True,
+        "target_capability": primary_capability.id if primary_capability else None,
+        "required_metadata": [
+            "superseded_by",
+            "deprecation_date",
+            "migration_note",
+            "affected_callers",
+            "regression_tests",
+            "rollback_plan",
+        ],
+        "allowed_without_override": action != "review" and intent in {"migrate"},
+    }
+
+
+def build_evaluation_regression_hints(
+    action: str,
+    request_text: str,
+    changed_paths: list[str],
+    primary_capability: Optional[CapabilityEntry],
+    block_reason: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if action != "review" and block_reason.get("code") == "not_blocked":
+        return []
+    expected_capabilities = [primary_capability.id] if primary_capability else []
+    return [
+        {
+            "kind": "route_regression_case",
+            "suggested_id": stable_slug(f"{block_reason.get('code', 'route')}-{request_text[:48]}")[:80],
+            "expected_action": action,
+            "expected_capabilities": expected_capabilities,
+            "changed_paths": changed_paths,
+            "reason": "Capture this route outcome after human confirmation so future agents do not repeat the same ambiguity.",
+        }
+    ]
+
+
 def determine_action(
     request_text: str,
     changed_paths: list[str],
@@ -2625,9 +3866,13 @@ def determine_action(
         if action == "review":
             veto_reasons.append("no capability candidates were discovered for a changed surface")
         return action, None, [], 0.0, "low", 0.0, False, False, reasoning, confidence_reasons, veto_reasons
-    sorted_scores = sorted(route_scores, key=lambda item: item[1], reverse=True)
+    score_sorted = sorted(route_scores, key=lambda item: item[1], reverse=True)
+    sorted_scores = sort_route_scores(route_scores, bundle)
     best_cap, best_score, _ = sorted_scores[0]
     best_signals = sorted_scores[0][2]
+    if score_sorted and score_sorted[0][0].id != best_cap.id:
+        reasoning.append("dependency_priority selected the primary capability among close-scoring candidates")
+        confidence_reasons.append("dependency priority resolved close capability candidates")
     confidence_level = confidence_level_for(best_score)
     second_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
     ov = overlap_score(best_score, second_score)
@@ -2651,6 +3896,7 @@ def determine_action(
     targets_existing = request_targets_existing_capability(request_text)
     extract_intent = request_prefers_extract(request_text)
     explicit_review = request_requires_review(request_text)
+    lifecycle_intent = request_lifecycle_intent(request_text)
 
     if best_signals["positive_signals"].get("profile_backed"):
         confidence_reasons.append("profile-backed capability mapping")
@@ -2672,6 +3918,10 @@ def determine_action(
     if stale_bundle or has_conflict:
         reasoning.append("routing bundle is stale or internally inconsistent")
         veto_reasons.append("bundle is stale or conflicts exist")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
+    if lifecycle_intent:
+        reasoning.append(f"capability lifecycle intent detected: {lifecycle_intent}")
+        veto_reasons.append("capability lifecycle changes require review")
         return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if extract_intent:
         if repo_stage in {"seed", "emerging"}:
@@ -2786,7 +4036,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         high_risk,
         bundle,
     )
-    sorted_scores = sorted(route_scores, key=lambda item: item[1], reverse=True)
+    sorted_scores = sort_route_scores(route_scores, bundle)
     best_signals = sorted_scores[0][2] if sorted_scores else {}
     candidate_capabilities = [
         {
@@ -2843,6 +4093,96 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         negative_signals,
         veto_reasons,
     )
+    block_reason = build_block_reason(
+        action,
+        bundle.get("config", {}).get("repo_stage", "emerging"),
+        veto_reasons,
+        routing_confidence_level,
+        primary_capability,
+        normalized_changed_paths,
+        negative_signals,
+        high_risk,
+        ov,
+        bundle,
+        request_text,
+    )
+    missing_evidence = build_missing_evidence(
+        action,
+        block_reason,
+        primary_capability,
+        normalized_changed_paths,
+        negative_signals,
+        bundle,
+        request_text,
+    )
+    analysis_directions = build_analysis_directions(
+        action,
+        block_reason,
+        primary_capability,
+        secondary_capabilities,
+        normalized_changed_paths,
+        request_text,
+    )
+    safe_next_steps = build_safe_next_steps(
+        action,
+        required_reads,
+        required_checks,
+        normalized_changed_paths,
+        block_reason,
+    )
+    suggested_questions = build_suggested_questions(
+        action,
+        block_reason,
+        primary_capability,
+        normalized_changed_paths,
+        secondary_capabilities,
+    )
+    profile_repair_hints = build_profile_repair_hints(
+        action,
+        block_reason,
+        primary_capability,
+        normalized_changed_paths,
+        negative_signals,
+        request_text,
+    )
+    override_requirements = build_override_requirements(
+        action,
+        block_reason,
+        normalized_changed_paths,
+        request_text,
+    )
+    allowed_write_paths, forbidden_write_paths, must_read_before_edit = build_write_constraints(
+        action,
+        primary_capability,
+        normalized_changed_paths,
+        forbidden_paths,
+    )
+    post_change_closeout = build_post_change_closeout(
+        action,
+        bundle.get("config", {}).get("repo_stage", "emerging"),
+        primary_capability,
+        normalized_changed_paths,
+        request_text,
+    )
+    composite_route = build_composite_route(
+        action,
+        primary_capability,
+        candidate_capabilities,
+        secondary_capabilities,
+        composite_required,
+    )
+    capability_lifecycle_action = build_capability_lifecycle_action(
+        request_text,
+        action,
+        primary_capability,
+    )
+    evaluation_regression_hints = build_evaluation_regression_hints(
+        action,
+        request_text,
+        normalized_changed_paths,
+        primary_capability,
+        block_reason,
+    )
     return RouteDecision(
         decision_id=decision_id,
         timestamp=iso_now(),
@@ -2872,6 +4212,20 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         recommended_next_action=recommended_next_action,
         recommended_next_steps=recommended_next_steps,
         why_not_actions=why_not_actions,
+        block_reason=block_reason,
+        missing_evidence=missing_evidence,
+        analysis_directions=analysis_directions,
+        safe_next_steps=safe_next_steps,
+        suggested_questions=suggested_questions,
+        profile_repair_hints=profile_repair_hints,
+        override_requirements=override_requirements,
+        allowed_write_paths=allowed_write_paths,
+        forbidden_write_paths=forbidden_write_paths,
+        must_read_before_edit=must_read_before_edit,
+        post_change_closeout=post_change_closeout,
+        composite_route=composite_route,
+        capability_lifecycle_action=capability_lifecycle_action,
+        evaluation_regression_hints=evaluation_regression_hints,
         confidence_reasons=confidence_reasons,
         veto_reasons=veto_reasons,
         positive_signals=positive_signals,
@@ -3104,6 +4458,7 @@ def write_bundle(bundle_root: Path, bundle: dict[str, Any]) -> None:
     dump_yaml_file(bundle_root / "references" / "module-map.yaml", bundle["module_map"])
     dump_yaml_file(bundle_root / "references" / "ownership.yaml", bundle["ownership"])
     dump_yaml_file(bundle_root / "references" / "change-rules.yaml", bundle["change_rules"])
+    dump_yaml_file(bundle_root / "references" / "path-to-capability-map.yaml", bundle["path_to_capability_map"])
     dump_yaml_file(bundle_root / "references" / "exception-registry.yaml", bundle["exception_registry"])
     dump_yaml_file(bundle_root / "references" / "evaluation-set.yaml", bundle["evaluation_set"])
 
@@ -3137,6 +4492,7 @@ def clear_core_reference_files(bundle_root: Path) -> None:
         "references/module-map.yaml",
         "references/ownership.yaml",
         "references/change-rules.yaml",
+        "references/path-to-capability-map.yaml",
         "references/exception-registry.yaml",
         "references/evaluation-set.yaml",
     ]:
@@ -3186,6 +4542,13 @@ def locate_bundle_or_raise(repo_root: Path) -> Path:
 
 def evaluate_bundle(bundle: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     evaluations = bundle.get("evaluation_set", {}).get("cases", [])
+    capabilities = capability_entries(bundle)
+    capability_ids = {capability.id for capability in capabilities}
+    covered_capability_ids = {
+        capability
+        for case in evaluations
+        for capability in case.get("expected_capabilities", [])
+    }
     results = []
     action_matches = 0
     primary_matches = 0
@@ -3212,19 +4575,35 @@ def evaluate_bundle(bundle: dict[str, Any], repo_root: Path) -> dict[str, Any]:
         )
     total = max(1, len(evaluations))
     review_hits = sum(1 for result in results if result["expected_action"] == "review" and result["predicted_action"] == "review")
+    evaluation_config = bundle.get("config", {}).get("evaluation", {})
+    action_accuracy = action_matches / total
+    coverage_ratio = len(capability_ids & covered_capability_ids) / max(1, len(capability_ids))
+    minimum_case_count = int(evaluation_config.get("minimum_case_count", 12))
+    minimum_coverage_ratio = float(evaluation_config.get("minimum_capability_coverage_ratio", 0.80))
+    top1_threshold = float(evaluation_config.get("top1_accuracy_threshold", 0.80))
+    status = "pass" if action_accuracy >= top1_threshold and len(evaluations) >= minimum_case_count and coverage_ratio >= minimum_coverage_ratio else "fail"
     report = {
         "run_id": f"eval-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
         "timestamp": iso_now(),
         "case_count": len(evaluations),
-        "top1_action_accuracy": round(action_matches / total, 4),
+        "top1_action_accuracy": round(action_accuracy, 4),
         "top1_capability_accuracy": round(primary_matches / total, 4),
         "review_precision": round(review_hits / max(1, review_predicted), 4),
         "review_recall": round(review_hits / max(1, review_expected), 4),
         "false_positive_count": sum(1 for result in results if result["expected_action"] != "review" and result["predicted_action"] == "review"),
         "false_negative_count": sum(1 for result in results if result["expected_action"] == "review" and result["predicted_action"] != "review"),
+        "capability_count": len(capability_ids),
+        "covered_capability_count": len(capability_ids & covered_capability_ids),
+        "capability_coverage_ratio": round(coverage_ratio, 4),
+        "uncovered_capabilities": sorted(capability_ids - covered_capability_ids),
         "per_case_results": results,
-        "evaluation_mode": bundle.get("evaluation_set", {}).get("mode", bundle.get("config", {}).get("evaluation", {}).get("mode", "generated_only")),
-        "status": "pass" if (action_matches / total) >= bundle.get("config", {}).get("evaluation", {}).get("top1_accuracy_threshold", 0.80) else "fail",
+        "evaluation_mode": bundle.get("evaluation_set", {}).get("mode", evaluation_config.get("mode", "generated_only")),
+        "status": status,
+        "status_reasons": [
+            *([] if action_accuracy >= top1_threshold else [f"top1_action_accuracy below {top1_threshold}"]),
+            *([] if len(evaluations) >= minimum_case_count else [f"case_count below {minimum_case_count}"]),
+            *([] if coverage_ratio >= minimum_coverage_ratio else [f"capability_coverage_ratio below {minimum_coverage_ratio}"]),
+        ],
     }
     return report
 
