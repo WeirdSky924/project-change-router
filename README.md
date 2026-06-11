@@ -297,6 +297,10 @@ Do not create a second implementation center when an existing capability or cano
 After routed changes, run the required closeout checks and record feedback/evaluation cases when a review, override, lifecycle change, or routing correction occurred.
 ```
 
+更完整的可复制版本见 [examples/agent-workflows/unattended-plan-prompt.md](./examples/agent-workflows/unattended-plan-prompt.md)。
+
+如果目标仓库以前已经用旧版 skill 生成过 `project-change-router/` bundle，升级后让 agent 刷新本地生成文档和路由索引时，使用 [examples/agent-workflows/update-existing-router-bundle-prompt.md](./examples/agent-workflows/update-existing-router-bundle-prompt.md)。它要求只刷新治理元数据和生成提示块，保留人工 profile、反馈、评估样例和生命周期信息。
+
 ## 生命周期命令表
 
 | 场景 | 命令 |
@@ -362,6 +366,11 @@ python scripts/sync_feedback.py --repo <repo-root> --feedback-file feedback.json
 
 推荐把真实误判沉淀为 evaluation case。不要只修规则而不加回归样例。
 
+可复制样例：
+
+- [examples/feedback/manual-route-correction.json](./examples/feedback/manual-route-correction.json)
+- [examples/evaluation/route-regression-cases.yaml](./examples/evaluation/route-regression-cases.yaml)
+
 ## 真实仓校准参考
 
 匿名真实结构参考见：
@@ -377,12 +386,24 @@ python scripts/sync_feedback.py --repo <repo-root> --feedback-file feedback.json
 
 ## 示例文件
 
+Agent 工作流示例：
+
+- [examples/agent-workflows/README.md](./examples/agent-workflows/README.md)
+- [examples/agent-workflows/unattended-plan-prompt.md](./examples/agent-workflows/unattended-plan-prompt.md)
+- [examples/agent-workflows/update-existing-router-bundle-prompt.md](./examples/agent-workflows/update-existing-router-bundle-prompt.md)
+
 Profile 模板：
 
 - [examples/profiles/early-repo.project-change-router.yaml](./examples/profiles/early-repo.project-change-router.yaml)
 - [examples/profiles/python-monorepo.project-change-router.yaml](./examples/profiles/python-monorepo.project-change-router.yaml)
 - [examples/profiles/ts-workspace.project-change-router.yaml](./examples/profiles/ts-workspace.project-change-router.yaml)
 - [examples/profiles/mixed-repo.project-change-router.yaml](./examples/profiles/mixed-repo.project-change-router.yaml)
+- [examples/profiles/skill-repo.project-change-router.yaml](./examples/profiles/skill-repo.project-change-router.yaml)
+
+反馈与评估样例：
+
+- [examples/feedback/manual-route-correction.json](./examples/feedback/manual-route-correction.json)
+- [examples/evaluation/route-regression-cases.yaml](./examples/evaluation/route-regression-cases.yaml)
 
 Bundle 样例：
 

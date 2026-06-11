@@ -1,0 +1,10 @@
+{
+  "decision_id": "route-20260611-example",
+  "final_action": "review",
+  "final_capability": "billing-core",
+  "confirmed_public_entry": "services/billing/service.py",
+  "confirmed_owner": "billing-core-team",
+  "profile_update_recommended": true,
+  "evaluation_case_recommended": true,
+  "notes": "Human confirmed that billing-core is the canonical root. UI and API routes must delegate to it."
+}

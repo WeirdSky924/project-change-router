@@ -24,6 +24,7 @@ Use this skill to turn a large repository into a governed change-routing system.
 11. If the change reveals stale indexes, ownership gaps, or missing capability coverage, run the governance audit before deciding whether to rebuild.
 12. Rebuild the bundle only when routing references are stale or the user explicitly asks to refresh repository-local routing data.
 13. After a routed change, follow `post_change_closeout` and record feedback or evaluation regressions when review, override, delete, merge, or capability correction happened.
+14. For concrete route interpretation examples, read `examples/agent-workflows/README.md` before inventing behavior that is not described by the route report.
 
 ## Execution Modes
 
@@ -74,6 +75,7 @@ These overrides can define capability mappings, ownership rules, risk rules, and
 - `references/schema-overview.md`
 - `references/evaluation.md`
 - `references/governance-outputs.md`
+- `examples/agent-workflows/README.md`
 
 ## Resources
 
@@ -88,6 +90,14 @@ These overrides can define capability mappings, ownership rules, risk rules, and
 - `scripts/run_evaluation.py`
 - `scripts/sync_feedback.py`
 - `scripts/validate_router_bundle.py`
+
+## Examples
+
+- `examples/agent-workflows/README.md`: scenario-based agent workflow examples for route, review, seed, composite, lifecycle, profile repair, and closeout behavior
+- `examples/agent-workflows/unattended-plan-prompt.md`: reusable prompt for long-running or unattended agent plans
+- `examples/agent-workflows/update-existing-router-bundle-prompt.md`: reusable prompt for refreshing an existing repository-local bundle after a skill upgrade
+- `examples/outputs/`: complete route and guardrail output samples
+- `examples/profiles/`: copyable profile templates for early repos, monorepos, mixed stacks, and this skill repository shape
 
 ### assets
 

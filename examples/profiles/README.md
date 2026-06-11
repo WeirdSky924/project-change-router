@@ -23,6 +23,7 @@
 - `python-monorepo.project-change-router.yaml`
 - `ts-workspace.project-change-router.yaml`
 - `mixed-repo.project-change-router.yaml`
+- `skill-repo.project-change-router.yaml`
 
 早期仓库建议：
 
@@ -36,3 +37,7 @@
 
 - `../calibration/README.md`
 - `../calibration/anonymized-profile.yaml`
+
+如果你想看“这个 skill 仓库自身如何把 scripts / references / examples / README 映射为治理能力”，看：
+
+- `skill-repo.project-change-router.yaml`

@@ -1633,6 +1633,46 @@ def generic_capability_id(domain: str) -> str:
     return stable_slug(domain)
 
 
+def virtual_modules_from_profile_capability(repo_root: Path, item: dict[str, Any], profile: dict[str, Any]) -> list[ModuleEntry]:
+    if not item.get("allow_non_code_paths"):
+        return []
+    paths: list[str] = []
+    for pattern in item.get("path_patterns", []):
+        normalized = str(pattern).replace("\\", "/").strip()
+        if not normalized:
+            continue
+        candidate = normalized.split("*", 1)[0].rstrip("/")
+        if not candidate:
+            continue
+        if (repo_root / candidate).exists() and candidate not in paths:
+            paths.append(candidate)
+    modules: list[ModuleEntry] = []
+    for path in paths:
+        domain = item.get("domain") or stable_slug(Path(path).name or item["id"])
+        owner = profile_ownership_for_path(path, profile) or item.get("owner") or "profile-declared"
+        modules.append(
+            ModuleEntry(
+                id=f"module-{stable_slug(path)}",
+                path=path,
+                layer=item.get("layer", "governance"),
+                domain=domain,
+                purpose=item.get("purpose", f"Profile-declared non-code surface for {item['id']}"),
+                public_api=(item.get("public_entries") or [None])[0],
+                source_of_truth="profile",
+                key_files=item.get("public_entries", []),
+                generated=False,
+                index_sources=["profile.capabilities.allow_non_code_paths"],
+                owner=owner,
+                lifecycle={
+                    "virtual_module": True,
+                    "profile_id": profile.get("profile_id"),
+                    "path_patterns": item.get("path_patterns", []),
+                },
+            )
+        )
+    return modules
+
+
 def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> tuple[list[CapabilityEntry], set[str]]:
     ignore_patterns = default_ignore_patterns(profile.get("discovery", {}))
     capabilities: list[CapabilityEntry] = []
@@ -1640,6 +1680,8 @@ def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], prof
     for item in profile.get("capabilities", []):
         patterns = item.get("path_patterns", [])
         matched = [module for module in modules if patterns and glob_match(patterns, module.path)]
+        if not matched:
+            matched = virtual_modules_from_profile_capability(repo_root, item, profile)
         if not matched:
             continue
         consumed_modules.update(module.path for module in matched)

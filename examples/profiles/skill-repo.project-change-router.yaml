@@ -1,0 +1,118 @@
+profile_id: project-change-router-skill-repo
+
+capabilities:
+  - id: router-runtime
+    name: Router Runtime
+    path_patterns:
+      - "scripts/**"
+    keywords:
+      - router
+      - route
+      - bootstrap
+      - validate
+      - governance
+    public_entries:
+      - "scripts/resolve_entry.py"
+      - "scripts/bootstrap_router.py"
+      - "scripts/validate_router_bundle.py"
+      - "scripts/check_bundle_governance.py"
+    stage: governed-capability
+    status: stable
+    contracts:
+      - type: scope
+        description: Owns route resolution, bundle bootstrap, validation, governance audit, and evaluation logic.
+      - type: boundary
+        description: Must not encode repository-specific capability facts directly in Python; use profile overrides and generated bundle references.
+      - type: risk
+        description: Review-first behavior must be preserved for low confidence, lifecycle changes, and composite high-risk changes.
+    forbidden_patterns:
+      - "hardcoded target repository paths inside router runtime"
+      - "automatic writes after action=review"
+
+  - id: skill-documentation
+    name: Skill Documentation And Examples
+    allow_non_code_paths: true
+    layer: governance
+    domain: skill-documentation
+    path_patterns:
+      - "README.md"
+      - "README.en.md"
+      - "SKILL.md"
+      - "references/**"
+      - "examples/**"
+      - "assets/**"
+      - "agents/**"
+    keywords:
+      - examples
+      - documentation
+      - workflow
+      - readme
+      - skill
+    public_entries:
+      - "SKILL.md"
+      - "README.md"
+      - "references/router-workflow.md"
+      - "references/governance-outputs.md"
+      - "examples/agent-workflows/README.md"
+    stage: governed-capability
+    status: stable
+    contracts:
+      - type: scope
+        description: Owns agent-facing skill instructions, usage examples, README material, and visual/readability assets.
+      - type: boundary
+        description: Examples must demonstrate route behavior without becoming hidden product logic or contradicting router runtime behavior.
+      - type: cross-capability
+        description: Documentation changes that imply behavior changes must be paired with router-runtime tests or examples.
+    forbidden_patterns:
+      - "example output that omits required route report fields"
+      - "documentation that says review permits product-code writes"
+
+ownership_rules:
+  - path_patterns:
+      - "scripts/**"
+    owner: router-runtime-maintainers
+  - path_patterns:
+      - "README.md"
+      - "README.en.md"
+      - "SKILL.md"
+      - "references/**"
+      - "examples/**"
+      - "assets/**"
+      - "agents/**"
+    owner: skill-documentation-maintainers
+
+module_overrides:
+  - path: "scripts"
+    path_patterns:
+      - "scripts/**"
+    layer: domain-service
+    domain: router-runtime
+    public_api: "resolve_entry.py"
+  - path: "examples"
+    path_patterns:
+      - "examples/**"
+    layer: governance
+    domain: skill-documentation
+    public_api: "agent-workflows/README.md"
+  - path: "references"
+    path_patterns:
+      - "references/**"
+    layer: governance
+    domain: skill-documentation
+    public_api: "router-workflow.md"
+
+evaluation:
+  mode: curated
+  cases:
+    - id: docs-examples-route
+      request: Add more examples for agents to understand governance outputs.
+      expected_action: reuse
+      expected_capabilities:
+        - skill-documentation
+      expected_modules:
+        - examples
+      expected_reads:
+        - examples/agent-workflows/README.md
+      changed_paths:
+        - examples/agent-workflows/README.md
+      risk_level: medium

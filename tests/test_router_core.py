@@ -286,6 +286,38 @@ def test_profile_overrides_capability_and_owner(tmp_path: Path) -> None:
     assert any(entry["target"] == "services/payments" and entry["primary"] == "payments-team" for entry in ownership_entries)
 
 
+def test_profile_can_declare_non_code_governance_capability(tmp_path: Path) -> None:
+    repo = tmp_path / "skill-like-repo"
+    repo.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "resolve_entry.py").write_text("print('route')\n", encoding="utf-8")
+    (repo / "examples" / "agent-workflows").mkdir(parents=True)
+    (repo / "examples" / "agent-workflows" / "README.md").write_text("# Agent workflows\n", encoding="utf-8")
+    (repo / "references").mkdir()
+    (repo / "references" / "router-workflow.md").write_text("# Router workflow\n", encoding="utf-8")
+    (repo / "README.md").write_text("# Skill repo\n", encoding="utf-8")
+    (repo / "README.en.md").write_text("# Skill repo\n", encoding="utf-8")
+    (repo / "SKILL.md").write_text("---\nname: x\ndescription: x\n---\n# X\n", encoding="utf-8")
+    (repo / ".project-change-router.yaml").write_text(
+        (SKILL_ROOT / "examples" / "profiles" / "skill-repo.project-change-router.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    capabilities = {cap["id"]: cap for cap in bundle["capability_catalog"]["capabilities"]}
+    assert "skill-documentation" in capabilities
+    assert "examples" in capabilities["skill-documentation"]["owner_modules"]
+    decision = router_core.resolve_request(
+        "Add more examples for agents to understand governance outputs.",
+        ["examples/agent-workflows/README.md"],
+        bundle,
+        repo / "project-change-router",
+    )
+    assert decision.action in {"reuse", "extend"}
+    assert decision.primary_capability == "skill-documentation"
+    assert decision.routing_confidence_level == "high"
+
+
 def test_seed_repo_stage_is_conservative(tmp_path: Path) -> None:
     repo = create_seed_repo(tmp_path)
     bundle = router_core.bootstrap_bundle(repo, write=True)

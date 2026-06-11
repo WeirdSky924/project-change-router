@@ -1,0 +1,40 @@
+schema_version: 1
+mode: curated
+cases:
+  - id: review-cross-stack-billing-ui
+    request: Modify billing invoice behavior and UI display together.
+    expected_action: review
+    expected_capabilities:
+      - billing-core
+      - billing-ui
+    expected_modules:
+      - services/billing
+      - frontend
+    expected_reads:
+      - services/billing/service.py
+    changed_paths:
+      - services/billing/service.py
+      - frontend/billing/view.ts
+    risk_level: high
+
+  - id: lifecycle-deprecate-payment-core
+    request: Deprecate payment-core and replace it with billing-runtime.
+    expected_action: review
+    expected_capabilities:
+      - payment-core
+    expected_modules:
+      - services/payments
+    expected_reads:
+      - services/payments/service.py
+    changed_paths:
+      - services/payments/service.py
+    risk_level: high
+
+  - id: seed-new-isolated-memory
+    request: Create a brand-new memory subsystem for this repository.
+    expected_action: new
+    expected_capabilities: []
+    expected_modules: []
+    expected_reads: []
+    changed_paths: []
+    risk_level: medium
