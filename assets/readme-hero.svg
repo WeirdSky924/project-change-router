@@ -1,76 +1,129 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="620" viewBox="0 0 1400 620" role="img" aria-labelledby="title desc">
   <title id="title">Project Change Router overview</title>
-  <desc id="desc">A technical illustration of a router node governing code module changes before implementation.</desc>
+  <desc id="desc">A README diagram showing how Project Change Router gives an agent direction, boundaries, and reuse guardrails before code edits.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0c1726"/>
-      <stop offset="0.58" stop-color="#14273a"/>
-      <stop offset="1" stop-color="#f0c77a"/>
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.48" stop-color="#11243a"/>
+      <stop offset="1" stop-color="#192f43"/>
     </linearGradient>
-    <radialGradient id="glow" cx="50%" cy="50%" r="55%">
-      <stop offset="0" stop-color="#8ee7ff" stop-opacity="0.95"/>
-      <stop offset="0.55" stop-color="#2aa9c7" stop-opacity="0.28"/>
-      <stop offset="1" stop-color="#2aa9c7" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#06101d" flood-opacity="0.42"/>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7cf7ff"/>
+      <stop offset="1" stop-color="#10b6c8"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd689"/>
+      <stop offset="1" stop-color="#f4a32f"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#d9e7f3"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-35%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="24" stdDeviation="18" flood-color="#020814" flood-opacity="0.42"/>
     </filter>
-    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
-      <path d="M42 0H0V42" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1"/>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#7cf7ff"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#f4a32f"/>
+    </marker>
+    <pattern id="grid" width="56" height="56" patternUnits="userSpaceOnUse">
+      <path d="M56 0H0V56" fill="none" stroke="#dff7ff" stroke-opacity="0.055" stroke-width="1"/>
     </pattern>
+    <style>
+      .title { font: 800 38px Bahnschrift, Segoe UI, sans-serif; fill: #f8fbff; letter-spacing: -0.5px; }
+      .subtitle { font: 500 18px Segoe UI, sans-serif; fill: #b9cbe0; }
+      .label { font: 800 18px Bahnschrift, Segoe UI, sans-serif; fill: #122033; }
+      .small { font: 600 13px Segoe UI, sans-serif; fill: #3f5368; }
+      .tiny { font: 700 12px Segoe UI, sans-serif; fill: #bfd6e7; }
+      .pill { font: 800 14px Bahnschrift, Segoe UI, sans-serif; fill: #07111f; }
+    </style>
   </defs>
-  <rect width="1200" height="520" rx="34" fill="url(#bg)"/>
-  <rect width="1200" height="520" rx="34" fill="url(#grid)"/>
-  <circle cx="603" cy="258" r="178" fill="url(#glow)"/>
-  <path d="M126 108C302 59 417 130 545 229" fill="none" stroke="#8ee7ff" stroke-opacity="0.42" stroke-width="3"/>
-  <path d="M160 392C319 450 454 388 548 289" fill="none" stroke="#f4c36f" stroke-opacity="0.48" stroke-width="3"/>
-  <path d="M654 229C795 116 935 77 1086 133" fill="none" stroke="#8ee7ff" stroke-opacity="0.44" stroke-width="3"/>
-  <path d="M655 290C782 395 933 440 1075 368" fill="none" stroke="#f4c36f" stroke-opacity="0.48" stroke-width="3"/>
 
-  <g filter="url(#softShadow)">
-    <rect x="74" y="76" width="244" height="122" rx="22" fill="#f8fbff" fill-opacity="0.93"/>
-    <rect x="100" y="105" width="116" height="12" rx="6" fill="#18364d" fill-opacity="0.35"/>
-    <rect x="100" y="132" width="166" height="10" rx="5" fill="#2aa9c7" fill-opacity="0.36"/>
-    <rect x="100" y="157" width="132" height="10" rx="5" fill="#f0aa3c" fill-opacity="0.45"/>
-  </g>
-  <g filter="url(#softShadow)">
-    <rect x="86" y="315" width="244" height="122" rx="22" fill="#f8fbff" fill-opacity="0.92"/>
-    <rect x="112" y="344" width="154" height="12" rx="6" fill="#18364d" fill-opacity="0.35"/>
-    <rect x="112" y="371" width="116" height="10" rx="5" fill="#2aa9c7" fill-opacity="0.36"/>
-    <rect x="112" y="396" width="172" height="10" rx="5" fill="#f0aa3c" fill-opacity="0.45"/>
-  </g>
-  <g filter="url(#softShadow)">
-    <rect x="878" y="82" width="244" height="122" rx="22" fill="#f8fbff" fill-opacity="0.92"/>
-    <rect x="904" y="111" width="142" height="12" rx="6" fill="#18364d" fill-opacity="0.35"/>
-    <rect x="904" y="138" width="178" height="10" rx="5" fill="#2aa9c7" fill-opacity="0.36"/>
-    <rect x="904" y="163" width="126" height="10" rx="5" fill="#f0aa3c" fill-opacity="0.45"/>
-  </g>
-  <g filter="url(#softShadow)">
-    <rect x="858" y="318" width="244" height="122" rx="22" fill="#f8fbff" fill-opacity="0.92"/>
-    <rect x="884" y="347" width="156" height="12" rx="6" fill="#18364d" fill-opacity="0.35"/>
-    <rect x="884" y="374" width="134" height="10" rx="5" fill="#2aa9c7" fill-opacity="0.36"/>
-    <rect x="884" y="399" width="176" height="10" rx="5" fill="#f0aa3c" fill-opacity="0.45"/>
+  <rect width="1400" height="620" rx="34" fill="url(#bg)"/>
+  <rect width="1400" height="620" rx="34" fill="url(#grid)"/>
+  <circle cx="690" cy="322" r="260" fill="#18c7d9" opacity="0.08"/>
+  <circle cx="690" cy="322" r="165" fill="#ffd689" opacity="0.04"/>
+
+  <text class="title" x="72" y="78">Project Change Router</text>
+  <text class="subtitle" x="72" y="111">A direction index and boundary guardrail before AI agents edit large repositories.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="72" y="172" width="310" height="260" rx="28" fill="url(#panel)"/>
+    <rect x="100" y="202" width="92" height="92" rx="24" fill="#10243a"/>
+    <circle cx="146" cy="248" r="23" fill="url(#teal)" opacity="0.9"/>
+    <path d="M132 248h28M146 234v28" stroke="#07111f" stroke-width="5" stroke-linecap="round"/>
+    <text class="label" x="214" y="226">Agent request</text>
+    <text class="small" x="214" y="253">limited context</text>
+    <text class="small" x="214" y="276">local file bias</text>
+    <text class="small" x="214" y="299">name-similarity risk</text>
+    <rect x="100" y="330" width="238" height="54" rx="16" fill="#eaf3fa"/>
+    <text class="small" x="122" y="352">"Where should this change live?"</text>
+    <text class="small" x="122" y="374">"Can I reuse an existing capability?"</text>
   </g>
 
-  <g filter="url(#softShadow)">
-    <path d="M600 139L707 201V325L600 387L493 325V201Z" fill="#f8fbff" fill-opacity="0.97"/>
-    <path d="M600 168L681 215V309L600 356L519 309V215Z" fill="#12253a"/>
-    <path d="M600 202L651 232V292L600 322L549 292V232Z" fill="#2aa9c7"/>
-    <circle cx="600" cy="262" r="20" fill="#f4c36f"/>
-    <path d="M600 167V202M681 215L651 232M681 309L651 292M600 356V322M519 309L549 292M519 215L549 232" stroke="#8ee7ff" stroke-opacity="0.65" stroke-width="4" stroke-linecap="round"/>
+  <g filter="url(#shadow)">
+    <rect x="532" y="152" width="336" height="324" rx="36" fill="#0c1b2c" stroke="#7cf7ff" stroke-opacity="0.38"/>
+    <circle cx="700" cy="278" r="94" fill="#07111f" stroke="#7cf7ff" stroke-width="4"/>
+    <circle cx="700" cy="278" r="60" fill="#10243a" stroke="#ffd689" stroke-opacity="0.75" stroke-width="2"/>
+    <path d="M700 196L724 278L700 360L676 278Z" fill="url(#teal)" opacity="0.92"/>
+    <path d="M618 278L700 254L782 278L700 302Z" fill="#f8fbff" opacity="0.72"/>
+    <circle cx="700" cy="278" r="16" fill="url(#amber)"/>
+    <text x="700" y="416" text-anchor="middle" font-family="Bahnschrift, Segoe UI, sans-serif" font-size="24" font-weight="800" fill="#f8fbff">PCR route report</text>
+    <text x="700" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="14" font-weight="600" fill="#b9cbe0">capability, owner, root, confidence, constraints</text>
   </g>
 
-  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M383 176L500 232" stroke="#8ee7ff" stroke-width="5" stroke-opacity="0.65"/>
-    <path d="M374 343L500 292" stroke="#f4c36f" stroke-width="5" stroke-opacity="0.7"/>
-    <path d="M698 232L830 173" stroke="#8ee7ff" stroke-width="5" stroke-opacity="0.65"/>
-    <path d="M698 292L830 348" stroke="#f4c36f" stroke-width="5" stroke-opacity="0.7"/>
+  <g filter="url(#shadow)">
+    <rect x="1010" y="126" width="318" height="392" rx="30" fill="url(#panel)"/>
+    <text class="label" x="1042" y="166">Large repository</text>
+    <g transform="translate(1042 194)">
+      <rect width="84" height="62" rx="14" fill="#16324a"/>
+      <rect x="108" width="84" height="62" rx="14" fill="#16324a"/>
+      <rect x="216" width="64" height="62" rx="14" fill="#16324a"/>
+      <rect y="88" width="84" height="62" rx="14" fill="#16324a"/>
+      <rect x="108" y="88" width="84" height="62" rx="14" fill="#16324a"/>
+      <rect x="216" y="88" width="64" height="62" rx="14" fill="#16324a"/>
+      <rect y="176" width="84" height="62" rx="14" fill="#16324a"/>
+      <rect x="108" y="176" width="84" height="62" rx="14" fill="#16324a"/>
+      <rect x="216" y="176" width="64" height="62" rx="14" fill="#16324a"/>
+      <g fill="#7cf7ff" opacity="0.82">
+        <circle cx="24" cy="22" r="5"/><circle cx="50" cy="22" r="5"/><circle cx="24" cy="42" r="5"/>
+        <circle cx="132" cy="22" r="5"/><circle cx="158" cy="22" r="5"/><circle cx="132" cy="42" r="5"/>
+        <circle cx="240" cy="22" r="5"/><circle cx="262" cy="42" r="5"/>
+      </g>
+      <rect x="108" y="176" width="84" height="62" rx="14" fill="none" stroke="#7cf7ff" stroke-width="4"/>
+      <path d="M124 207l16 16l34-38" fill="none" stroke="#7cf7ff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <rect x="1042" y="462" width="114" height="34" rx="17" fill="#dffcff"/>
+    <text class="pill" x="1099" y="484" text-anchor="middle">canonical root</text>
+    <rect x="1170" y="462" width="112" height="34" rx="17" fill="#ffe7b8"/>
+    <text class="pill" x="1226" y="484" text-anchor="middle">owner boundary</text>
+  </g>
+
+  <path d="M392 302C452 302 470 278 528 278" fill="none" stroke="#7cf7ff" stroke-width="8" stroke-linecap="round" marker-end="url(#arrow-teal)" filter="url(#glow)"/>
+  <path d="M872 278C934 278 940 278 1000 278" fill="none" stroke="#7cf7ff" stroke-width="8" stroke-linecap="round" marker-end="url(#arrow-teal)" filter="url(#glow)"/>
+  <path d="M386 380C470 500 920 512 1006 404" fill="none" stroke="#f4a32f" stroke-width="5" stroke-dasharray="14 12" marker-end="url(#arrow-amber)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="430" y="514" width="548" height="58" rx="24" fill="#f8fbff"/>
+    <text x="704" y="539" text-anchor="middle" font-family="Bahnschrift, Segoe UI, sans-serif" font-size="18" font-weight="800" fill="#122033">Prevents structural drift</text>
+    <text x="704" y="561" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" font-weight="650" fill="#51677b">reuse existing capability, respect write boundaries, avoid parallel implementation centers</text>
   </g>
 
   <g>
-    <circle cx="383" cy="176" r="8" fill="#8ee7ff"/>
-    <circle cx="374" cy="343" r="8" fill="#f4c36f"/>
-    <circle cx="830" cy="173" r="8" fill="#8ee7ff"/>
-    <circle cx="830" cy="348" r="8" fill="#f4c36f"/>
+    <rect x="438" y="166" width="120" height="34" rx="17" fill="#7cf7ff" opacity="0.92"/>
+    <text class="pill" x="498" y="188" text-anchor="middle">direction</text>
+    <rect x="842" y="166" width="122" height="34" rx="17" fill="#ffd689" opacity="0.96"/>
+    <text class="pill" x="903" y="188" text-anchor="middle">guardrails</text>
+    <rect x="600" y="116" width="200" height="34" rx="17" fill="#f8fbff" opacity="0.95"/>
+    <text class="pill" x="700" y="138" text-anchor="middle">less guessing before editing</text>
   </g>
 </svg>

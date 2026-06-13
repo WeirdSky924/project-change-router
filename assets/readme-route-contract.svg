@@ -1,68 +1,106 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc">
-  <title id="title">Integrated route contract</title>
-  <desc id="desc">Route action, evidence, constraints, and closeout flow as one contract.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560" role="img" aria-labelledby="title desc">
+  <title id="title">Integrated route contract and two-layer model</title>
+  <desc id="desc">A README diagram showing mandatory guardrails and advisory directions in a Project Change Router route report.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#101c2c"/>
-      <stop offset="1" stop-color="#26364a"/>
+      <stop offset="0" stop-color="#091421"/>
+      <stop offset="1" stop-color="#1d3146"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-30%" width="140%" height="160%">
-      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#06101d" flood-opacity="0.32"/>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8df8ff"/>
+      <stop offset="1" stop-color="#1db6ca"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe2a3"/>
+      <stop offset="1" stop-color="#f3a437"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-35%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="20" stdDeviation="16" flood-color="#020814" flood-opacity="0.38"/>
     </filter>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10Z" fill="#8ee7ff"/>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#8df8ff"/>
     </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#f3a437"/>
+    </marker>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#e8fbff" stroke-opacity="0.05" stroke-width="1"/>
+    </pattern>
+    <style>
+      .title { font: 800 34px Bahnschrift, Segoe UI, sans-serif; fill: #f8fbff; }
+      .subtitle { font: 500 16px Segoe UI, sans-serif; fill: #b9cbe0; }
+      .heading { font: 800 22px Bahnschrift, Segoe UI, sans-serif; fill: #101d2d; }
+      .body { font: 650 14px Segoe UI, sans-serif; fill: #455c70; }
+      .darkHead { font: 800 20px Bahnschrift, Segoe UI, sans-serif; fill: #f8fbff; }
+      .darkBody { font: 650 13px Segoe UI, sans-serif; fill: #c6d7e5; }
+      .chip { font: 800 13px Bahnschrift, Segoe UI, sans-serif; fill: #07111f; }
+    </style>
   </defs>
-  <rect width="1200" height="430" rx="28" fill="url(#bg)"/>
-  <g opacity="0.08" stroke="#ffffff">
-    <path d="M0 96H1200M0 192H1200M0 288H1200M0 384H1200"/>
-    <path d="M120 0V430M240 0V430M360 0V430M480 0V430M600 0V430M720 0V430M840 0V430M960 0V430M1080 0V430"/>
-  </g>
-  <text x="72" y="70" font-family="Verdana, Segoe UI, sans-serif" font-size="28" font-weight="700" fill="#f8fbff">One route decision, one contract</text>
-  <text x="72" y="103" font-family="Verdana, Segoe UI, sans-serif" font-size="15" fill="#b9c8d8">Action, confidence, evidence, constraints, lifecycle, and closeout must be read together.</text>
 
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="76" y="155" width="190" height="128" rx="20" fill="#f8fbff"/>
-    <text x="108" y="202" font-size="22" font-weight="700" fill="#12253a">Action</text>
-    <text x="108" y="232" font-size="14" fill="#44576b">reuse / extend</text>
-    <text x="108" y="254" font-size="14" fill="#44576b">extract / new / review</text>
+  <rect width="1400" height="560" rx="34" fill="url(#bg)"/>
+  <rect width="1400" height="560" rx="34" fill="url(#grid)"/>
+  <text class="title" x="72" y="70">A route report is not just an action</text>
+  <text class="subtitle" x="72" y="101">Read the mandatory guardrails and the advisory directions as one integrated contract.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="74" y="150" width="382" height="322" rx="30" fill="#eafaff"/>
+    <rect x="96" y="176" width="338" height="54" rx="20" fill="url(#teal)"/>
+    <text class="heading" x="265" y="211" text-anchor="middle">Mandatory guardrail layer</text>
+    <g transform="translate(112 258)">
+      <rect width="292" height="38" rx="14" fill="#ffffff"/>
+      <text class="body" x="20" y="25">must_read_before_edit</text>
+      <rect y="52" width="292" height="38" rx="14" fill="#ffffff"/>
+      <text class="body" x="20" y="77">allowed_write_paths</text>
+      <rect y="104" width="292" height="38" rx="14" fill="#ffffff"/>
+      <text class="body" x="20" y="129">forbidden_write_paths</text>
+      <rect y="156" width="292" height="38" rx="14" fill="#ffffff"/>
+      <text class="body" x="20" y="181">owner + canonical root</text>
+    </g>
+    <path d="M384 400l18 18l34-42" fill="none" stroke="#10a6b9" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="304" y="155" width="190" height="128" rx="20" fill="#f8fbff"/>
-    <text x="336" y="202" font-size="22" font-weight="700" fill="#12253a">Evidence</text>
-    <text x="336" y="232" font-size="14" fill="#44576b">profile + paths</text>
-    <text x="336" y="254" font-size="14" fill="#44576b">owners + public APIs</text>
+
+  <g filter="url(#shadow)">
+    <rect x="944" y="150" width="382" height="322" rx="30" fill="#fff3dc"/>
+    <rect x="966" y="176" width="338" height="54" rx="20" fill="url(#amber)"/>
+    <text class="heading" x="1135" y="211" text-anchor="middle">Advisory direction layer</text>
+    <g transform="translate(982 258)">
+      <rect width="292" height="38" rx="14" fill="#ffffff"/>
+      <text class="body" x="20" y="25">action: reuse / extend / review</text>
+      <rect y="52" width="292" height="38" rx="14" fill="#ffffff"/>
+      <text class="body" x="20" y="77">recommended_next_steps</text>
+      <rect y="104" width="292" height="38" rx="14" fill="#ffffff"/>
+      <text class="body" x="20" y="129">analysis_directions</text>
+      <rect y="156" width="292" height="38" rx="14" fill="#ffffff"/>
+      <text class="body" x="20" y="181">why_not_actions + repair hints</text>
+    </g>
+    <path d="M1252 402c34-14 42-42 22-70" fill="none" stroke="#f3a437" stroke-width="8" stroke-linecap="round"/>
   </g>
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="532" y="155" width="190" height="128" rx="20" fill="#f8fbff"/>
-    <text x="564" y="202" font-size="22" font-weight="700" fill="#12253a">Constraints</text>
-    <text x="564" y="232" font-size="14" fill="#44576b">allowed writes</text>
-    <text x="564" y="254" font-size="14" fill="#44576b">must-read entries</text>
+
+  <g filter="url(#shadow)">
+    <rect x="528" y="132" width="344" height="366" rx="34" fill="#0d1d2f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <text class="darkHead" x="700" y="176" text-anchor="middle">Route report</text>
+    <text class="darkBody" x="700" y="202" text-anchor="middle">one contract, two kinds of meaning</text>
+
+    <g transform="translate(576 232)">
+      <rect width="248" height="44" rx="16" fill="#f8fbff"/>
+      <text class="body" x="22" y="28">primary_capability</text>
+      <rect y="58" width="248" height="44" rx="16" fill="#f8fbff"/>
+      <text class="body" x="22" y="86">routing_confidence</text>
+      <rect y="116" width="248" height="44" rx="16" fill="#f8fbff"/>
+      <text class="body" x="22" y="144">decision_confidence</text>
+      <rect y="174" width="248" height="44" rx="16" fill="#f8fbff"/>
+      <text class="body" x="22" y="202">post_change_closeout</text>
+    </g>
+
+    <rect x="572" y="466" width="256" height="34" rx="17" fill="#8df8ff"/>
+    <text class="chip" x="700" y="488" text-anchor="middle">guardrails win if layers conflict</text>
   </g>
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="760" y="155" width="190" height="128" rx="20" fill="#f8fbff"/>
-    <text x="792" y="202" font-size="22" font-weight="700" fill="#12253a">Governance</text>
-    <text x="792" y="232" font-size="14" fill="#44576b">lifecycle + review</text>
-    <text x="792" y="254" font-size="14" fill="#44576b">composite route</text>
-  </g>
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="988" y="155" width="136" height="128" rx="20" fill="#f8fbff"/>
-    <text x="1018" y="202" font-size="22" font-weight="700" fill="#12253a">Closeout</text>
-    <text x="1018" y="232" font-size="14" fill="#44576b">validate</text>
-    <text x="1018" y="254" font-size="14" fill="#44576b">evaluate</text>
-  </g>
-  <g stroke="#8ee7ff" stroke-width="4" marker-end="url(#arrow)" opacity="0.9">
-    <path d="M266 219H296"/>
-    <path d="M494 219H524"/>
-    <path d="M722 219H752"/>
-    <path d="M950 219H980"/>
-  </g>
-  <g font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="76" y="330" width="310" height="44" rx="22" fill="#f4c36f" fill-opacity="0.96"/>
-    <text x="104" y="358" font-size="16" font-weight="700" fill="#182233">low routing confidence =&gt; review</text>
-    <rect x="420" y="330" width="326" height="44" rx="22" fill="#8ee7ff" fill-opacity="0.92"/>
-    <text x="448" y="358" font-size="16" font-weight="700" fill="#182233">review means read-only until override</text>
-    <rect x="780" y="330" width="344" height="44" rx="22" fill="#f8fbff" fill-opacity="0.92"/>
-    <text x="808" y="358" font-size="16" font-weight="700" fill="#182233">feedback becomes evaluation coverage</text>
+
+  <path d="M458 312H522" fill="none" stroke="#8df8ff" stroke-width="7" marker-end="url(#arrow-teal)"/>
+  <path d="M878 312H936" fill="none" stroke="#f3a437" stroke-width="7" marker-end="url(#arrow-amber)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="176" y="504" width="1048" height="38" rx="19" fill="#f8fbff"/>
+    <text x="700" y="529" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="14" font-weight="750" fill="#15283c">review is an evidence gate, not a permanent refusal; action is guidance, not an architecture command</text>
   </g>
 </svg>

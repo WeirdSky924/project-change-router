@@ -1,62 +1,103 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560" role="img" aria-labelledby="title desc">
   <title id="title">Continuous router calibration loop</title>
-  <desc id="desc">A loop from profile data through route resolution, implementation, validation, feedback, and evaluation cases.</desc>
+  <desc id="desc">A README diagram showing how human review, feedback, profile updates, and evaluation cases continuously improve Project Change Router.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#f8f3e8"/>
-      <stop offset="1" stop-color="#dbeaf2"/>
+      <stop offset="0" stop-color="#f7efe0"/>
+      <stop offset="0.55" stop-color="#e8f3f8"/>
+      <stop offset="1" stop-color="#d7e8f1"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-30%" width="140%" height="160%">
-      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#223247" flood-opacity="0.18"/>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#74e8f2"/>
+      <stop offset="1" stop-color="#169db0"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd884"/>
+      <stop offset="1" stop-color="#e99125"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-35%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="18" stdDeviation="15" flood-color="#456070" flood-opacity="0.22"/>
     </filter>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
       <path d="M0 0L10 5L0 10Z" fill="#236b84"/>
     </marker>
+    <style>
+      .title { font: 800 34px Bahnschrift, Segoe UI, sans-serif; fill: #14283b; }
+      .subtitle { font: 500 16px Segoe UI, sans-serif; fill: #506a7d; }
+      .head { font: 800 20px Bahnschrift, Segoe UI, sans-serif; fill: #14283b; }
+      .body { font: 650 13px Segoe UI, sans-serif; fill: #526b7d; }
+      .badge { font: 800 13px Bahnschrift, Segoe UI, sans-serif; fill: #102033; }
+    </style>
   </defs>
-  <rect width="1200" height="430" rx="28" fill="url(#bg)"/>
-  <text x="72" y="67" font-family="Verdana, Segoe UI, sans-serif" font-size="28" font-weight="700" fill="#15283c">Calibration turns reviews into stronger routes</text>
-  <text x="72" y="100" font-family="Verdana, Segoe UI, sans-serif" font-size="15" fill="#4e6578">Human decisions, profile fixes, and real regression cases continuously improve the local router bundle.</text>
 
-  <path d="M223 226C245 123 355 94 456 125" fill="none" stroke="#236b84" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <path d="M536 126C639 78 770 119 817 218" fill="none" stroke="#236b84" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <path d="M815 285C756 377 609 398 500 337" fill="none" stroke="#236b84" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <path d="M419 337C309 385 205 330 220 232" fill="none" stroke="#236b84" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect width="1400" height="560" rx="34" fill="url(#bg)"/>
+  <text class="title" x="72" y="70">Calibration turns reviews into better routes</text>
+  <text class="subtitle" x="72" y="101">Every override, correction, owner decision, and regression case becomes durable routing knowledge.</text>
 
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="100" y="154" width="238" height="122" rx="22" fill="#ffffff"/>
-    <circle cx="142" cy="197" r="21" fill="#f4c36f"/>
-    <text x="178" y="194" font-size="21" font-weight="700" fill="#15283c">Profile</text>
-    <text x="178" y="224" font-size="14" fill="#566b7c">owners, paths, entries</text>
-  </g>
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="386" y="96" width="238" height="122" rx="22" fill="#ffffff"/>
-    <circle cx="428" cy="139" r="21" fill="#69c2d8"/>
-    <text x="464" y="136" font-size="21" font-weight="700" fill="#15283c">Resolve</text>
-    <text x="464" y="166" font-size="14" fill="#566b7c">route + constraints</text>
-  </g>
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="688" y="154" width="238" height="122" rx="22" fill="#ffffff"/>
-    <circle cx="730" cy="197" r="21" fill="#f4c36f"/>
-    <text x="766" y="194" font-size="21" font-weight="700" fill="#15283c">Implement</text>
-    <text x="766" y="224" font-size="14" fill="#566b7c">inside allowed paths</text>
-  </g>
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="560" y="291" width="238" height="104" rx="22" fill="#ffffff"/>
-    <circle cx="602" cy="334" r="21" fill="#69c2d8"/>
-    <text x="638" y="331" font-size="21" font-weight="700" fill="#15283c">Validate</text>
-    <text x="638" y="361" font-size="14" fill="#566b7c">guardrails + evaluation</text>
-  </g>
-  <g filter="url(#shadow)" font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="258" y="291" width="238" height="104" rx="22" fill="#ffffff"/>
-    <circle cx="300" cy="334" r="21" fill="#f4c36f"/>
-    <text x="336" y="331" font-size="21" font-weight="700" fill="#15283c">Feedback</text>
-    <text x="336" y="361" font-size="14" fill="#566b7c">reviews become cases</text>
+  <path d="M260 262C282 142 432 98 558 154" fill="none" stroke="#236b84" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M646 154C798 88 968 142 1008 272" fill="none" stroke="#236b84" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M1008 338C942 472 742 498 608 420" fill="none" stroke="#236b84" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M520 420C384 490 238 402 258 278" fill="none" stroke="#236b84" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="96" y="184" width="300" height="142" rx="28" fill="#ffffff"/>
+    <circle cx="142" cy="232" r="25" fill="url(#amber)"/>
+    <path d="M130 232h24M142 220v24" stroke="#102033" stroke-width="5" stroke-linecap="round"/>
+    <text class="head" x="184" y="228">1. Review / override</text>
+    <text class="body" x="184" y="256">human confirms true boundary</text>
+    <text class="body" x="184" y="278">or explains why PCR stopped</text>
   </g>
 
-  <g font-family="Verdana, Segoe UI, sans-serif">
-    <rect x="948" y="150" width="176" height="140" rx="24" fill="#15283c"/>
-    <text x="982" y="198" font-size="20" font-weight="700" fill="#ffffff">Outcome</text>
-    <text x="982" y="229" font-size="14" fill="#dbeaf2">less duplicate code</text>
-    <text x="982" y="252" font-size="14" fill="#dbeaf2">fewer wrong layers</text>
+  <g filter="url(#shadow)">
+    <rect x="468" y="104" width="300" height="142" rx="28" fill="#ffffff"/>
+    <circle cx="514" cy="152" r="25" fill="url(#teal)"/>
+    <path d="M502 152l10 10l20-26" fill="none" stroke="#102033" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="head" x="556" y="148">2. Feedback write-back</text>
+    <text class="body" x="556" y="176">record final action, owner,</text>
+    <text class="body" x="556" y="198">public entry, and route reason</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="842" y="184" width="300" height="142" rx="28" fill="#ffffff"/>
+    <circle cx="888" cy="232" r="25" fill="url(#amber)"/>
+    <path d="M876 220h24v24h-24z" fill="none" stroke="#102033" stroke-width="4"/>
+    <text class="head" x="930" y="228">3. Profile + evaluation</text>
+    <text class="body" x="930" y="256">promote real ownership</text>
+    <text class="body" x="930" y="278">and add regression cases</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="650" y="372" width="300" height="124" rx="28" fill="#ffffff"/>
+    <circle cx="696" cy="420" r="25" fill="url(#teal)"/>
+    <path d="M684 420c10-18 30-18 40 0c-10 18-30 18-40 0z" fill="none" stroke="#102033" stroke-width="4"/>
+    <circle cx="704" cy="420" r="5" fill="#102033"/>
+    <text class="head" x="738" y="416">4. Governance audit</text>
+    <text class="body" x="738" y="444">validate bundle health</text>
+    <text class="body" x="738" y="466">before unattended use</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="284" y="372" width="300" height="124" rx="28" fill="#ffffff"/>
+    <circle cx="330" cy="420" r="25" fill="url(#teal)"/>
+    <path d="M318 430l12-28l12 28M322 422h16" fill="none" stroke="#102033" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="head" x="372" y="416">5. Better next route</text>
+    <text class="body" x="372" y="444">less guessing, stronger</text>
+    <text class="body" x="372" y="466">capability evidence</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1116" y="376" width="202" height="106" rx="24" fill="#14283b"/>
+    <text x="1217" y="412" text-anchor="middle" font-family="Bahnschrift, Segoe UI, sans-serif" font-size="18" font-weight="800" fill="#ffffff">Outcome</text>
+    <text x="1217" y="440" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" font-weight="650" fill="#dfeef6">fewer misroutes</text>
+    <text x="1217" y="462" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" font-weight="650" fill="#dfeef6">fewer duplicate centers</text>
+  </g>
+
+  <g>
+    <rect x="142" y="130" width="204" height="34" rx="17" fill="#ffe4ad"/>
+    <text class="badge" x="244" y="152" text-anchor="middle">manual judgment becomes data</text>
+    <rect x="570" y="292" width="260" height="34" rx="17" fill="#dffcff"/>
+    <text class="badge" x="700" y="314" text-anchor="middle">generated-only evidence gets calibrated</text>
+    <rect x="1000" y="130" width="240" height="34" rx="17" fill="#ffffff"/>
+    <text class="badge" x="1120" y="152" text-anchor="middle">evaluation protects future changes</text>
   </g>
 </svg>
