@@ -332,13 +332,22 @@ After routed changes, run the required closeout checks and record feedback/evalu
 | 仓库结构大改后 | `python scripts/rebuild_index.py --repo <repo-root> --format json` |
 | 修改前解析路由 | `python scripts/resolve_entry.py --repo <repo-root> --request "<request>" --changed-path <path> --format json` |
 | 提交前校验 bundle | `python scripts/validate_router_bundle.py --repo <repo-root> --format json` |
-| 检查重复实现 | `python scripts/check_reuse.py --repo <repo-root> --format json` |
+| 检查重复实现 | `python scripts/check_reuse.py --repo <repo-root> --changed-path <path> --format json` |
 | 检查依赖方向 | `python scripts/check_deps.py --repo <repo-root> --format json` |
 | 检查 public API 边界 | `python scripts/check_public_api.py --repo <repo-root> --format json` |
 | 检查索引新鲜度 | `python scripts/check_index_freshness.py --repo <repo-root> --format json` |
 | 路由治理健康检查 | `python scripts/check_bundle_governance.py --repo <repo-root> --format json` |
 | 路由质量回归评估 | `python scripts/run_evaluation.py --repo <repo-root> --format json` |
 | 人工反馈回写 | `python scripts/sync_feedback.py --repo <repo-root> --feedback-file feedback.json --format json` |
+
+## Reuse 扫描预算
+
+`check_reuse.py` 使用有界扫描，避免单个 changed path 退化成全仓全文相似度比较。
+
+- 优先传入 `--changed-path <path>`；脚本会直接从 changed path 收集候选文件，不会在没有命中 module 时回退全量扫描。
+- `summary.scan` 会报告 candidate 数量、owner 文件数量、预筛跳过数、全文比较数、预算和大文件限制。
+- `status=warn` 表示扫描因预算或文件大小限制不是穷尽结果，但没有发现 P0/P1 阻断；agent 应结合 `summary.scan` 继续做定向源码分析或收窄 profile。
+- 可用 `--max-candidate-files`、`--max-owner-files`、`--max-comparisons`、`--max-file-bytes`、`--top-k-owner-files` 覆盖默认预算。
 
 ## 治理审计
 
@@ -448,6 +457,7 @@ Bundle 样例：
 - [examples/outputs/check-deps.pass.json](./examples/outputs/check-deps.pass.json)
 - [examples/outputs/check-public-api.pass.json](./examples/outputs/check-public-api.pass.json)
 - [examples/outputs/check-reuse.pass.json](./examples/outputs/check-reuse.pass.json)
+- [examples/outputs/check-reuse.warn.json](./examples/outputs/check-reuse.warn.json)
 - [examples/outputs/check-bundle-governance.warn.json](./examples/outputs/check-bundle-governance.warn.json)
 - [examples/outputs/run-evaluation.pass.json](./examples/outputs/run-evaluation.pass.json)
 

@@ -1,0 +1,62 @@
+{
+  "report_id": "check-reuse",
+  "timestamp": "2026-06-18T15:32:22Z",
+  "script": "check_reuse.py",
+  "status": "warn",
+  "blocking": false,
+  "summary": {
+    "finding_count": 1,
+    "scan": {
+      "status": "warn",
+      "budget_exceeded": false,
+      "changed_path_count": 1,
+      "candidate_file_count": 1,
+      "candidate_files_scanned": 1,
+      "candidate_files_limited": false,
+      "owner_file_count": 406,
+      "owner_files_scanned": 406,
+      "owner_files_limited_capabilities": [],
+      "raw_pair_count": 406,
+      "comparisons_planned": 0,
+      "comparisons_run": 0,
+      "comparisons_skipped_by_prefilter": 179,
+      "comparisons_skipped_by_size": 227,
+      "comparisons_skipped_by_budget": 0,
+      "comparisons_skipped_by_top_k": 0,
+      "candidate_examples": ["app/services/workflow/postgres_service.py"],
+      "size_limit_prevented_scan": true,
+      "size_limited_examples": [
+        {
+          "owner_file": "app/services/agent_runtime/api_facades.py",
+          "candidate_file": "app/services/workflow/postgres_service.py",
+          "owner_bytes": 70629,
+          "candidate_bytes": 84996
+        }
+      ],
+      "budget": {
+        "max_candidate_files": 200,
+        "max_owner_files_per_capability": 400,
+        "max_comparisons": 5000,
+        "max_file_bytes_for_full_similarity": 256000,
+        "max_normalized_chars_for_full_similarity": 180000,
+        "max_similarity_char_product": 120000000,
+        "max_length_ratio": 8.0,
+        "min_token_jaccard": 0.08,
+        "min_path_token_overlap": 0.05,
+        "top_k_owner_files_per_candidate": 40
+      }
+    }
+  },
+  "findings": [
+    {
+      "severity": "P2",
+      "rule": "reuse-scan-incomplete",
+      "message": "Reuse scan completed with budget or file-size limits; inspect details before treating duplicate checks as exhaustive.",
+      "details": {
+        "status": "warn",
+        "size_limit_prevented_scan": true,
+        "candidate_examples": ["app/services/workflow/postgres_service.py"]
+      }
+    }
+  ]
+}

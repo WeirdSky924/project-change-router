@@ -5,7 +5,39 @@
   "status": "pass",
   "blocking": false,
   "summary": {
-    "finding_count": 0
+    "finding_count": 0,
+    "scan": {
+      "status": "complete",
+      "budget_exceeded": false,
+      "changed_path_count": 1,
+      "candidate_file_count": 1,
+      "candidate_files_scanned": 1,
+      "candidate_files_limited": false,
+      "owner_file_count": 24,
+      "owner_files_scanned": 24,
+      "owner_files_limited_capabilities": [],
+      "raw_pair_count": 24,
+      "comparisons_planned": 8,
+      "comparisons_run": 3,
+      "comparisons_skipped_by_prefilter": 21,
+      "comparisons_skipped_by_size": 0,
+      "comparisons_skipped_by_budget": 0,
+      "comparisons_skipped_by_top_k": 0,
+      "candidate_examples": ["app/services/orders/service.py"],
+      "size_limit_prevented_scan": false,
+      "budget": {
+        "max_candidate_files": 200,
+        "max_owner_files_per_capability": 400,
+        "max_comparisons": 5000,
+        "max_file_bytes_for_full_similarity": 256000,
+        "max_normalized_chars_for_full_similarity": 180000,
+        "max_similarity_char_product": 120000000,
+        "max_length_ratio": 8.0,
+        "min_token_jaccard": 0.08,
+        "min_path_token_overlap": 0.05,
+        "top_k_owner_files_per_candidate": 40
+      }
+    }
   },
   "findings": []
 }

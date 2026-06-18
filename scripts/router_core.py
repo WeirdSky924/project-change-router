@@ -44,7 +44,7 @@ DEFAULT_IGNORE_GLOBS = [
     "**/*.log",
 ]
 
-CODE_SUFFIXES = {".py", ".java", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+CODE_SUFFIXES = {".py", ".java", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".sql"}
 MANIFEST_FILES = [
     "pom.xml",
     "package.json",
@@ -124,6 +124,19 @@ DEFAULT_HIGH_RISK_KEYWORDS = [
 PRIVATE_SEGMENTS = {"internal", "private", "impl", "_internal", "_private"}
 EXTENSION_FILE_MARKERS = ("plugin", "registry", "hook", "extension", "adapter", "interface", "port")
 CHANGE_VERBS = ("add", "change", "extend", "modify", "update", "introduce", "create", "implement", "fix", "refactor", "增加", "变更", "扩展", "修改", "新增", "实现", "修复", "重构")
+
+@dataclass
+class ReuseScanBudget:
+    max_candidate_files: int = 200
+    max_owner_files_per_capability: int = 400
+    max_comparisons: int = 5000
+    max_file_bytes_for_full_similarity: int = 256_000
+    max_normalized_chars_for_full_similarity: int = 180_000
+    max_similarity_char_product: int = 120_000_000
+    max_length_ratio: float = 8.0
+    min_token_jaccard: float = 0.08
+    min_path_token_overlap: float = 0.05
+    top_k_owner_files_per_candidate: int = 40
 
 
 @dataclass
@@ -1907,11 +1920,38 @@ def build_ownership(capabilities: list[CapabilityEntry], modules: list[ModuleEnt
     }
 
 
+def looks_like_file_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").strip("/")
+    if not normalized or normalized == ".":
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    if Path(name).suffix:
+        return True
+    if name.startswith(".") and len(name) > 1:
+        return True
+    return name in set(MANIFEST_FILES) | {"LICENSE", "NOTICE", "README", "Makefile", "Dockerfile"}
+
+
 def module_path_pattern(module_path: str) -> str:
     normalized = module_path.replace("\\", "/").strip("/")
     if not normalized or normalized == ".":
         return "**"
+    if looks_like_file_path(normalized):
+        return normalized
     return f"{normalized}/**"
+
+
+def root_owner_fallback_modules(capability: CapabilityEntry, modules: list[ModuleEntry]) -> list[str]:
+    """Use same-domain modules when a broad root owner would otherwise claim the repo."""
+    if not any(module.path != "." for module in modules):
+        return []
+    capability_id = stable_slug(capability.id)
+    matches = [
+        module.path
+        for module in modules
+        if module.path != "." and stable_slug(module.domain) == capability_id
+    ]
+    return sorted(dict.fromkeys(matches))
 
 
 def build_path_to_capability_map(repo_root: Path, capabilities: list[CapabilityEntry], modules: list[ModuleEntry]) -> dict[str, Any]:
@@ -1921,6 +1961,18 @@ def build_path_to_capability_map(repo_root: Path, capabilities: list[CapabilityE
 
     for capability in capabilities:
         for owner in capability.owner_modules:
+            if owner == ".":
+                fallback_modules = root_owner_fallback_modules(capability, modules)
+                if fallback_modules:
+                    for fallback_module in fallback_modules:
+                        claims[module_path_pattern(fallback_module)].append(
+                            {
+                                "capability": capability.id,
+                                "source": "domain_fallback_from_root_owner",
+                                "module": fallback_module,
+                            }
+                        )
+                    continue
             claims[module_path_pattern(owner)].append(
                 {
                     "capability": capability.id,
@@ -2121,6 +2173,11 @@ def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, A
             "min_contracts_for_large_capability": 4,
             "large_capability_file_threshold": 10,
             "recommended_contract_chars": {"min": 50, "max": 240},
+        },
+        "reuse_scan_budget": {
+            **dataclasses.asdict(ReuseScanBudget()),
+            **profile.get("reuse_scan_budget", {}),
+            **profile.get("guardrails", {}).get("reuse_scan_budget", {}),
         },
         "capability_lifecycle_policy": {
             "stages": ["provisional", "candidate", "stable", "governed-capability", "deprecated"],
@@ -2516,6 +2573,16 @@ def build_governance_repair_suggestions(findings: list[dict[str, Any]]) -> list[
                         "confidence": "high" if rule == "path-to-capability-map-missing" else "medium",
                     }
                 )
+        elif rule in {"capability-root-owner-too-broad", "path-map-repository-wide-capability"}:
+            for capability in details.get("capabilities", []) or [finding.get("target")]:
+                suggestions.append(
+                    {
+                        "kind": "narrow_capability_ownership",
+                        "target": capability,
+                        "suggestion": "Replace repo-root ownership with concrete owner_modules, public_entries, and path patterns such as migrations/**, app/<domain>/**, or explicit schema/test bindings.",
+                        "confidence": "high",
+                    }
+                )
         elif rule in {"profile-capability-contracts-too-thin", "large-capability-contracts-too-thin"}:
             suggestions.append(
                 {
@@ -2655,6 +2722,56 @@ def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str
             "references/path-to-capability-map.yaml",
             "Split broad capabilities or mark shared ownership explicitly in profile contracts.",
             {"ambiguous_pattern_count": len(ambiguous_patterns), "examples": ambiguous_patterns[:10]},
+        )
+
+    non_root_modules = [module.path for module in modules if module.path != "."]
+    root_owner_capabilities = [
+        {
+            "capability": capability.id,
+            "source_of_truth": capability.source_of_truth,
+            "fallback_modules": root_owner_fallback_modules(capability, modules),
+        }
+        for capability in capabilities
+        if "." in capability.owner_modules and non_root_modules
+    ]
+    if root_owner_capabilities:
+        add_governance_finding(
+            findings,
+            "P1",
+            "capability-root-owner-too-broad",
+            "Some capabilities claim the repository root while narrower discovered modules exist.",
+            "references/capability-catalog.yaml",
+            "Replace owner_modules: [.] and public_entries: [.] with concrete capability roots or explicit profile path patterns.",
+            {
+                "capabilities": [item["capability"] for item in root_owner_capabilities[:20]],
+                "examples": root_owner_capabilities[:10],
+                "non_root_module_count": len(non_root_modules),
+            },
+        )
+
+    repo_wide_capability_patterns = [
+        entry
+        for entry in path_map.get("path_index", [])
+        if str(entry.get("path_pattern")) in {"**", "**/*", "*"} and entry.get("capabilities")
+    ]
+    if repo_wide_capability_patterns and non_root_modules:
+        add_governance_finding(
+            findings,
+            "P1",
+            "path-map-repository-wide-capability",
+            "The path-to-capability map routes the entire repository to one or more concrete capabilities.",
+            "references/path-to-capability-map.yaml",
+            "Regenerate or repair the bundle so repo-wide patterns are used only for root-only repositories or explicit governance surfaces.",
+            {
+                "capabilities": sorted(
+                    {
+                        str(capability)
+                        for entry in repo_wide_capability_patterns
+                        for capability in entry.get("capabilities", [])
+                    }
+                ),
+                "examples": repo_wide_capability_patterns[:10],
+            },
         )
 
     owner_rules = profile.get("ownership_rules", [])
@@ -4284,6 +4401,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
 
 def normalized_code(text: str) -> str:
     text = re.sub(r"//.*?$|/\*.*?\*/|#.*?$", " ", text, flags=re.M | re.S)
+    text = re.sub(r"--.*?$", " ", text, flags=re.M)
     string_pattern = r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''  # noqa: W605
     text = re.sub(string_pattern, '"STR"', text)
     text = re.sub(r"\b\d+(\.\d+)?\b", "NUM", text)
@@ -4411,70 +4529,340 @@ def gather_public_api_findings(repo_root: Path, bundle: dict[str, Any]) -> list[
     return findings
 
 
-def gather_reuse_findings(repo_root: Path, bundle: dict[str, Any], changed_paths: Optional[list[str]] = None) -> list[dict[str, Any]]:
+def reuse_scan_budget_from_bundle(bundle: dict[str, Any], overrides: Optional[dict[str, Any]] = None) -> ReuseScanBudget:
+    configured = dict(bundle.get("change_rules", {}).get("reuse_scan_budget", {}))
+    configured.update(overrides or {})
+    if "max_owner_files" in configured and "max_owner_files_per_capability" not in configured:
+        configured["max_owner_files_per_capability"] = configured["max_owner_files"]
+    if "max_file_bytes" in configured and "max_file_bytes_for_full_similarity" not in configured:
+        configured["max_file_bytes_for_full_similarity"] = configured["max_file_bytes"]
+    values: dict[str, Any] = {}
+    float_fields = {"max_length_ratio", "min_token_jaccard", "min_path_token_overlap"}
+    for field_info in dataclasses.fields(ReuseScanBudget):
+        raw = configured.get(field_info.name, field_info.default)
+        try:
+            values[field_info.name] = float(raw) if field_info.name in float_fields else int(raw)
+        except (TypeError, ValueError):
+            values[field_info.name] = field_info.default
+    return ReuseScanBudget(**values)
+
+
+def unique_paths(repo_root: Path, paths: Iterable[Path]) -> list[Path]:
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for path in paths:
+        rel = normalize_rel_path(repo_root, path)
+        if rel in seen:
+            continue
+        seen.add(rel)
+        ordered.append(path)
+    return ordered
+
+
+def collect_code_files_from_surface(repo_root: Path, target: Path, ignore_patterns: Iterable[str]) -> list[Path]:
+    if not target.exists():
+        return []
+    if should_ignore_path(target, ignore_patterns, repo_root):
+        return []
+    if target.is_file():
+        return [target] if target.suffix.lower() in CODE_SUFFIXES else []
+    files = [
+        file
+        for file in iter_source_files(target, ignore_patterns)
+        if file.suffix.lower() in CODE_SUFFIXES and not should_ignore_path(file, ignore_patterns, repo_root)
+    ]
+    return unique_paths(repo_root, files)
+
+
+def changed_path_candidate_files(repo_root: Path, changed_paths: list[str], ignore_patterns: Iterable[str]) -> list[Path]:
+    candidates: list[Path] = []
+    for item in changed_paths:
+        normalized = item.replace("\\", "/").strip()
+        if not normalized:
+            continue
+        if any(char in normalized for char in "*?["):
+            for target in repo_root.glob(normalized.lstrip("/")):
+                candidates.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
+            continue
+        raw_path = Path(item)
+        target = raw_path if raw_path.is_absolute() else repo_root / normalized
+        candidates.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
+    return unique_paths(repo_root, candidates)
+
+
+def capability_owner_files(repo_root: Path, capability: CapabilityEntry, modules: list[ModuleEntry], ignore_patterns: Iterable[str]) -> list[Path]:
+    module_by_path = {module.path: module for module in modules}
+    owner_paths: list[str] = []
+    for owner in capability.owner_modules:
+        if owner == ".":
+            fallback_modules = root_owner_fallback_modules(capability, modules)
+            if fallback_modules:
+                owner_paths.extend(fallback_modules)
+                continue
+        owner_paths.append(owner)
+
+    files: list[Path] = []
+    for owner in owner_paths:
+        if any(char in owner for char in "*?["):
+            for target in repo_root.glob(owner.replace("\\", "/").lstrip("/")):
+                files.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
+            continue
+        module = module_by_path.get(owner)
+        target = repo_root / module.path if module and module.path != "." else repo_root if module else repo_root / owner
+        files.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
+    return unique_paths(repo_root, files)
+
+
+def jaccard(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def path_token_set(repo_root: Path, path: Path) -> set[str]:
+    tokens = set(derive_path_tokens(normalize_rel_path(repo_root, path)))
+    return {token for token in tokens if token not in GENERIC_PATH_TOKENS}
+
+
+def prioritize_owner_files(repo_root: Path, owner_files: list[Path], candidate_files: list[Path]) -> list[Path]:
+    candidate_tokens: set[str] = set()
+    for candidate in candidate_files:
+        candidate_tokens.update(path_token_set(repo_root, candidate))
+    return sorted(
+        owner_files,
+        key=lambda path: (
+            -jaccard(path_token_set(repo_root, path), candidate_tokens),
+            normalize_rel_path(repo_root, path),
+        ),
+    )
+
+
+def gather_reuse_report(
+    repo_root: Path,
+    bundle: dict[str, Any],
+    changed_paths: Optional[list[str]] = None,
+    budget_overrides: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     modules = module_entries(bundle)
     capabilities = capability_entries(bundle)
     ignore_patterns = default_ignore_patterns(bundle.get("config", {}))
-    candidate_files = source_files_for_modules(repo_root, modules, ignore_patterns)
+    budget = reuse_scan_budget_from_bundle(bundle, budget_overrides)
     if changed_paths:
-        normalized_paths = [item.replace("\\", "/") for item in changed_paths]
-        filtered = []
-        for file in candidate_files:
-            rel = normalize_rel_path(repo_root, file)
-            if any(rel == path or rel.startswith(path.rstrip("/") + "/") for path in normalized_paths):
-                filtered.append(file)
-        if filtered:
-            candidate_files = filtered
+        candidate_files = changed_path_candidate_files(repo_root, changed_paths, ignore_patterns)
+    else:
+        candidate_files = source_files_for_modules(repo_root, modules, ignore_patterns)
+
     findings: list[dict[str, Any]] = []
+    metrics: dict[str, Any] = {
+        "status": "complete",
+        "budget_exceeded": False,
+        "changed_path_count": len(changed_paths or []),
+        "candidate_file_count": len(candidate_files),
+        "candidate_files_scanned": min(len(candidate_files), budget.max_candidate_files),
+        "candidate_files_limited": len(candidate_files) > budget.max_candidate_files,
+        "owner_file_count": 0,
+        "owner_files_scanned": 0,
+        "owner_files_limited_capabilities": [],
+        "raw_pair_count": 0,
+        "comparisons_planned": 0,
+        "comparisons_run": 0,
+        "comparisons_skipped_by_prefilter": 0,
+        "comparisons_skipped_by_size": 0,
+        "comparisons_skipped_by_budget": 0,
+        "comparisons_skipped_by_top_k": 0,
+        "size_limited_examples": [],
+        "candidate_examples": [normalize_rel_path(repo_root, path) for path in candidate_files[:20]],
+        "budget": dataclasses.asdict(budget),
+    }
+    if metrics["candidate_files_limited"]:
+        candidate_files = candidate_files[: budget.max_candidate_files]
+
+    normalized_cache: dict[Path, str] = {}
+    token_cache: dict[Path, set[str]] = {}
+    stat_cache: dict[Path, int] = {}
+    module_cache: dict[str, Optional[ModuleEntry]] = {}
     owner_file_cache: dict[str, list[Path]] = {}
+
+    def rel(path: Path) -> str:
+        return normalize_rel_path(repo_root, path)
+
+    def file_size(path: Path) -> int:
+        if path not in stat_cache:
+            try:
+                stat_cache[path] = path.stat().st_size
+            except OSError:
+                stat_cache[path] = 0
+        return stat_cache[path]
+
+    def normalized_text(path: Path) -> str:
+        if path not in normalized_cache:
+            normalized_cache[path] = normalized_code(path.read_text(encoding="utf-8", errors="ignore"))
+        return normalized_cache[path]
+
+    def content_token_set(path: Path) -> set[str]:
+        if path not in token_cache:
+            token_cache[path] = set(text_tokens(normalized_text(path)))
+        return token_cache[path]
+
+    def file_module(path: Path) -> Optional[ModuleEntry]:
+        normalized = rel(path)
+        if normalized not in module_cache:
+            module_cache[normalized] = module_for_path(normalized, modules)
+        return module_cache[normalized]
+
+    def remember_size_limited(owner_file: Path, candidate: Path) -> None:
+        if len(metrics["size_limited_examples"]) >= 20:
+            return
+        metrics["size_limited_examples"].append(
+            {
+                "owner_file": rel(owner_file),
+                "candidate_file": rel(candidate),
+                "owner_bytes": file_size(owner_file),
+                "candidate_bytes": file_size(candidate),
+            }
+        )
+
+    def prefilter_pair(owner_file: Path, candidate: Path) -> Optional[float]:
+        if candidate == owner_file or candidate.suffix.lower() != owner_file.suffix.lower():
+            metrics["comparisons_skipped_by_prefilter"] += 1
+            return None
+        owner_module = file_module(owner_file)
+        candidate_module = file_module(candidate)
+        if candidate_module and owner_module and candidate_module.path == owner_module.path:
+            metrics["comparisons_skipped_by_prefilter"] += 1
+            return None
+        owner_bytes = file_size(owner_file)
+        candidate_bytes = file_size(candidate)
+        if owner_bytes > budget.max_file_bytes_for_full_similarity or candidate_bytes > budget.max_file_bytes_for_full_similarity:
+            metrics["comparisons_skipped_by_size"] += 1
+            remember_size_limited(owner_file, candidate)
+            return None
+        owner_text = normalized_text(owner_file)
+        candidate_text = normalized_text(candidate)
+        if len(owner_text) > budget.max_normalized_chars_for_full_similarity or len(candidate_text) > budget.max_normalized_chars_for_full_similarity:
+            metrics["comparisons_skipped_by_size"] += 1
+            remember_size_limited(owner_file, candidate)
+            return None
+        if len(owner_text) * len(candidate_text) > budget.max_similarity_char_product:
+            metrics["comparisons_skipped_by_size"] += 1
+            remember_size_limited(owner_file, candidate)
+            return None
+        shorter = max(1, min(len(owner_text), len(candidate_text)))
+        length_ratio = max(len(owner_text), len(candidate_text)) / shorter
+        if length_ratio > budget.max_length_ratio:
+            metrics["comparisons_skipped_by_prefilter"] += 1
+            return None
+        token_score = jaccard(content_token_set(owner_file), content_token_set(candidate))
+        path_score = jaccard(path_token_set(repo_root, owner_file), path_token_set(repo_root, candidate))
+        if token_score < budget.min_token_jaccard and path_score < budget.min_path_token_overlap:
+            metrics["comparisons_skipped_by_prefilter"] += 1
+            return None
+        return (token_score * 0.8) + (path_score * 0.2)
+
+    budget_exhausted = False
     for capability in capabilities:
         for pattern in capability.forbidden_patterns:
             for file in candidate_files:
-                rel = normalize_rel_path(repo_root, file)
-                if fnmatch.fnmatchcase(rel, pattern.replace("\\", "/")):
+                file_rel = rel(file)
+                if fnmatch.fnmatchcase(file_rel, pattern.replace("\\", "/")):
                     findings.append(
                         {
                             "severity": "P0",
                             "rule": "forbidden-pattern",
-                            "path": rel,
+                            "path": file_rel,
                             "capability": capability.id,
-                            "message": f"{rel} matches a forbidden path pattern for {capability.id}",
+                            "message": f"{file_rel} matches a forbidden path pattern for {capability.id}",
                         }
                     )
-        if not capability.owner_modules:
+        if not capability.owner_modules or not candidate_files:
             continue
         if capability.id not in owner_file_cache:
-            owner_files: list[Path] = []
-            for owner in capability.owner_modules:
-                module = next((item for item in modules if item.path == owner), None)
-                if not module:
-                    continue
-                owner_root = repo_root / module.path if module.path != "." else repo_root
-                owner_files.extend([file for file in iter_source_files(owner_root, ignore_patterns) if file.suffix.lower() in CODE_SUFFIXES])
+            owner_files = capability_owner_files(repo_root, capability, modules, ignore_patterns)
+            metrics["owner_file_count"] += len(owner_files)
+            if len(owner_files) > budget.max_owner_files_per_capability:
+                metrics["owner_files_limited_capabilities"].append(
+                    {
+                        "capability": capability.id,
+                        "owner_file_count": len(owner_files),
+                        "scanned": budget.max_owner_files_per_capability,
+                    }
+                )
+                owner_files = prioritize_owner_files(repo_root, owner_files, candidate_files)[: budget.max_owner_files_per_capability]
             owner_file_cache[capability.id] = owner_files
         owner_files = owner_file_cache[capability.id]
-        for owner_file in owner_files:
-            owner_module = module_for_path(normalize_rel_path(repo_root, owner_file), modules)
-            for candidate in candidate_files:
-                if candidate == owner_file or candidate.suffix.lower() != owner_file.suffix.lower():
+        metrics["owner_files_scanned"] += len(owner_files)
+        metrics["raw_pair_count"] += len(owner_files) * len(candidate_files)
+
+        for candidate in candidate_files:
+            preliminary: list[tuple[float, Path]] = []
+            for owner_file in owner_files:
+                rough_score = prefilter_pair(owner_file, candidate)
+                if rough_score is None:
                     continue
-                candidate_module = module_for_path(normalize_rel_path(repo_root, candidate), modules)
-                if candidate_module and owner_module and candidate_module.path == owner_module.path:
+                preliminary.append((rough_score, owner_file))
+            metrics["comparisons_planned"] += len(preliminary)
+            selected = sorted(preliminary, key=lambda item: item[0], reverse=True)[: budget.top_k_owner_files_per_candidate]
+            metrics["comparisons_skipped_by_top_k"] += max(0, len(preliminary) - len(selected))
+            for _, owner_file in selected:
+                if metrics["comparisons_run"] >= budget.max_comparisons:
+                    metrics["budget_exceeded"] = True
+                    metrics["comparisons_skipped_by_budget"] += len(selected)
+                    budget_exhausted = True
+                    break
+                owner_text = normalized_text(owner_file)
+                candidate_text = normalized_text(candidate)
+                matcher = difflib.SequenceMatcher(None, owner_text, candidate_text)
+                if matcher.quick_ratio() < 0.85:
+                    metrics["comparisons_skipped_by_prefilter"] += 1
                     continue
-                score = similarity(owner_file, candidate)
+                metrics["comparisons_run"] += 1
+                score = matcher.ratio()
                 if score < 0.85:
                     continue
                 findings.append(
                     {
                         "severity": "P1" if score >= 0.92 else "P2",
                         "rule": "duplicate-implementation",
-                        "path": normalize_rel_path(repo_root, candidate),
+                        "path": rel(candidate),
+                        "owner_path": rel(owner_file),
                         "capability": capability.id,
                         "score": round(score, 4),
                         "message": f"duplicate implementation signal for {capability.id}",
                     }
                 )
-    return findings
+            if budget_exhausted:
+                break
+        if budget_exhausted:
+            break
+
+    size_limit_prevented_scan = bool(
+        metrics["raw_pair_count"] > 0
+        and metrics["comparisons_skipped_by_size"] > 0
+        and metrics["comparisons_planned"] == 0
+        and metrics["comparisons_run"] == 0
+    )
+    metrics["size_limit_prevented_scan"] = size_limit_prevented_scan
+    incomplete = bool(
+        metrics["budget_exceeded"]
+        or metrics["candidate_files_limited"]
+        or metrics["owner_files_limited_capabilities"]
+        or size_limit_prevented_scan
+    )
+    if incomplete:
+        metrics["status"] = "warn"
+        findings.append(
+            {
+                "severity": "P2",
+                "rule": "reuse-scan-incomplete",
+                "message": "Reuse scan completed with budget or file-size limits; inspect details before treating duplicate checks as exhaustive.",
+                "details": metrics,
+            }
+        )
+    return {"findings": findings, "scan": metrics}
+
+
+def gather_reuse_findings(repo_root: Path, bundle: dict[str, Any], changed_paths: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    return gather_reuse_report(repo_root, bundle, changed_paths)["findings"]
 
 
 def bundle_metadata(bundle: dict[str, Any]) -> dict[str, Any]:

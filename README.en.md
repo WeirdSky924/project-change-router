@@ -332,13 +332,22 @@ If the target repository already has a `project-change-router/` bundle generated
 | Major repository structure change | `python scripts/rebuild_index.py --repo <repo-root> --format json` |
 | Resolve route before editing | `python scripts/resolve_entry.py --repo <repo-root> --request "<request>" --changed-path <path> --format json` |
 | Pre-commit bundle validation | `python scripts/validate_router_bundle.py --repo <repo-root> --format json` |
-| Check duplicate implementation | `python scripts/check_reuse.py --repo <repo-root> --format json` |
+| Check duplicate implementation | `python scripts/check_reuse.py --repo <repo-root> --changed-path <path> --format json` |
 | Check dependency direction | `python scripts/check_deps.py --repo <repo-root> --format json` |
 | Check public API boundaries | `python scripts/check_public_api.py --repo <repo-root> --format json` |
 | Check index freshness | `python scripts/check_index_freshness.py --repo <repo-root> --format json` |
 | Routing governance health check | `python scripts/check_bundle_governance.py --repo <repo-root> --format json` |
 | Route quality regression evaluation | `python scripts/run_evaluation.py --repo <repo-root> --format json` |
 | Manual feedback write-back | `python scripts/sync_feedback.py --repo <repo-root> --feedback-file feedback.json --format json` |
+
+## Reuse Scan Budget
+
+`check_reuse.py` uses bounded scanning so a single changed path does not degrade into unbounded full-repository text similarity.
+
+- Prefer `--changed-path <path>`; the script collects candidate files directly from the changed path and does not fall back to a full scan when the path is outside discovered modules.
+- `summary.scan` reports candidate counts, owner file counts, prefilter skips, full similarity comparisons, and active file-size/budget limits.
+- `status=warn` means the scan was not exhaustive because of budget or file-size limits, but no P0/P1 blocker was found; the agent should use `summary.scan` for targeted source analysis or profile repair.
+- Override defaults with `--max-candidate-files`, `--max-owner-files`, `--max-comparisons`, `--max-file-bytes`, and `--top-k-owner-files`.
 
 ## Governance Audit
 
@@ -448,6 +457,7 @@ Output samples:
 - [examples/outputs/check-deps.pass.json](./examples/outputs/check-deps.pass.json)
 - [examples/outputs/check-public-api.pass.json](./examples/outputs/check-public-api.pass.json)
 - [examples/outputs/check-reuse.pass.json](./examples/outputs/check-reuse.pass.json)
+- [examples/outputs/check-reuse.warn.json](./examples/outputs/check-reuse.warn.json)
 - [examples/outputs/check-bundle-governance.warn.json](./examples/outputs/check-bundle-governance.warn.json)
 - [examples/outputs/run-evaluation.pass.json](./examples/outputs/run-evaluation.pass.json)
 

@@ -546,3 +546,139 @@ evaluation:
     bundle = router_core.bootstrap_bundle(repo, write=True)
     assert bundle["evaluation_set"]["mode"] in {"curated", "hybrid"}
     assert any(case["id"] == "curated-case-1" for case in bundle["evaluation_set"]["cases"])
+
+
+def test_reuse_scan_changed_test_path_does_not_fallback_to_full_scan(tmp_path: Path) -> None:
+    repo = tmp_path / "reuse-scan-repo"
+    (repo / "app" / "services").mkdir(parents=True)
+    (repo / "tests").mkdir(parents=True)
+    for index in range(12):
+        (repo / "app" / "services" / f"service_{index}.py").write_text(
+            f"def service_{index}():\n    return {index}\n",
+            encoding="utf-8",
+        )
+    (repo / "tests" / "test_workflow_execution.py").write_text(
+        "def test_workflow_execution():\n    assert True\n",
+        encoding="utf-8",
+    )
+    module = router_core.ModuleEntry(
+        id="module-app-services",
+        path="app/services",
+        layer="domain-service",
+        domain="app-services",
+        purpose="Application services",
+    )
+    capability = router_core.CapabilityEntry(
+        id="app-services",
+        name="Application Services",
+        status="stable",
+        maturity="stable",
+        stage="stable",
+        owner_modules=["app/services"],
+        public_entries=["app/services"],
+    )
+    bundle = {
+        "config": {"generated_at": "2026-01-01T00:00:00Z", "ignore_paths": []},
+        "change_rules": {"reuse_scan_budget": {"max_comparisons": 100}},
+        "module_map": {"modules": [module.to_dict()]},
+        "capability_catalog": {"capabilities": [capability.to_dict()]},
+    }
+    report = router_core.gather_reuse_report(repo, bundle, ["tests/test_workflow_execution.py"])
+
+    assert report["scan"]["candidate_file_count"] == 1
+    assert report["scan"]["candidate_examples"] == ["tests/test_workflow_execution.py"]
+    assert report["scan"]["raw_pair_count"] == 12
+
+
+def test_root_owner_path_map_falls_back_to_same_domain_module(tmp_path: Path) -> None:
+    repo = tmp_path / "path-map-repo"
+    (repo / "migrations").mkdir(parents=True)
+    (repo / "app").mkdir(parents=True)
+    modules = [
+        router_core.ModuleEntry(
+            id="module-database-schema-migrations",
+            path="migrations",
+            layer="infra",
+            domain="database-schema-migrations",
+            purpose="Schema migrations",
+        ),
+        router_core.ModuleEntry(
+            id="module-app",
+            path="app",
+            layer="domain-service",
+            domain="app",
+            purpose="Application code",
+        ),
+    ]
+    capability = router_core.CapabilityEntry(
+        id="database-schema-migrations",
+        name="Database Schema Migrations",
+        status="stable",
+        maturity="stable",
+        stage="stable",
+        source_of_truth="curated",
+        owner_modules=["."],
+        public_entries=["."],
+    )
+
+    path_map = router_core.build_path_to_capability_map(repo, [capability], modules)
+
+    assert path_map["lookup"]["migrations/**"] == ["database-schema-migrations"]
+    assert "database-schema-migrations" not in path_map["lookup"].get("**", [])
+
+
+def test_governance_flags_repo_wide_capability_mapping(tmp_path: Path) -> None:
+    repo = tmp_path / "bad-path-map-repo"
+    repo.mkdir(parents=True)
+    modules = [
+        router_core.ModuleEntry(
+            id="module-database-schema-migrations",
+            path="migrations",
+            layer="infra",
+            domain="database-schema-migrations",
+            purpose="Schema migrations",
+        ),
+        router_core.ModuleEntry(
+            id="module-app",
+            path="app",
+            layer="domain-service",
+            domain="app",
+            purpose="Application code",
+        ),
+    ]
+    capability = router_core.CapabilityEntry(
+        id="database-schema-migrations",
+        name="Database Schema Migrations",
+        status="stable",
+        maturity="stable",
+        stage="stable",
+        source_of_truth="curated",
+        owner_modules=["."],
+        public_entries=["."],
+    )
+    bundle = {
+        "config": {"repo_stage": "structured"},
+        "change_rules": {},
+        "module_map": {"modules": [module.to_dict() for module in modules]},
+        "capability_catalog": {"capabilities": [capability.to_dict()]},
+        "path_to_capability_map": {
+            "path_index": [
+                {
+                    "path_pattern": "**",
+                    "capabilities": ["database-schema-migrations"],
+                    "relationship": "unique",
+                    "sources": ["owner_modules"],
+                    "modules": ["."],
+                }
+            ],
+            "uncovered_modules": [],
+            "ambiguous_patterns": [],
+        },
+    }
+
+    report = router_core.audit_bundle_governance(repo, bundle)
+    rules = {finding["rule"] for finding in report["findings"]}
+
+    assert "capability-root-owner-too-broad" in rules
+    assert "path-map-repository-wide-capability" in rules
+    assert any(suggestion["kind"] == "narrow_capability_ownership" for suggestion in report["repair_suggestions"])
