@@ -19,6 +19,8 @@ If routing_confidence_level=low, treat automatic capability selection as unsafe 
 
 Do not create a second implementation center when an existing capability, public entry, owner rule, or canonical root may exist. If routing evidence is weak, repair the profile or ask for confirmation instead of guessing.
 
+When running check_reuse, inspect result_status, completion_status, evidence_complete, and summary.scan.scope together. Only completion_status=complete with evidence_complete=true closes the duplicate check for the reported capability scope. For bounded, incomplete, timeout, cancelled, or error results, use the scoped candidates and diagnostics for targeted source analysis; do not claim that duplicate implementations are absent and do not expand to an unindexed full-repository scan.
+
 For cross-stack changes, use composite_route to identify primary and secondary capabilities. Keep business logic in the confirmed core capability. Facade, API, UI, and transport layers should delegate to the core instead of becoming parallel implementations.
 
 For delete, merge, deprecate, replace, and migration work, stop for lifecycle review first. Identify superseded_by, deprecation_date, migration_note, affected_callers, regression_tests, and rollback_plan before writing.

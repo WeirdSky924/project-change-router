@@ -187,6 +187,58 @@ python scripts/install_skill.py --target both --inject-hints
 
 这是一种“伪强制”提醒，用于让 agent 在功能级 create / modify / delete 前主动触发 skill。它不是后台守护进程，也不会绕过对话触发机制。
 
+安装器使用 staging、文件哈希/API 校验和原子替换。只有新副本完整通过校验后才替换旧 skill；失败时会恢复旧安装，避免出现新版 `check_reuse.py` 搭配旧版 `router_core.py` 的混装状态。
+
+## 从旧版安全升级
+
+全局 skill 和项目 bundle 是两个独立层次：
+
+- 全局 skill 位于 `~/.codex/skills/project-change-router` 或 `~/.claude/skills/project-change-router`，保存脚本和工作流。
+- 项目 bundle 位于 `<repo-root>/project-change-router/`，保存该项目长期校准的 capability、owner、path map、feedback 和 evaluation 数据。
+
+更新全局 skill 不需要、也不应该自动重建项目 bundle。安全升级步骤如下：
+
+1. 在本 skill 源码仓库更新到准备使用的版本。
+2. 运行原子安装命令：
+
+```powershell
+python scripts/install_skill.py --target both --inject-hints
+```
+
+3. 验证 Codex 和 Claude Code 安装副本的文件哈希及复用扫描 API：
+
+```powershell
+python scripts/install_skill.py --target both --verify-only
+```
+
+4. 对一个已经长期使用 PCR 的项目，只做只读兼容检查：
+
+```powershell
+python <new-skill-root>\scripts\validate_router_bundle.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\check_bundle_governance.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-path <known-path> --format json
+```
+
+5. 验证通过后直接继续使用原 bundle。不要仅仅因为升级 skill 就运行 `bootstrap_router.py` 或 `rebuild_index.py`。
+
+兼容保证：
+
+- 新版本继续读取 schema v1 bundle。
+- 旧 bundle 没有 `reuse_scan_scope`、`reuse_scan_runtime` 或 `reuse_scan_retention` 时，代码使用新默认值，但不会写回或改动 YAML。
+- 新 fingerprint、checkpoint、canonical 和 diagnostic 默认写到用户缓存目录，不写入目标仓库，也不要求修改目标仓库 `.gitignore`。
+- 安装器不会搜索任何项目目录，不会修改已有 profile、manual feedback、evaluation case、owner 或 lifecycle 数据。
+- 旧 bundle 中错误的仓库级 `** -> concrete capability` 映射，在存在更具体映射时不会扩大 reuse 扫描范围；治理审计仍会提示修正元数据。
+
+只有在项目结构、owner、public entry 或 capability 边界确实发生变化时才执行 rebuild。执行前应先把直接写在生成 YAML 中的人工真值迁移到 `.project-change-router.yaml`，并保留 manual feedback、curated evaluation 和 lifecycle 数据。可使用 [旧 bundle 更新提示词](./examples/agent-workflows/update-existing-router-bundle-prompt.md) 让 agent 做这次受控刷新。
+
+安装器成功输出中的：
+
+```text
+repository_bundles_modified=0
+```
+
+表示本次升级没有触碰任何项目内 bundle。
+
 ## 安装校验
 
 校验 skill 结构：
@@ -318,11 +370,13 @@ If action=review, do not implement product code automatically. Continue only wit
 Do not create a second implementation center when an existing capability or canonical root may exist. If routing evidence is weak, repair the profile or ask for confirmation instead of guessing.
 
 After routed changes, run the required closeout checks and record feedback/evaluation cases when a review, override, lifecycle change, or routing correction occurred.
+
+When running check_reuse, inspect result_status, completion_status, evidence_complete, and summary.scan.scope together. Only completion_status=complete with evidence_complete=true closes the duplicate check for that capability scope. A bounded, incomplete, timeout, cancelled, or error result requires targeted source analysis and must not be reported as proof that no duplicate implementation exists.
 ```
 
 更完整的可复制版本见 [examples/agent-workflows/unattended-plan-prompt.md](./examples/agent-workflows/unattended-plan-prompt.md)。
 
-如果目标仓库以前已经用旧版 skill 生成过 `project-change-router/` bundle，升级后让 agent 刷新本地生成文档和路由索引时，使用 [examples/agent-workflows/update-existing-router-bundle-prompt.md](./examples/agent-workflows/update-existing-router-bundle-prompt.md)。它要求只刷新治理元数据和生成提示块，保留人工 profile、反馈、评估样例和生命周期信息。
+升级 skill 后不需要自动刷新旧 bundle。只有只读兼容检查证明索引确实陈旧，或者仓库边界已经变化时，才使用 [examples/agent-workflows/update-existing-router-bundle-prompt.md](./examples/agent-workflows/update-existing-router-bundle-prompt.md) 做受控刷新；该流程必须保留人工 profile、反馈、评估样例和生命周期信息。
 
 ## 生命周期命令表
 
@@ -340,14 +394,99 @@ After routed changes, run the required closeout checks and record feedback/evalu
 | 路由质量回归评估 | `python scripts/run_evaluation.py --repo <repo-root> --format json` |
 | 人工反馈回写 | `python scripts/sync_feedback.py --repo <repo-root> --feedback-file feedback.json --format json` |
 
-## Reuse 扫描预算
+## Reuse 扫描运行时
 
-`check_reuse.py` 使用有界扫描，避免单个 changed path 退化成全仓全文相似度比较。
+`check_reuse.py` 现在是 capability-scoped 的有界扫描器，不是全仓语义搜索器。一次 changed-path 检查按下面的顺序执行：
 
-- 优先传入 `--changed-path <path>`；脚本会直接从 changed path 收集候选文件，不会在没有命中 module 时回退全量扫描。
-- `summary.scan` 会报告 candidate 数量、owner 文件数量、预筛跳过数、全文比较数、预算和大文件限制。
-- `status=warn` 表示扫描因预算或文件大小限制不是穷尽结果，但没有发现 P0/P1 阻断；agent 应结合 `summary.scan` 继续做定向源码分析或收窄 profile。
-- 可用 `--max-candidate-files`、`--max-owner-files`、`--max-comparisons`、`--max-file-bytes`、`--top-k-owner-files` 覆盖默认预算。
+```text
+changed paths
+  -> path map / owner / key files / related tests / test bindings
+  -> primary + dependency capability scope
+  -> native fingerprint 候选召回
+  -> 文件对去重与 Top-K
+  -> 隔离 worker 精确比较
+  -> canonical / checkpoint / diagnostic 报告
+```
+
+关键行为：
+
+- changed path 即使不在 `modules[].path` 中，只要它是 key file、index source、related test、test binding 或精确 path-map 项，也会直接进入候选集。
+- 无法解析 capability 时返回 `completion_status=incomplete`，不会静默回退全仓扫描。
+- 有具体 path mapping 时，旧 bundle 中的仓库级 `** -> concrete capability` 不参与扩展范围。
+- test path 优先使用同 capability 的 related tests、test bindings 和 owner surface，不默认比较所有产品模块。
+- 相同文件对只计算一次；多个 capability 命中同一重复对时合并 capability 列表和最高严重度。
+- 超过全文比较大小限制但 fingerprint 高度相似的文件会输出 P2 `duplicate-fingerprint-candidate`，要求 agent 做定向源码分析；它不是精确重复结论。
+
+### Fingerprint 缓存
+
+缓存使用 Python 原生 `sqlite3` 和 `hashlib`，保存文件身份、大小、归一化长度、token sketch、内容摘要和算法版本，不保存完整归一化源码。第二次扫描可直接复用未变化 owner 文件的 fingerprint，只对 Top-K 精确候选读取全文。
+
+默认运行时目录不在项目仓库中：
+
+- Windows：`%LOCALAPPDATA%\project-change-router\repositories\<repo-key>\`
+- Linux/macOS：`$XDG_CACHE_HOME/project-change-router/repositories/<repo-key>/`，未设置时使用 `~/.cache/...`
+
+缓存模式：`auto`、`read-only`、`off`、`rebuild`。可通过 `--cache-mode` 或 profile/change-rules 配置。
+
+### Timeout 与取消
+
+CLI 在隔离子进程中运行扫描：
+
+- soft timeout 停止派发新比较并写 checkpoint。
+- hard timeout 终止仍卡在单次全文相似度计算中的 worker。
+- `Ctrl+C` 走相同的取消、终止和 canonical 报告收口流程。
+- hard timeout 至少比 soft timeout 多一秒，确保有收口窗口。
+
+命令行覆盖优先级高于 profile/change-rules：
+
+```powershell
+python scripts/check_reuse.py --repo <repo-root> --changed-path <path> `
+  --timeout-seconds 60 --hard-timeout-seconds 75 `
+  --cache-mode auto --diagnostics auto --format json
+```
+
+数量预算仍可使用：`--max-candidate-files`、`--max-owner-files`、`--max-comparisons`、`--max-file-bytes`、`--top-k-owner-files`。
+
+### 报告分级
+
+- `canonical`：agent/CI 使用的最终机器契约；完成、受预算限制、超时、取消和错误都会生成。
+- `checkpoint`：可恢复的过程状态；完整完成后删除，非完整扫描短期保留，不能作为最终结论。
+- `diagnostic`：scope、缓存命中、阶段耗时和淘汰原因；`auto` 只为慢扫描或非完整扫描保留。
+
+必须同时读取：
+
+```text
+result_status      = pass | warn | fail
+completion_status  = complete | bounded | incomplete | timeout | cancelled | error
+evidence_complete  = true | false
+```
+
+典型含义：
+
+| 场景 | result_status | completion_status |
+| --- | --- | --- |
+| 已完成目标 scope，未发现阻断 | `pass` | `complete` |
+| 已完成目标 scope，发现 P1 重复 | `fail` | `complete` |
+| 没有 P0/P1，但达到预算或大文件限制 | `warn` | `bounded` |
+| changed path 无法完整归属 | `warn` | `incomplete` |
+| worker 超过截止时间 | `warn` | `timeout` |
+| 取消前已经发现 P1 | `fail` | `cancelled` |
+
+只有 `completion_status=complete` 且 `evidence_complete=true` 才能说明“已完成目标 capability scope 的重复检查”。这仍不代表扫描了无关 capability，也不替代 agent 对候选文件的源码分析。
+
+### 自动保留与清理
+
+canonical 结果按输入、scope、证据、预算和 findings 做语义去重；P0/P1 报告自动 pin。默认保留 90 天/500 个 canonical、7 天 checkpoint、3 天/200 个 diagnostic，fingerprint 最多 50000 条，单仓运行时上限 512 MiB。
+
+清理只删除 SQLite manifest 登记且位于解析后 runtime root 内的文件，不会 glob 删除仓库内容。可单独运行：
+
+```powershell
+python scripts/check_reuse.py --repo <repo-root> --cleanup-only --format json
+```
+
+默认退出码兼容旧自动化：无 P0/P1 时仍为 `0`；P0/P1 为 `1`；timeout/error 为 `2`；取消为 `130`。使用 `--strict-completeness` 时，`bounded` 和 `incomplete` 也返回 `2`。自动化应优先读取 JSON 字段，不要只看退出码。
+
+完整配置与行为契约见 [references/reuse-scan-runtime.md](./references/reuse-scan-runtime.md)。
 
 ## 治理审计
 
@@ -431,6 +570,7 @@ Profile 模板：
 - [examples/profiles/ts-workspace.project-change-router.yaml](./examples/profiles/ts-workspace.project-change-router.yaml)
 - [examples/profiles/mixed-repo.project-change-router.yaml](./examples/profiles/mixed-repo.project-change-router.yaml)
 - [examples/profiles/skill-repo.project-change-router.yaml](./examples/profiles/skill-repo.project-change-router.yaml)
+- [examples/profiles/reuse-runtime.project-change-router.yaml](./examples/profiles/reuse-runtime.project-change-router.yaml)
 
 反馈与评估样例：
 
@@ -458,6 +598,7 @@ Bundle 样例：
 - [examples/outputs/check-public-api.pass.json](./examples/outputs/check-public-api.pass.json)
 - [examples/outputs/check-reuse.pass.json](./examples/outputs/check-reuse.pass.json)
 - [examples/outputs/check-reuse.warn.json](./examples/outputs/check-reuse.warn.json)
+- [examples/outputs/check-reuse.timeout.json](./examples/outputs/check-reuse.timeout.json)
 - [examples/outputs/check-bundle-governance.warn.json](./examples/outputs/check-bundle-governance.warn.json)
 - [examples/outputs/run-evaluation.pass.json](./examples/outputs/run-evaluation.pass.json)
 
@@ -469,6 +610,7 @@ Bundle 样例：
 - [references/repo-discovery.md](./references/repo-discovery.md)
 - [references/evaluation.md](./references/evaluation.md)
 - [references/schema-overview.md](./references/schema-overview.md)
+- [references/reuse-scan-runtime.md](./references/reuse-scan-runtime.md)
 
 ## 脚本列表
 
@@ -477,6 +619,7 @@ Bundle 样例：
 - `scripts/resolve_entry.py`
 - `scripts/rebuild_index.py`
 - `scripts/check_reuse.py`
+- `scripts/reuse_runtime.py`
 - `scripts/check_deps.py`
 - `scripts/check_public_api.py`
 - `scripts/check_index_freshness.py`
@@ -497,6 +640,7 @@ GitHub Actions workflow 位于 [.github/workflows/ci.yml](./.github/workflows/ci
 - governance audit。
 - freshness check。
 - route evaluation。
+- capability-scoped reuse scan、隔离 worker 和严格完整性检查。
 
 ## 边界与风险
 
@@ -508,6 +652,7 @@ GitHub Actions workflow 位于 [.github/workflows/ci.yml](./.github/workflows/ci
 - `review_required=true` 或 `forbidden_write_paths=["**"]` 时，agent 不应自动写产品代码；可以做只读分析、补证据、修 profile 建议或请求 scoped override。
 - `decision_confidence=high` 不代表可以写；它可能代表“很确定应该停”。
 - `action` 是建议动作，不是最终工程命令；写入边界、veto、owner、canonical root 和生命周期约束优先级更高。
+- `check_reuse` 的 `result_status=pass` 只有在 `completion_status=complete` 且 `evidence_complete=true` 时才表示目标 scope 已完成；bounded、timeout 和 incomplete 只能作为定向分析证据。
 - 生命周期操作，例如 delete、merge、deprecate、replace、migrate，必须 review-first。
 - 这个 skill 给方向、证据和约束，最终实现方案仍应来自真实代码分析、测试和用户确认。
 

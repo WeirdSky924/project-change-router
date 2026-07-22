@@ -20,6 +20,7 @@ The generated bundle uses JSON Schema to validate both reference files and gener
 - `index-rebuild-report.schema.json`
 - `evaluation-summary.schema.json`
 - `governance-report.schema.json`
+- `reuse-scan-report.schema.json`
 
 ## Validation Rules
 

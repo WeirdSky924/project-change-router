@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "report_schema_version",
+    "report_class",
+    "run_id",
+    "timestamp"
+  ],
+  "properties": {
+    "report_schema_version": { "type": "integer", "const": 2 },
+    "report_class": {
+      "type": "string",
+      "enum": ["canonical", "checkpoint", "diagnostic"]
+    },
+    "report_id": { "type": "string" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "minLength": 1 },
+    "script": { "type": "string" },
+    "status": { "type": "string", "enum": ["pass", "warn", "fail"] },
+    "result_status": { "type": "string", "enum": ["pass", "warn", "fail"] },
+    "completion_status": {
+      "type": "string",
+      "enum": ["running", "complete", "bounded", "incomplete", "timeout", "cancelled", "error", "soft_timeout"]
+    },
+    "blocking": { "type": "boolean" },
+    "evidence_complete": { "type": "boolean" },
+    "input_fingerprint": { "type": "string" },
+    "summary": { "type": "object" },
+    "scan": { "type": "object" },
+    "artifacts": { "type": "object" },
+    "findings": { "type": "array", "items": { "type": "object" } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "report_class": { "const": "canonical" } } },
+      "then": {
+        "required": [
+          "report_id",
+          "script",
+          "status",
+          "result_status",
+          "completion_status",
+          "blocking",
+          "evidence_complete",
+          "input_fingerprint",
+          "summary",
+          "findings"
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "report_class": { "const": "checkpoint" } } },
+      "then": { "required": ["completion_status", "scan", "findings"] }
+    },
+    {
+      "if": { "properties": { "report_class": { "const": "diagnostic" } } },
+      "then": { "required": ["result_status", "completion_status", "scan"] }
+    }
+  ],
+  "additionalProperties": true
+}

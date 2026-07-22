@@ -1,62 +1,78 @@
 {
+  "report_schema_version": 2,
+  "report_class": "canonical",
   "report_id": "check-reuse",
-  "timestamp": "2026-06-18T15:32:22Z",
+  "run_id": "reuse-20260722-120100-b2c3d4e5",
+  "timestamp": "2026-07-22T12:01:02Z",
   "script": "check_reuse.py",
   "status": "warn",
+  "result_status": "warn",
+  "completion_status": "bounded",
   "blocking": false,
+  "evidence_complete": false,
+  "input_fingerprint": "c91b8f4752a0",
   "summary": {
-    "finding_count": 1,
+    "finding_count": 2,
     "scan": {
       "status": "warn",
-      "budget_exceeded": false,
+      "completion_status": "bounded",
+      "termination_reason": "configured_budget",
+      "evidence_complete": false,
       "changed_path_count": 1,
       "candidate_file_count": 1,
-      "candidate_files_scanned": 1,
-      "candidate_files_limited": false,
-      "owner_file_count": 406,
-      "owner_files_scanned": 406,
-      "owner_files_limited_capabilities": [],
-      "raw_pair_count": 406,
+      "capabilities_total": 23,
+      "capabilities_scanned": 5,
+      "capabilities_skipped_by_scope": 18,
+      "owner_file_count": 178,
+      "raw_pair_count": 177,
+      "unique_pair_count": 141,
       "comparisons_planned": 0,
       "comparisons_run": 0,
-      "comparisons_skipped_by_prefilter": 179,
-      "comparisons_skipped_by_size": 227,
-      "comparisons_skipped_by_budget": 0,
-      "comparisons_skipped_by_top_k": 0,
-      "candidate_examples": ["app/services/workflow/postgres_service.py"],
-      "size_limit_prevented_scan": true,
-      "size_limited_examples": [
-        {
-          "owner_file": "app/services/agent_runtime/api_facades.py",
-          "candidate_file": "app/services/workflow/postgres_service.py",
-          "owner_bytes": 70629,
-          "candidate_bytes": 84996
-        }
-      ],
-      "budget": {
-        "max_candidate_files": 200,
-        "max_owner_files_per_capability": 400,
-        "max_comparisons": 5000,
-        "max_file_bytes_for_full_similarity": 256000,
-        "max_normalized_chars_for_full_similarity": 180000,
-        "max_similarity_char_product": 120000000,
-        "max_length_ratio": 8.0,
-        "min_token_jaccard": 0.08,
-        "min_path_token_overlap": 0.05,
-        "top_k_owner_files_per_candidate": 40
-      }
+      "comparisons_skipped_by_size": 36,
+      "comparisons_skipped_by_pair_dedup": 36,
+      "source_files_read": 0,
+      "fingerprint_cache_hits": 144,
+      "fingerprint_cache_misses": 0,
+      "fingerprint_advisories_reported": 1,
+      "scope": {
+        "mode": "changed_paths",
+        "status": "resolved",
+        "capability_ids": ["workflow", "shared-runtime"],
+        "direct_capability_ids": ["workflow"],
+        "dependency_capability_ids": ["shared-runtime"],
+        "unresolved_paths": [],
+        "ignored_broad_mappings": [
+          {
+            "path": "tests/test_workflow.py",
+            "path_pattern": "**",
+            "capabilities": ["database-schema-migrations"]
+          }
+        ]
+      },
+      "elapsed_ms": 812,
+      "fingerprint_version": 1
     }
+  },
+  "artifacts": {
+    "canonical": "<user-cache>/project-change-router/repositories/sample/reports/canonical/reuse-....json",
+    "checkpoint": "<user-cache>/project-change-router/repositories/sample/reports/checkpoint/reuse-....json",
+    "diagnostic": "<user-cache>/project-change-router/repositories/sample/reports/diagnostic/reuse-....json"
   },
   "findings": [
     {
       "severity": "P2",
+      "rule": "duplicate-fingerprint-candidate",
+      "path": "tests/test_workflow.py",
+      "owner_path": "tests/test_shared_workflow.py",
+      "capability": "workflow",
+      "capabilities": ["workflow"],
+      "fingerprint_score": 0.7142,
+      "message": "fingerprint similarity requires targeted source analysis; this is not exact duplicate proof"
+    },
+    {
+      "severity": "P2",
       "rule": "reuse-scan-incomplete",
-      "message": "Reuse scan completed with budget or file-size limits; inspect details before treating duplicate checks as exhaustive.",
-      "details": {
-        "status": "warn",
-        "size_limit_prevented_scan": true,
-        "candidate_examples": ["app/services/workflow/postgres_service.py"]
-      }
+      "message": "Reuse scan produced bounded or interrupted evidence; do not treat it as proof that no duplicate implementation exists."
     }
   ]
 }

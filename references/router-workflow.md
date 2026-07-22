@@ -23,6 +23,8 @@ Use this workflow whenever the user asks to:
 6. If route confidence is low or multiple stable capabilities overlap, return `review`.
 7. After changes, update the bundle if the change created a new capability or changed public boundaries.
 
+For `check_reuse.py`, `result_status` and `completion_status` answer different questions. A non-failing result does not close the duplicate check when `completion_status` is `bounded`, `incomplete`, `timeout`, `cancelled`, or `error`. Read `summary.scan.scope` and continue targeted source analysis; never expand an unresolved changed path into an implicit repository-wide scan.
+
 ## Two-Layer Contract
 
 PCR is not an automatic architecture decision engine. It separates mandatory guardrails from advisory routing guidance.

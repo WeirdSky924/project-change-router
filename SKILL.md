@@ -44,12 +44,13 @@ Advisory direction layer:
 6. Read the required capability entries and public code entry points before editing.
 7. Apply the change only in the routed layer.
 8. Run the required guardrails and capability-bound tests.
-9. If the route is `review`, stop automatic product-code editing and report `block_reason`, `missing_evidence`, `analysis_directions`, `safe_next_steps`, and scoped `override_requirements`.
-10. Apply writes only inside `allowed_write_paths`, never inside `forbidden_write_paths`, and read `must_read_before_edit` first.
-11. If the change reveals stale indexes, ownership gaps, or missing capability coverage, run the governance audit before deciding whether to rebuild.
-12. Rebuild the bundle only when routing references are stale or the user explicitly asks to refresh repository-local routing data.
-13. After a routed change, follow `post_change_closeout` and record feedback or evaluation regressions when review, override, delete, merge, or capability correction happened.
-14. For concrete route interpretation examples, read `examples/agent-workflows/README.md` before inventing behavior that is not described by the route report.
+9. For `check_reuse`, inspect `result_status`, `completion_status`, `evidence_complete`, and the resolved capability scope together. Do not interpret bounded, incomplete, timed-out, cancelled, or errored evidence as proof that duplicate implementations are absent.
+10. If the route is `review`, stop automatic product-code editing and report `block_reason`, `missing_evidence`, `analysis_directions`, `safe_next_steps`, and scoped `override_requirements`.
+11. Apply writes only inside `allowed_write_paths`, never inside `forbidden_write_paths`, and read `must_read_before_edit` first.
+12. If the change reveals stale indexes, ownership gaps, or missing capability coverage, run the governance audit before deciding whether to rebuild.
+13. Rebuild the bundle only when routing references are stale or the user explicitly asks to refresh repository-local routing data.
+14. After a routed change, follow `post_change_closeout` and record feedback or evaluation regressions when review, override, delete, merge, or capability correction happened.
+15. For concrete route interpretation examples, read `examples/agent-workflows/README.md` before inventing behavior that is not described by the route report.
 
 ## Execution Modes
 
@@ -102,6 +103,7 @@ These overrides can define capability mappings, ownership rules, risk rules, and
 - `references/schema-overview.md`
 - `references/evaluation.md`
 - `references/governance-outputs.md`
+- `references/reuse-scan-runtime.md`
 - `examples/agent-workflows/README.md`
 
 ## Resources
@@ -137,3 +139,4 @@ These overrides can define capability mappings, ownership rules, risk rules, and
 - Codex requests can invoke it as `$project-change-router`; Claude Code requests should invoke it as `/project-change-router`.
 - It does not depend on a specific repository.
 - The repository-local router bundle is generated on demand and is not the skill itself.
+- Updating the installed skill does not bootstrap, rebuild, or overwrite an existing repository-local bundle. Bundle schema v1 remains readable; runtime fingerprints and managed scan reports live outside the repository by default.

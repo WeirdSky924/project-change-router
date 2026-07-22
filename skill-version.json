@@ -1,0 +1,6 @@
+{
+  "skill_version": "0.2.0",
+  "reuse_engine_api_version": 2,
+  "bundle_schema_compatibility": [1],
+  "report_schema_version": 2
+}

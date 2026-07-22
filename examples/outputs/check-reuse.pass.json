@@ -1,43 +1,72 @@
 {
+  "report_schema_version": 2,
+  "report_class": "canonical",
   "report_id": "check-reuse",
-  "timestamp": "2026-05-23T13:57:18Z",
+  "run_id": "reuse-20260722-120000-a1b2c3d4",
+  "timestamp": "2026-07-22T12:00:01Z",
   "script": "check_reuse.py",
   "status": "pass",
+  "result_status": "pass",
+  "completion_status": "complete",
   "blocking": false,
+  "evidence_complete": true,
+  "input_fingerprint": "8a7f4b91c3d5",
   "summary": {
     "finding_count": 0,
     "scan": {
       "status": "complete",
-      "budget_exceeded": false,
+      "completion_status": "complete",
+      "termination_reason": null,
+      "evidence_complete": true,
       "changed_path_count": 1,
       "candidate_file_count": 1,
-      "candidate_files_scanned": 1,
-      "candidate_files_limited": false,
-      "owner_file_count": 24,
-      "owner_files_scanned": 24,
-      "owner_files_limited_capabilities": [],
-      "raw_pair_count": 24,
-      "comparisons_planned": 8,
-      "comparisons_run": 3,
-      "comparisons_skipped_by_prefilter": 21,
+      "capabilities_total": 8,
+      "capabilities_scanned": 2,
+      "capabilities_skipped_by_scope": 6,
+      "owner_file_count": 42,
+      "raw_pair_count": 41,
+      "unique_pair_count": 41,
+      "comparisons_planned": 6,
+      "comparisons_run": 2,
+      "comparisons_skipped_by_prefilter": 35,
       "comparisons_skipped_by_size": 0,
-      "comparisons_skipped_by_budget": 0,
-      "comparisons_skipped_by_top_k": 0,
-      "candidate_examples": ["app/services/orders/service.py"],
-      "size_limit_prevented_scan": false,
-      "budget": {
-        "max_candidate_files": 200,
-        "max_owner_files_per_capability": 400,
-        "max_comparisons": 5000,
-        "max_file_bytes_for_full_similarity": 256000,
-        "max_normalized_chars_for_full_similarity": 180000,
-        "max_similarity_char_product": 120000000,
-        "max_length_ratio": 8.0,
-        "min_token_jaccard": 0.08,
-        "min_path_token_overlap": 0.05,
-        "top_k_owner_files_per_candidate": 40
-      }
+      "comparisons_skipped_by_pair_dedup": 0,
+      "source_files_read": 3,
+      "fingerprint_cache_hits": 42,
+      "fingerprint_cache_misses": 0,
+      "fingerprints_written": 0,
+      "fingerprint_advisories_reported": 0,
+      "scope": {
+        "mode": "changed_paths",
+        "status": "resolved",
+        "capability_ids": ["orders", "shared-validation"],
+        "direct_capability_ids": ["orders"],
+        "dependency_capability_ids": ["shared-validation"],
+        "unresolved_paths": [],
+        "ignored_broad_mappings": [],
+        "sources": {
+          "orders": ["path_map:app/services/orders/**"],
+          "shared-validation": ["module_dependency_neighbor"]
+        }
+      },
+      "elapsed_ms_by_phase": {
+        "candidate_and_scope": 14,
+        "fingerprint_and_compare": 91
+      },
+      "elapsed_ms": 105,
+      "fingerprint_version": 1
+    },
+    "retention_cleanup": {
+      "fingerprints": 0,
+      "canonical": 0,
+      "checkpoint": 0,
+      "diagnostic": 0
     }
+  },
+  "artifacts": {
+    "canonical": "<user-cache>/project-change-router/repositories/sample/reports/canonical/reuse-....json",
+    "deduplicated": false,
+    "occurrence_count": 1
   },
   "findings": []
 }

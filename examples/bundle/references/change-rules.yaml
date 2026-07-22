@@ -13,6 +13,38 @@ high_risk_capability_ids: []
 high_risk_module_patterns: []
 dependency_priority:
   billing: 1
+reuse_scan_budget:
+  max_candidate_files: 200
+  max_owner_files_per_capability: 400
+  max_comparisons: 5000
+  max_file_bytes_for_full_similarity: 256000
+  max_normalized_chars_for_full_similarity: 180000
+  max_similarity_char_product: 120000000
+  max_length_ratio: 8.0
+  min_token_jaccard: 0.08
+  min_path_token_overlap: 0.05
+  min_fingerprint_advisory_score: 0.55
+  top_k_owner_files_per_candidate: 40
+reuse_scan_scope:
+  include_dependency_neighbors: true
+  repository_wide_mapping_policy: ignore_when_specific_or_unresolved
+  unresolved_changed_path_policy: return_incomplete_without_full_scan
+reuse_scan_runtime:
+  soft_timeout_seconds: 60.0
+  hard_timeout_seconds: 75.0
+  checkpoint_interval_seconds: 5.0
+  cache_mode: auto
+  diagnostics_mode: auto
+  persist_reports: true
+  slow_scan_diagnostic_seconds: 10.0
+reuse_scan_retention:
+  canonical_max_age_days: 90
+  canonical_max_count: 500
+  checkpoint_max_age_days: 7
+  diagnostic_max_age_days: 3
+  diagnostic_max_count: 200
+  max_cache_entries: 50000
+  max_runtime_bytes: 536870912
 new_capability_policy:
   minimum_positive_conditions: 2
   positive_conditions:

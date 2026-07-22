@@ -45,3 +45,4 @@ jobs:
           python scripts/check_bundle_governance.py --repo . --format json
           python scripts/check_index_freshness.py --repo . --format json
           python scripts/run_evaluation.py --repo . --format json
+          python scripts/check_reuse.py --repo . --changed-path scripts/check_reuse.py --timeout-seconds 20 --hard-timeout-seconds 30 --strict-completeness --format json

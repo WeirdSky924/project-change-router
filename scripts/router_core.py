@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -19,6 +20,15 @@ from typing import Any, Iterable, Iterator, Optional
 
 import yaml
 from jsonschema import Draft202012Validator
+
+from reuse_runtime import (
+    FINGERPRINT_VERSION,
+    ReuseRuntimePolicy,
+    ReuseRuntimeStore,
+    file_stat_key,
+    iso_now as runtime_iso_now,
+    token_sketch,
+)
 
 
 DEFAULT_IGNORE_GLOBS = [
@@ -136,6 +146,7 @@ class ReuseScanBudget:
     max_length_ratio: float = 8.0
     min_token_jaccard: float = 0.08
     min_path_token_overlap: float = 0.05
+    min_fingerprint_advisory_score: float = 0.55
     top_k_owner_files_per_candidate: int = 40
 
 
@@ -2178,6 +2189,35 @@ def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, A
             **dataclasses.asdict(ReuseScanBudget()),
             **profile.get("reuse_scan_budget", {}),
             **profile.get("guardrails", {}).get("reuse_scan_budget", {}),
+        },
+        "reuse_scan_scope": {
+            "include_dependency_neighbors": True,
+            "repository_wide_mapping_policy": "ignore_when_specific_or_unresolved",
+            "unresolved_changed_path_policy": "return_incomplete_without_full_scan",
+            **profile.get("reuse_scan_scope", {}),
+            **profile.get("guardrails", {}).get("reuse_scan_scope", {}),
+        },
+        "reuse_scan_runtime": {
+            "soft_timeout_seconds": 60.0,
+            "hard_timeout_seconds": 75.0,
+            "checkpoint_interval_seconds": 5.0,
+            "cache_mode": "auto",
+            "diagnostics_mode": "auto",
+            "persist_reports": True,
+            "slow_scan_diagnostic_seconds": 10.0,
+            **profile.get("reuse_scan_runtime", {}),
+            **profile.get("guardrails", {}).get("reuse_scan_runtime", {}),
+        },
+        "reuse_scan_retention": {
+            "canonical_max_age_days": 90,
+            "canonical_max_count": 500,
+            "checkpoint_max_age_days": 7,
+            "diagnostic_max_age_days": 3,
+            "diagnostic_max_count": 200,
+            "max_cache_entries": 50_000,
+            "max_runtime_bytes": 536_870_912,
+            **profile.get("reuse_scan_retention", {}),
+            **profile.get("guardrails", {}).get("reuse_scan_retention", {}),
         },
         "capability_lifecycle_policy": {
             "stages": ["provisional", "candidate", "stable", "governed-capability", "deprecated"],
@@ -4537,7 +4577,12 @@ def reuse_scan_budget_from_bundle(bundle: dict[str, Any], overrides: Optional[di
     if "max_file_bytes" in configured and "max_file_bytes_for_full_similarity" not in configured:
         configured["max_file_bytes_for_full_similarity"] = configured["max_file_bytes"]
     values: dict[str, Any] = {}
-    float_fields = {"max_length_ratio", "min_token_jaccard", "min_path_token_overlap"}
+    float_fields = {
+        "max_length_ratio",
+        "min_token_jaccard",
+        "min_path_token_overlap",
+        "min_fingerprint_advisory_score",
+    }
     for field_info in dataclasses.fields(ReuseScanBudget):
         raw = configured.get(field_info.name, field_info.default)
         try:
@@ -4613,6 +4658,234 @@ def capability_owner_files(repo_root: Path, capability: CapabilityEntry, modules
     return unique_paths(repo_root, files)
 
 
+def paths_from_test_bindings(bindings: Iterable[dict[str, Any]]) -> list[str]:
+    path_keys = {
+        "path",
+        "paths",
+        "pattern",
+        "patterns",
+        "test",
+        "tests",
+        "test_path",
+        "test_paths",
+        "source_path",
+        "source_paths",
+    }
+    paths: list[str] = []
+    for binding in bindings:
+        for key, value in binding.items():
+            if key not in path_keys:
+                continue
+            if isinstance(value, str):
+                paths.append(value)
+            elif isinstance(value, list):
+                paths.extend(str(item) for item in value if isinstance(item, (str, Path)))
+    return list(dict.fromkeys(path.replace("\\", "/") for path in paths if path))
+
+
+def path_matches_surface(rel_path: str, surface: str) -> bool:
+    normalized = surface.replace("\\", "/").strip("/")
+    if not normalized:
+        return False
+    if glob_match([normalized], rel_path):
+        return True
+    if not any(char in normalized for char in "*?[") and not looks_like_file_path(normalized):
+        return rel_path == normalized or rel_path.startswith(normalized + "/")
+    return False
+
+
+def capability_surface_paths(capability: CapabilityEntry) -> list[tuple[str, str]]:
+    surfaces: list[tuple[str, str]] = []
+    for value in capability.owner_modules:
+        surfaces.append((value, "owner_modules"))
+    for value in capability.scope.get("paths", []):
+        surfaces.append((str(value), "scope.paths"))
+    for value in capability.public_entries:
+        surfaces.append((value, "public_entries"))
+    for value in capability.related_tests:
+        surfaces.append((value, "related_tests"))
+    for value in paths_from_test_bindings(capability.test_bindings):
+        surfaces.append((value, "test_bindings"))
+    return surfaces
+
+
+def module_surface_paths(module: ModuleEntry) -> list[tuple[str, str]]:
+    values = [(module.path, "module.path")]
+    values.extend((value, "module.key_files") for value in module.key_files)
+    values.extend((value, "module.index_sources") for value in module.index_sources)
+    return values
+
+
+def resolve_reuse_scope(
+    repo_root: Path,
+    bundle: dict[str, Any],
+    capabilities: list[CapabilityEntry],
+    modules: list[ModuleEntry],
+    candidate_files: list[Path],
+    changed_paths: Optional[list[str]],
+) -> dict[str, Any]:
+    if not changed_paths:
+        return {
+            "mode": "full_scan",
+            "status": "resolved",
+            "capability_ids": [capability.id for capability in capabilities],
+            "direct_capability_ids": [capability.id for capability in capabilities],
+            "dependency_capability_ids": [],
+            "unresolved_paths": [],
+            "sources": {capability.id: ["explicit_full_scan"] for capability in capabilities},
+            "ignored_broad_mappings": [],
+        }
+
+    capability_by_id = {capability.id: capability for capability in capabilities}
+    direct_ids: set[str] = set()
+    sources: dict[str, set[str]] = defaultdict(set)
+    resolved_paths: set[str] = set()
+    candidate_rels = [normalize_rel_path(repo_root, path) for path in candidate_files]
+    path_entries = bundle.get("path_to_capability_map", {}).get("path_index", [])
+    ignored_broad_mappings: list[dict[str, Any]] = []
+
+    for rel_path in candidate_rels:
+        matching_entries = [
+            entry
+            for entry in path_entries
+            if entry.get("path_pattern")
+            and path_matches_surface(rel_path, str(entry.get("path_pattern")))
+        ]
+        specific_entries = [
+            entry
+            for entry in matching_entries
+            if str(entry.get("path_pattern", "")).replace("\\", "/").strip("/") not in {"*", "**", "."}
+        ]
+        selected_entries = specific_entries or [
+            entry for entry in matching_entries if not entry.get("capabilities")
+        ]
+        for entry in matching_entries:
+            if entry not in selected_entries and entry.get("capabilities"):
+                ignored_broad_mappings.append(
+                    {
+                        "path": rel_path,
+                        "path_pattern": entry.get("path_pattern"),
+                        "capabilities": entry.get("capabilities", []),
+                    }
+                )
+        for entry in selected_entries:
+            pattern = str(entry.get("path_pattern", ""))
+            for capability_id in entry.get("capabilities", []):
+                if capability_id in capability_by_id:
+                    direct_ids.add(capability_id)
+                    sources[capability_id].add(f"path_map:{pattern}")
+                    resolved_paths.add(rel_path)
+        for capability in capabilities:
+            for surface, source in capability_surface_paths(capability):
+                if path_matches_surface(rel_path, surface):
+                    direct_ids.add(capability.id)
+                    sources[capability.id].add(source)
+                    resolved_paths.add(rel_path)
+        for module in modules:
+            matched_sources = [source for surface, source in module_surface_paths(module) if path_matches_surface(rel_path, surface)]
+            if not matched_sources:
+                continue
+            for capability in capabilities:
+                if module.path in capability.owner_modules or module.path in capability.scope.get("paths", []):
+                    direct_ids.add(capability.id)
+                    sources[capability.id].update(matched_sources)
+                    resolved_paths.add(rel_path)
+
+    dependency_ids: set[str] = set()
+    include_neighbors = bool(
+        bundle.get("change_rules", {}).get("reuse_scan_scope", {}).get("include_dependency_neighbors", True)
+    )
+    if direct_ids and include_neighbors:
+        direct_owner_modules = {
+            owner
+            for capability_id in direct_ids
+            for owner in capability_by_id[capability_id].owner_modules
+        }
+        module_by_path = {module.path: module for module in modules}
+        neighbor_modules = {
+            dependency
+            for owner in direct_owner_modules
+            for dependency in (module_by_path[owner].depends_on if owner in module_by_path else [])
+        }
+        neighbor_modules.update(
+            module.path
+            for module in modules
+            if any(dependency in direct_owner_modules for dependency in module.depends_on)
+        )
+        for capability in capabilities:
+            if capability.id in direct_ids:
+                continue
+            if set(capability.owner_modules) & neighbor_modules:
+                dependency_ids.add(capability.id)
+                sources[capability.id].add("module_dependency_neighbor")
+            elif set(capability.dependent_modules) & direct_owner_modules:
+                dependency_ids.add(capability.id)
+                sources[capability.id].add("capability_dependent_modules")
+
+    selected_ids = direct_ids | dependency_ids
+    unresolved = sorted(set(candidate_rels) - resolved_paths)
+    status = "resolved" if selected_ids and not unresolved else "partial" if selected_ids else "unresolved"
+    return {
+        "mode": "changed_paths",
+        "status": status,
+        "capability_ids": [capability.id for capability in capabilities if capability.id in selected_ids],
+        "direct_capability_ids": [capability.id for capability in capabilities if capability.id in direct_ids],
+        "dependency_capability_ids": [capability.id for capability in capabilities if capability.id in dependency_ids],
+        "unresolved_paths": unresolved,
+        "sources": {key: sorted(value) for key, value in sorted(sources.items())},
+        "ignored_broad_mappings": ignored_broad_mappings,
+    }
+
+
+def collect_surface_files(repo_root: Path, surfaces: Iterable[str], ignore_patterns: Iterable[str]) -> list[Path]:
+    files: list[Path] = []
+    for surface in surfaces:
+        normalized = str(surface).replace("\\", "/").strip()
+        if not normalized:
+            continue
+        if any(char in normalized for char in "*?["):
+            for target in repo_root.glob(normalized.lstrip("/")):
+                files.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
+        else:
+            target = Path(normalized)
+            if not target.is_absolute():
+                target = repo_root / normalized
+            files.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
+    return unique_paths(repo_root, files)
+
+
+def is_test_file(path: Path) -> bool:
+    normalized = path.as_posix().lower()
+    name = path.name.lower()
+    return (
+        any(segment in {"test", "tests", "__tests__"} for segment in normalized.split("/"))
+        or name.startswith("test_")
+        or ".test." in name
+        or ".spec." in name
+    )
+
+
+def capability_comparison_files(
+    repo_root: Path,
+    capability: CapabilityEntry,
+    modules: list[ModuleEntry],
+    ignore_patterns: Iterable[str],
+    candidate_files: list[Path],
+) -> list[Path]:
+    owner_files = capability_owner_files(repo_root, capability, modules, ignore_patterns)
+    if not any(is_test_file(candidate) for candidate in candidate_files):
+        return owner_files
+    module_by_path = {module.path: module for module in modules}
+    test_surfaces = list(capability.related_tests) + paths_from_test_bindings(capability.test_bindings)
+    for owner in capability.owner_modules:
+        module = module_by_path.get(owner)
+        if module:
+            test_surfaces.extend(module.key_files)
+            test_surfaces.extend(module.index_sources)
+    test_files = [path for path in collect_surface_files(repo_root, test_surfaces, ignore_patterns) if is_test_file(path)]
+    return unique_paths(repo_root, [*test_files, *owner_files])
+
+
 def jaccard(left: set[str], right: set[str]) -> float:
     if not left or not right:
         return 0.0
@@ -4642,19 +4915,43 @@ def gather_reuse_report(
     bundle: dict[str, Any],
     changed_paths: Optional[list[str]] = None,
     budget_overrides: Optional[dict[str, Any]] = None,
+    runtime_options: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    started = time.monotonic()
     modules = module_entries(bundle)
     capabilities = capability_entries(bundle)
+    capability_by_id = {capability.id: capability for capability in capabilities}
     ignore_patterns = default_ignore_patterns(bundle.get("config", {}))
     budget = reuse_scan_budget_from_bundle(bundle, budget_overrides)
+    runtime_options = dict(runtime_options or {})
+    runtime_policy = ReuseRuntimePolicy(
+        soft_timeout_seconds=max(0.0, float(runtime_options.get("soft_timeout_seconds", 0.0))),
+        hard_timeout_seconds=max(0.0, float(runtime_options.get("hard_timeout_seconds", 0.0))),
+        checkpoint_interval_seconds=max(0.1, float(runtime_options.get("checkpoint_interval_seconds", 5.0))),
+        cache_mode=str(runtime_options.get("cache_mode", "off")),
+        diagnostics_mode=str(runtime_options.get("diagnostics_mode", "never")),
+        persist_reports=bool(runtime_options.get("persist_reports", False)),
+    )
+    run_id = str(runtime_options.get("run_id", f"reuse-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}"))
+    deadline = started + runtime_policy.soft_timeout_seconds if runtime_policy.soft_timeout_seconds > 0 else None
+    runtime_root = Path(runtime_options["runtime_root"]).resolve() if runtime_options.get("runtime_root") else None
+    store = ReuseRuntimeStore(runtime_root, runtime_policy.cache_mode) if runtime_root else None
+
+    phase_started = time.monotonic()
     if changed_paths:
         candidate_files = changed_path_candidate_files(repo_root, changed_paths, ignore_patterns)
     else:
         candidate_files = source_files_for_modules(repo_root, modules, ignore_patterns)
+    scope = resolve_reuse_scope(repo_root, bundle, capabilities, modules, candidate_files, changed_paths)
+    scoped_capabilities = [capability_by_id[item] for item in scope["capability_ids"] if item in capability_by_id]
+    scope_elapsed = int((time.monotonic() - phase_started) * 1000)
 
     findings: list[dict[str, Any]] = []
     metrics: dict[str, Any] = {
         "status": "complete",
+        "completion_status": "complete",
+        "termination_reason": None,
+        "evidence_complete": True,
         "budget_exceeded": False,
         "changed_path_count": len(changed_paths or []),
         "candidate_file_count": len(candidate_files),
@@ -4663,121 +4960,225 @@ def gather_reuse_report(
         "owner_file_count": 0,
         "owner_files_scanned": 0,
         "owner_files_limited_capabilities": [],
+        "capabilities_total": len(capabilities),
+        "capabilities_scanned": len(scoped_capabilities),
+        "capabilities_skipped_by_scope": max(0, len(capabilities) - len(scoped_capabilities)),
         "raw_pair_count": 0,
+        "unique_pair_count": 0,
         "comparisons_planned": 0,
         "comparisons_run": 0,
         "comparisons_skipped_by_prefilter": 0,
         "comparisons_skipped_by_size": 0,
         "comparisons_skipped_by_budget": 0,
         "comparisons_skipped_by_top_k": 0,
+        "comparisons_skipped_by_pair_dedup": 0,
+        "source_files_read": 0,
+        "fingerprint_cache_hits": 0,
+        "fingerprint_cache_misses": 0,
+        "fingerprints_written": 0,
+        "fingerprint_advisories_reported": 0,
         "size_limited_examples": [],
         "candidate_examples": [normalize_rel_path(repo_root, path) for path in candidate_files[:20]],
+        "scope": scope,
+        "elapsed_ms_by_phase": {"candidate_and_scope": scope_elapsed},
         "budget": dataclasses.asdict(budget),
+        "runtime": dataclasses.asdict(runtime_policy),
+        "runtime_recovery": store.recovery_event if store else None,
+        "fingerprint_version": FINGERPRINT_VERSION,
     }
     if metrics["candidate_files_limited"]:
         candidate_files = candidate_files[: budget.max_candidate_files]
 
     normalized_cache: dict[Path, str] = {}
-    token_cache: dict[Path, set[str]] = {}
-    stat_cache: dict[Path, int] = {}
-    module_cache: dict[str, Optional[ModuleEntry]] = {}
+    fingerprint_cache: dict[Path, dict[str, Any]] = {}
     owner_file_cache: dict[str, list[Path]] = {}
+    pair_prefilter_cache: dict[tuple[str, str], Optional[float]] = {}
+    exact_score_cache: dict[tuple[str, str], float] = {}
+    duplicate_findings: dict[tuple[str, str], dict[str, Any]] = {}
+    fingerprint_advisories: dict[tuple[str, str], dict[str, Any]] = {}
+    last_checkpoint = started
+    stop_reason: Optional[str] = None
 
     def rel(path: Path) -> str:
         return normalize_rel_path(repo_root, path)
 
-    def file_size(path: Path) -> int:
-        if path not in stat_cache:
-            try:
-                stat_cache[path] = path.stat().st_size
-            except OSError:
-                stat_cache[path] = 0
-        return stat_cache[path]
+    def should_stop() -> bool:
+        nonlocal stop_reason
+        if stop_reason:
+            return True
+        if deadline is not None and time.monotonic() >= deadline:
+            stop_reason = "soft_timeout"
+            return True
+        return False
+
+    def write_checkpoint(force: bool = False) -> None:
+        nonlocal last_checkpoint
+        if store is None:
+            return
+        now = time.monotonic()
+        if not force and now - last_checkpoint < runtime_policy.checkpoint_interval_seconds:
+            return
+        payload = {
+            "report_schema_version": 2,
+            "report_class": "checkpoint",
+            "run_id": run_id,
+            "timestamp": runtime_iso_now(),
+            "completion_status": "running" if not stop_reason else stop_reason,
+            "scan": metrics,
+            "findings": [*findings, *duplicate_findings.values()],
+        }
+        store.write_checkpoint(run_id, payload)
+        last_checkpoint = now
 
     def normalized_text(path: Path) -> str:
         if path not in normalized_cache:
+            metrics["source_files_read"] += 1
             normalized_cache[path] = normalized_code(path.read_text(encoding="utf-8", errors="ignore"))
         return normalized_cache[path]
 
-    def content_token_set(path: Path) -> set[str]:
-        if path not in token_cache:
-            token_cache[path] = set(text_tokens(normalized_text(path)))
-        return token_cache[path]
+    def fingerprint(path: Path) -> dict[str, Any]:
+        if path in fingerprint_cache:
+            return fingerprint_cache[path]
+        path_rel = rel(path)
+        stat_key = file_stat_key(path)
+        cached = store.get_fingerprint(path_rel, stat_key) if store else None
+        if cached is not None:
+            metrics["fingerprint_cache_hits"] += 1
+            fingerprint_cache[path] = cached
+            return cached
+        metrics["fingerprint_cache_misses"] += 1
+        text = normalized_text(path)
+        tokens = text_tokens(text)
+        value = {
+            "suffix": path.suffix.lower(),
+            "file_size": path.stat().st_size,
+            "normalized_length": len(text),
+            "token_count": len(tokens),
+            "token_sketch": token_sketch(tokens),
+            "content_digest": hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest(),
+        }
+        if store:
+            store.put_fingerprint(path_rel, stat_key, value)
+            if runtime_policy.cache_mode not in {"off", "read-only"}:
+                metrics["fingerprints_written"] += 1
+        fingerprint_cache[path] = value
+        return value
 
-    def file_module(path: Path) -> Optional[ModuleEntry]:
-        normalized = rel(path)
-        if normalized not in module_cache:
-            module_cache[normalized] = module_for_path(normalized, modules)
-        return module_cache[normalized]
+    def pair_key(left: Path, right: Path) -> tuple[str, str]:
+        return tuple(sorted((rel(left), rel(right))))
 
-    def remember_size_limited(owner_file: Path, candidate: Path) -> None:
-        if len(metrics["size_limited_examples"]) >= 20:
-            return
-        metrics["size_limited_examples"].append(
-            {
-                "owner_file": rel(owner_file),
-                "candidate_file": rel(candidate),
-                "owner_bytes": file_size(owner_file),
-                "candidate_bytes": file_size(candidate),
-            }
-        )
+    def remember_size_limited(
+        owner_file: Path,
+        candidate: Path,
+        owner_fp: dict[str, Any],
+        candidate_fp: dict[str, Any],
+    ) -> None:
+        if len(metrics["size_limited_examples"]) < 20:
+            metrics["size_limited_examples"].append(
+                {
+                    "owner_file": rel(owner_file),
+                    "candidate_file": rel(candidate),
+                    "owner_bytes": owner_fp["file_size"],
+                    "candidate_bytes": candidate_fp["file_size"],
+                }
+            )
 
-    def prefilter_pair(owner_file: Path, candidate: Path) -> Optional[float]:
+    def prefilter_pair(owner_file: Path, candidate: Path, capability_id: str) -> Optional[float]:
+        key = pair_key(owner_file, candidate)
+        if key in pair_prefilter_cache:
+            metrics["comparisons_skipped_by_pair_dedup"] += 1
+            if key in fingerprint_advisories and capability_id not in fingerprint_advisories[key]["capabilities"]:
+                fingerprint_advisories[key]["capabilities"].append(capability_id)
+                fingerprint_advisories[key]["capabilities"].sort()
+            return pair_prefilter_cache[key]
         if candidate == owner_file or candidate.suffix.lower() != owner_file.suffix.lower():
             metrics["comparisons_skipped_by_prefilter"] += 1
+            pair_prefilter_cache[key] = None
             return None
-        owner_module = file_module(owner_file)
-        candidate_module = file_module(candidate)
-        if candidate_module and owner_module and candidate_module.path == owner_module.path:
-            metrics["comparisons_skipped_by_prefilter"] += 1
-            return None
-        owner_bytes = file_size(owner_file)
-        candidate_bytes = file_size(candidate)
-        if owner_bytes > budget.max_file_bytes_for_full_similarity or candidate_bytes > budget.max_file_bytes_for_full_similarity:
-            metrics["comparisons_skipped_by_size"] += 1
-            remember_size_limited(owner_file, candidate)
-            return None
-        owner_text = normalized_text(owner_file)
-        candidate_text = normalized_text(candidate)
-        if len(owner_text) > budget.max_normalized_chars_for_full_similarity or len(candidate_text) > budget.max_normalized_chars_for_full_similarity:
-            metrics["comparisons_skipped_by_size"] += 1
-            remember_size_limited(owner_file, candidate)
-            return None
-        if len(owner_text) * len(candidate_text) > budget.max_similarity_char_product:
-            metrics["comparisons_skipped_by_size"] += 1
-            remember_size_limited(owner_file, candidate)
-            return None
-        shorter = max(1, min(len(owner_text), len(candidate_text)))
-        length_ratio = max(len(owner_text), len(candidate_text)) / shorter
+        owner_fp = fingerprint(owner_file)
+        candidate_fp = fingerprint(candidate)
+        shorter = max(1, min(owner_fp["normalized_length"], candidate_fp["normalized_length"]))
+        length_ratio = max(owner_fp["normalized_length"], candidate_fp["normalized_length"]) / shorter
         if length_ratio > budget.max_length_ratio:
             metrics["comparisons_skipped_by_prefilter"] += 1
+            pair_prefilter_cache[key] = None
             return None
-        token_score = jaccard(content_token_set(owner_file), content_token_set(candidate))
+        token_score = jaccard(set(owner_fp["token_sketch"]), set(candidate_fp["token_sketch"]))
         path_score = jaccard(path_token_set(repo_root, owner_file), path_token_set(repo_root, candidate))
         if token_score < budget.min_token_jaccard and path_score < budget.min_path_token_overlap:
             metrics["comparisons_skipped_by_prefilter"] += 1
+            pair_prefilter_cache[key] = None
             return None
-        return (token_score * 0.8) + (path_score * 0.2)
+        score = (token_score * 0.8) + (path_score * 0.2)
+        size_limited = bool(
+            owner_fp["file_size"] > budget.max_file_bytes_for_full_similarity
+            or candidate_fp["file_size"] > budget.max_file_bytes_for_full_similarity
+            or owner_fp["normalized_length"] > budget.max_normalized_chars_for_full_similarity
+            or candidate_fp["normalized_length"] > budget.max_normalized_chars_for_full_similarity
+            or owner_fp["normalized_length"] * candidate_fp["normalized_length"] > budget.max_similarity_char_product
+        )
+        if size_limited:
+            metrics["comparisons_skipped_by_size"] += 1
+            remember_size_limited(owner_file, candidate, owner_fp, candidate_fp)
+            if score >= budget.min_fingerprint_advisory_score:
+                fingerprint_advisories[key] = {
+                    "severity": "P2",
+                    "rule": "duplicate-fingerprint-candidate",
+                    "path": rel(candidate),
+                    "owner_path": rel(owner_file),
+                    "capability": capability_id,
+                    "capabilities": [capability_id],
+                    "fingerprint_score": round(score, 4),
+                    "message": "fingerprint similarity requires targeted source analysis; this is not exact duplicate proof",
+                }
+            pair_prefilter_cache[key] = None
+            return None
+        pair_prefilter_cache[key] = score
+        return score
 
-    budget_exhausted = False
+    scan_phase_started = time.monotonic()
     for capability in capabilities:
         for pattern in capability.forbidden_patterns:
-            for file in candidate_files:
-                file_rel = rel(file)
-                if fnmatch.fnmatchcase(file_rel, pattern.replace("\\", "/")):
+            for candidate in candidate_files:
+                candidate_rel = rel(candidate)
+                if fnmatch.fnmatchcase(candidate_rel, pattern.replace("\\", "/")):
                     findings.append(
                         {
                             "severity": "P0",
                             "rule": "forbidden-pattern",
-                            "path": file_rel,
+                            "path": candidate_rel,
                             "capability": capability.id,
-                            "message": f"{file_rel} matches a forbidden path pattern for {capability.id}",
+                            "message": f"{candidate_rel} matches a forbidden path pattern for {capability.id}",
                         }
                     )
-        if not capability.owner_modules or not candidate_files:
-            continue
+
+    if changed_paths and not candidate_files:
+        scope["status"] = "unresolved"
+        scope["unresolved_paths"] = sorted(
+            {str(path).replace("\\", "/") for path in changed_paths if str(path).strip()}
+        )
+    if scope["status"] in {"unresolved", "partial"}:
+        findings.append(
+            {
+                "severity": "P2",
+                "rule": "reuse-scan-scope-unresolved",
+                "message": "Changed paths were not fully resolved to capability ownership; the scan did not expand to unrelated capabilities.",
+                "details": {
+                    "scope_status": scope["status"],
+                    "unresolved_paths": scope["unresolved_paths"],
+                    "scoped_capabilities": scope["capability_ids"],
+                },
+            }
+        )
+
+    budget_exhausted = False
+    for capability in scoped_capabilities:
+        if should_stop() or not candidate_files:
+            break
         if capability.id not in owner_file_cache:
-            owner_files = capability_owner_files(repo_root, capability, modules, ignore_patterns)
+            owner_files = capability_comparison_files(
+                repo_root, capability, modules, ignore_patterns, candidate_files
+            )
             metrics["owner_file_count"] += len(owner_files)
             if len(owner_files) > budget.max_owner_files_per_capability:
                 metrics["owner_files_limited_capabilities"].append(
@@ -4787,54 +5188,97 @@ def gather_reuse_report(
                         "scanned": budget.max_owner_files_per_capability,
                     }
                 )
-                owner_files = prioritize_owner_files(repo_root, owner_files, candidate_files)[: budget.max_owner_files_per_capability]
+                owner_files = prioritize_owner_files(repo_root, owner_files, candidate_files)[
+                    : budget.max_owner_files_per_capability
+                ]
             owner_file_cache[capability.id] = owner_files
         owner_files = owner_file_cache[capability.id]
         metrics["owner_files_scanned"] += len(owner_files)
-        metrics["raw_pair_count"] += len(owner_files) * len(candidate_files)
+        metrics["raw_pair_count"] += sum(
+            1 for owner_file in owner_files for candidate in candidate_files if owner_file != candidate
+        )
 
         for candidate in candidate_files:
+            if should_stop():
+                break
             preliminary: list[tuple[float, Path]] = []
             for owner_file in owner_files:
-                rough_score = prefilter_pair(owner_file, candidate)
-                if rough_score is None:
-                    continue
-                preliminary.append((rough_score, owner_file))
+                if should_stop():
+                    break
+                rough_score = prefilter_pair(owner_file, candidate, capability.id)
+                if rough_score is not None:
+                    preliminary.append((rough_score, owner_file))
+                write_checkpoint()
             metrics["comparisons_planned"] += len(preliminary)
-            selected = sorted(preliminary, key=lambda item: item[0], reverse=True)[: budget.top_k_owner_files_per_candidate]
+            selected = sorted(preliminary, key=lambda item: item[0], reverse=True)[
+                : budget.top_k_owner_files_per_candidate
+            ]
             metrics["comparisons_skipped_by_top_k"] += max(0, len(preliminary) - len(selected))
             for _, owner_file in selected:
-                if metrics["comparisons_run"] >= budget.max_comparisons:
-                    metrics["budget_exceeded"] = True
-                    metrics["comparisons_skipped_by_budget"] += len(selected)
-                    budget_exhausted = True
+                if should_stop():
                     break
-                owner_text = normalized_text(owner_file)
-                candidate_text = normalized_text(candidate)
-                matcher = difflib.SequenceMatcher(None, owner_text, candidate_text)
-                if matcher.quick_ratio() < 0.85:
-                    metrics["comparisons_skipped_by_prefilter"] += 1
-                    continue
-                metrics["comparisons_run"] += 1
-                score = matcher.ratio()
+                key = pair_key(owner_file, candidate)
+                if key in exact_score_cache:
+                    metrics["comparisons_skipped_by_pair_dedup"] += 1
+                    score = exact_score_cache[key]
+                else:
+                    if metrics["comparisons_run"] >= budget.max_comparisons:
+                        metrics["budget_exceeded"] = True
+                        metrics["comparisons_skipped_by_budget"] += len(selected)
+                        budget_exhausted = True
+                        break
+                    owner_text = normalized_text(owner_file)
+                    candidate_text = normalized_text(candidate)
+                    matcher = difflib.SequenceMatcher(None, owner_text, candidate_text)
+                    if matcher.quick_ratio() < 0.85:
+                        metrics["comparisons_skipped_by_prefilter"] += 1
+                        exact_score_cache[key] = 0.0
+                        continue
+                    metrics["comparisons_run"] += 1
+                    score = matcher.ratio()
+                    exact_score_cache[key] = score
                 if score < 0.85:
                     continue
-                findings.append(
-                    {
+                existing = duplicate_findings.get(key)
+                if existing is None:
+                    duplicate_findings[key] = {
                         "severity": "P1" if score >= 0.92 else "P2",
                         "rule": "duplicate-implementation",
                         "path": rel(candidate),
                         "owner_path": rel(owner_file),
                         "capability": capability.id,
+                        "capabilities": [capability.id],
                         "score": round(score, 4),
                         "message": f"duplicate implementation signal for {capability.id}",
                     }
-                )
-            if budget_exhausted:
+                elif capability.id not in existing["capabilities"]:
+                    existing["capabilities"].append(capability.id)
+                    existing["capabilities"].sort()
+                    if score >= 0.92:
+                        existing["severity"] = "P1"
+                    existing["score"] = max(existing["score"], round(score, 4))
+                write_checkpoint()
+            if budget_exhausted or should_stop():
                 break
-        if budget_exhausted:
+        if budget_exhausted or should_stop():
             break
 
+    findings.extend(duplicate_findings.values())
+    advisory_findings = [
+        finding
+        for key, finding in sorted(
+            fingerprint_advisories.items(),
+            key=lambda item: (-item[1]["fingerprint_score"], item[0]),
+        )
+        if key not in duplicate_findings
+    ][:20]
+    findings.extend(advisory_findings)
+    metrics["fingerprint_advisories_reported"] = len(advisory_findings)
+    metrics["unique_pair_count"] = sum(1 for left, right in pair_prefilter_cache if left != right)
+    metrics["elapsed_ms_by_phase"]["fingerprint_and_compare"] = int(
+        (time.monotonic() - scan_phase_started) * 1000
+    )
+    metrics["elapsed_ms"] = int((time.monotonic() - started) * 1000)
     size_limit_prevented_scan = bool(
         metrics["raw_pair_count"] > 0
         and metrics["comparisons_skipped_by_size"] > 0
@@ -4842,22 +5286,50 @@ def gather_reuse_report(
         and metrics["comparisons_run"] == 0
     )
     metrics["size_limit_prevented_scan"] = size_limit_prevented_scan
-    incomplete = bool(
+
+    if stop_reason:
+        completion_status = "timeout"
+        termination_reason = stop_reason
+    elif scope["status"] in {"unresolved", "partial"}:
+        completion_status = "incomplete"
+        termination_reason = "scope_unresolved"
+    elif (
         metrics["budget_exceeded"]
         or metrics["candidate_files_limited"]
         or metrics["owner_files_limited_capabilities"]
         or size_limit_prevented_scan
-    )
-    if incomplete:
-        metrics["status"] = "warn"
+    ):
+        completion_status = "bounded"
+        termination_reason = "configured_budget"
+    else:
+        completion_status = "complete"
+        termination_reason = None
+    metrics["completion_status"] = completion_status
+    metrics["termination_reason"] = termination_reason
+    metrics["evidence_complete"] = completion_status == "complete"
+    metrics["status"] = "complete" if completion_status == "complete" else "warn"
+
+    if completion_status != "complete" and not any(
+        finding["rule"] == "reuse-scan-scope-unresolved" for finding in findings
+    ):
         findings.append(
             {
                 "severity": "P2",
                 "rule": "reuse-scan-incomplete",
-                "message": "Reuse scan completed with budget or file-size limits; inspect details before treating duplicate checks as exhaustive.",
-                "details": metrics,
+                "message": "Reuse scan produced bounded or interrupted evidence; do not treat it as proof that no duplicate implementation exists.",
+                "details": {
+                    "completion_status": completion_status,
+                    "termination_reason": termination_reason,
+                    "scope": scope,
+                },
             }
         )
+
+    write_checkpoint(force=True)
+    if store:
+        if completion_status == "complete":
+            store.delete_checkpoint(run_id)
+        store.close()
     return {"findings": findings, "scan": metrics}
 
 
