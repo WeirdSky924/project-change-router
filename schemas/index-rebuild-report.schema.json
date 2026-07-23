@@ -1,11 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["report_id", "timestamp", "source_commit", "structure_digest", "indexed_paths", "mapped_path_patterns", "diagnostics", "generated_modules_count", "curated_entries_count", "conflicts", "stale_entries", "missing_paths", "status"],
+  "required": ["report_id", "timestamp", "source_commit", "structure_digest", "indexed_paths", "mapped_path_patterns", "diagnostics", "generated_modules_count", "curated_entries_count", "conflicts", "stale_entries", "missing_paths", "preserved_generated_output_keys", "generated_output_evidence", "generated_output_findings", "generated_output_write_state", "write_performed", "status"],
   "properties": {
     "report_id": { "type": "string" },
     "timestamp": { "type": "string" },
-    "source_commit": { "type": ["string", "null"] },
+    "source_commit": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        }
+      ]
+    },
     "structure_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "indexed_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "mapped_path_patterns": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
@@ -15,6 +23,23 @@
     "conflicts": { "type": "array", "items": { "type": "string" } },
     "stale_entries": { "type": "array", "items": { "type": "object" } },
     "missing_paths": { "type": "array", "items": { "type": "string" } },
+    "preserved_generated_output_keys": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "generated_output_evidence": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "generated_output_findings": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "generated_output_write_state": {
+      "enum": ["not_configured", "preserved_verified", "blocked"]
+    },
+    "write_performed": { "type": "boolean" },
     "status": { "type": "string" }
   },
   "additionalProperties": true

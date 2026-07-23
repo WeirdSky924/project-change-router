@@ -741,6 +741,7 @@ def test_profile_structure_guardrails_flow_into_change_rules() -> None:
     assert rules["central_growth_baseline"] == [{"id": "gateway"}]
     assert rules["forbidden_implementation_roots"] == [{"id": "second-root"}]
     assert rules["exclusive_source_owners"] == [{"id": "skill-sql"}]
+    assert "generated_output_baseline" not in rules
     assert "check-structure" in router_core.required_checks_for(None, "extend", {"change_rules": rules})
 
 

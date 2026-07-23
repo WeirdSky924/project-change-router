@@ -17,6 +17,7 @@ from router_support.freshness_checks import (
     assess_index_freshness,
     build_structure_snapshot,
     collect_git_changed_paths,
+    repository_freshness_report,
 )
 
 
@@ -126,6 +127,8 @@ def test_structure_snapshot_tracks_extensionless_executable_changes(
             "indexed_paths": list(indexed.paths),
             "mapped_path_patterns": ["bin/**"],
             "stale_entries": [],
+            "diagnostics": [],
+            "status": "pass",
         },
         changed_paths=["bin/tool"],
     )
@@ -226,6 +229,8 @@ def test_assessment_requires_matching_commit_digest_paths_and_clean_stale_entrie
         "indexed_paths": [".project-change-router.yaml", "app/a.py"],
         "mapped_path_patterns": [".project-change-router.yaml", "app/**"],
         "stale_entries": [],
+        "diagnostics": [],
+        "status": "pass",
     }
 
     report = assess_index_freshness(current, indexed, changed_paths=["app/a.py"])
@@ -342,6 +347,7 @@ def test_cli_accepts_repeated_changed_paths_and_fails_unmapped_path(tmp_path: Pa
         "mapped_path_patterns": [".project-change-router.yaml", "app/**", "project-change-router/**"],
         "stale_entries": [],
         "diagnostics": [],
+        "status": "pass",
     }
     _write(
         repo / "project-change-router" / "reports" / "index-rebuild" / "latest.json",
@@ -368,9 +374,235 @@ def test_cli_accepts_repeated_changed_paths_and_fails_unmapped_path(tmp_path: Pa
     )
 
     assert passed.returncode == 0, passed.stderr
-    assert json.loads(passed.stdout)["changed_paths"] == [".project-change-router.yaml", "app/a.py"]
+    assert json.loads(passed.stdout)["changed_paths"] == [
+        ".project-change-router.yaml",
+        "app/a.py",
+        "project-change-router/reports/index-rebuild/latest.json",
+    ]
     assert failed.returncode == 2
     assert json.loads(failed.stdout)["unmapped_changed_paths"] == ["docs/unknown.md"]
+
+
+def test_cli_explicit_paths_cannot_hide_real_worktree_changes(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write(repo / "app" / "a.py", "VALUE = 1\n")
+    _write(repo / ".project-change-router.yaml", "capabilities: []\n")
+    _write(repo / "project-change-router" / "router-config.yaml", "ignore_paths: []\n")
+    _commit_all(repo)
+    snapshot = build_structure_snapshot(repo, ignored=())
+    _write(
+        repo / "project-change-router" / "reports" / "index-rebuild" / "latest.json",
+        json.dumps(
+            {
+                "source_commit": snapshot.source_commit,
+                "structure_digest": snapshot.digest,
+                "indexed_paths": list(snapshot.paths),
+                "mapped_path_patterns": ["app/**", "project-change-router/**"],
+                "stale_entries": [],
+                "diagnostics": [],
+                "status": "pass",
+            }
+        ),
+    )
+    _write(repo / "outside" / "unmapped.py", "VALUE = 2\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "check_index_freshness.py"),
+            "--repo",
+            str(repo),
+            "--changed-path",
+            "app/a.py",
+            "--format",
+            "json",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    report = json.loads(result.stdout)
+
+    assert result.returncode == 2
+    assert "outside/unmapped.py" in report["changed_paths"]
+    assert report["unmapped_changed_paths"] == ["outside/unmapped.py"]
+
+
+def test_repository_explicit_paths_cannot_hide_real_worktree_changes(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write(repo / "app/a.py", "VALUE = 1\n")
+    _commit_all(repo)
+    snapshot = build_structure_snapshot(repo, ignored=())
+    bundle_root = repo / "project-change-router"
+    _write(
+        bundle_root / "reports/index-rebuild/latest.json",
+        json.dumps(
+            {
+                "source_commit": snapshot.source_commit,
+                "structure_digest": snapshot.digest,
+                "indexed_paths": list(snapshot.paths),
+                "mapped_path_patterns": ["app/**"],
+                "stale_entries": [],
+                "diagnostics": [],
+                "status": "pass",
+            }
+        ),
+    )
+    _write(repo / "outside/unmapped.py", "VALUE = 2\n")
+
+    report = repository_freshness_report(
+        repo,
+        bundle_root,
+        (),
+        changed_paths=["app/a.py"],
+    )
+
+    assert report["status"] == "fail"
+    assert "outside/unmapped.py" in report["changed_paths"]
+    assert report["unmapped_changed_paths"] == ["outside/unmapped.py"]
+
+
+def test_cli_accepts_ancestor_index_commit_with_identical_snapshot(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    source = _write(repo / "app" / "a.py", "VALUE = 1\n")
+    _write(repo / ".project-change-router.yaml", "capabilities: []\n")
+    _write(repo / "project-change-router" / "router-config.yaml", "ignore_paths: []\n")
+    _commit_all(repo)
+    indexed_commit = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    generated_snapshot = build_structure_snapshot(repo, ignored=())
+    _write(
+        repo / "project-change-router" / "reports" / "index-rebuild" / "latest.json",
+        json.dumps(
+            {
+                "source_commit": indexed_commit,
+                "structure_digest": generated_snapshot.digest,
+                "indexed_paths": list(generated_snapshot.paths),
+                "mapped_path_patterns": ["app/**", "project-change-router/**"],
+                "stale_entries": [],
+                "diagnostics": [],
+                "status": "pass",
+            }
+        ),
+    )
+    _commit_all(repo)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "check_index_freshness.py"),
+            "--repo",
+            str(repo),
+            "--format",
+            "json",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    report = json.loads(result.stdout)
+    source_check = next(
+        check for check in report["checks"] if check["name"] == "source_commit"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert source_check["details"]["match_mode"] == "ancestor_exact_snapshot"
+
+    latest_path = (
+        repo / "project-change-router" / "reports" / "index-rebuild" / "latest.json"
+    )
+    symbolic = json.loads(latest_path.read_text(encoding="utf-8"))
+    symbolic["source_commit"] = "HEAD~1"
+    latest_path.write_text(json.dumps(symbolic), encoding="utf-8")
+    symbolic_result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "check_index_freshness.py"),
+            "--repo",
+            str(repo),
+            "--format",
+            "json",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    symbolic_report = json.loads(symbolic_result.stdout)
+
+    assert symbolic_result.returncode == 2
+    assert "source_commit" in symbolic_report["failure_reasons"]
+
+
+def test_system_managed_bundle_paths_are_visible_and_covered() -> None:
+    config_path = "project-change-router/router-config.yaml"
+    current = StructureSnapshot(
+        source_commit="b" * 40,
+        digest="digest",
+        paths=("app/a.py", config_path),
+        diagnostics=(),
+    )
+    indexed = {
+        "source_commit": "b" * 40,
+        "structure_digest": "digest",
+        "indexed_paths": ["app/a.py", config_path],
+        "mapped_path_patterns": ["app/**"],
+        "stale_entries": [],
+        "diagnostics": [],
+        "status": "pass",
+    }
+
+    report = assess_index_freshness(
+        current,
+        indexed,
+        changed_paths=[config_path],
+        system_path_patterns=[config_path],
+    )
+
+    assert report["status"] == "pass"
+    assert report["changed_paths"] == ["project-change-router/router-config.yaml"]
+    assert report["system_managed_changed_paths"] == [
+        "project-change-router/router-config.yaml"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status", "diagnostics", "expected_reason"),
+    (
+        ("fail", [], "indexed_snapshot_status"),
+        ("pass", ["parser-error"], "indexed_snapshot_diagnostics"),
+    ),
+)
+def test_indexed_failure_evidence_is_blocking_even_at_exact_head(
+    status: str,
+    diagnostics: list[str],
+    expected_reason: str,
+) -> None:
+    current = StructureSnapshot(
+        source_commit="b" * 40,
+        digest="digest",
+        paths=("app/a.py",),
+        diagnostics=(),
+    )
+    indexed = {
+        "source_commit": "b" * 40,
+        "structure_digest": "digest",
+        "indexed_paths": ["app/a.py"],
+        "mapped_path_patterns": ["app/**"],
+        "stale_entries": [],
+        "status": status,
+        "diagnostics": diagnostics,
+    }
+
+    report = assess_index_freshness(current, indexed)
+
+    assert report["status"] == "fail"
+    assert expected_reason in report["failure_reasons"]
 
 
 def test_cli_comparison_commit_fails_clean_committed_unmapped_changes(
@@ -403,6 +635,7 @@ def test_cli_comparison_commit_fails_clean_committed_unmapped_changes(
                 ],
                 "stale_entries": [],
                 "diagnostics": [],
+                "status": "pass",
             }
         ),
     )
@@ -442,4 +675,104 @@ def test_index_report_schema_requires_freshness_truth_fields() -> None:
     }
 
     assert required <= set(schema["required"])
+    source_schema = schema["properties"]["source_commit"]
+    assert source_schema == {
+        "oneOf": [
+            {"type": "null"},
+            {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$",
+            },
+        ]
+    }
     assert required <= set(schema["properties"])
+
+
+@pytest.mark.parametrize("payload", ([], 1, "invalid", None))
+def test_cli_rejects_non_object_latest_report_without_traceback(
+    tmp_path: Path,
+    payload: object,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write(repo / "app" / "a.py", "VALUE = 1\n")
+    _write(repo / ".project-change-router.yaml", "capabilities: []\n")
+    _write(
+        repo / "project-change-router" / "router-config.yaml",
+        "ignore_paths: []\n",
+    )
+    _commit_all(repo)
+    _write(
+        repo / "project-change-router/reports/index-rebuild/latest.json",
+        json.dumps(payload),
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "check_index_freshness.py"),
+            "--repo",
+            str(repo),
+            "--format",
+            "json",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    report = json.loads(result.stdout)
+
+    assert result.returncode == 2
+    assert "indexed_snapshot_schema" in report["failure_reasons"]
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("indexed_paths", "mapped_path_patterns", "stale_entries", "diagnostics"),
+)
+def test_cli_rejects_non_array_latest_report_fields(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write(repo / "app" / "a.py", "VALUE = 1\n")
+    _write(repo / ".project-change-router.yaml", "capabilities: []\n")
+    _write(
+        repo / "project-change-router" / "router-config.yaml",
+        "ignore_paths: []\n",
+    )
+    _commit_all(repo)
+    snapshot = build_structure_snapshot(repo, ignored=())
+    indexed: dict[str, object] = {
+        "source_commit": snapshot.source_commit,
+        "structure_digest": snapshot.digest,
+        "indexed_paths": list(snapshot.paths),
+        "mapped_path_patterns": ["app/**", "project-change-router/**"],
+        "stale_entries": [],
+        "diagnostics": [],
+        "status": "pass",
+    }
+    indexed[field] = 7
+    _write(
+        repo / "project-change-router/reports/index-rebuild/latest.json",
+        json.dumps(indexed),
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "check_index_freshness.py"),
+            "--repo",
+            str(repo),
+            "--format",
+            "json",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    report = json.loads(result.stdout)
+
+    assert result.returncode == 2
+    assert "indexed_snapshot_schema" in report["failure_reasons"]
+    assert "Traceback" not in result.stderr

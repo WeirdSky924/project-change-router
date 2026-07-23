@@ -13,9 +13,23 @@ def main() -> int:
     parser.add_argument("--repo", required=True, help="Repository root path.")
     parser.add_argument("--format", choices=["json", "text"], default="text")
     parser.add_argument("--output", help="Optional report output path.")
+    parser.add_argument(
+        "--initialize-generated-output-baseline",
+        metavar="FINGERPRINT",
+        help=(
+            "Authorize one new generated-output pin only when this exact "
+            "fingerprint matches the profile at its trusted source commit."
+        ),
+    )
     args = parser.parse_args()
 
-    report = rebuild_index(Path(args.repo).resolve(), write_back=True)
+    report = rebuild_index(
+        Path(args.repo).resolve(),
+        write_back=True,
+        generated_output_initialization_fingerprint=(
+            args.initialize_generated_output_baseline
+        ),
+    )
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if args.format == "json":

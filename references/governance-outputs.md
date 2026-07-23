@@ -190,8 +190,8 @@ The seven output groups are interpreted alongside the read-only architecture rep
 
 - `check_deps.py` distinguishes Python and TypeScript/JavaScript runtime edges from Python `TYPE_CHECKING` and TypeScript type-only edges. Runtime cycles and reversed dependencies block unless an exact approved baseline identity matches.
 - `check_public_api.py` reports cross-module private-surface bypasses and public export breadth against the same exact-baseline contract.
-- `check_structure.py` enforces changed-file 800/1200-line bands plus `central_growth_baseline`, `forbidden_implementation_roots`, and `exclusive_source_owners`.
-- `check_index_freshness.py` binds evidence to the current commit, a content-derived structure digest, indexed/stale paths, and actual changed-path coverage.
+- `check_structure.py` enforces changed-file 800/1200-line bands plus `central_growth_baseline`, `forbidden_implementation_roots`, `exclusive_source_owners`, and atomic profile-only verification for an explicitly pinned core generated bundle. Verified rebuilds preserve all seven tracked refs; failed verification performs no bundle/report write.
+- `check_index_freshness.py` binds evidence to the current commit, a content-derived structure digest, indexed/stale paths, report field shapes, and actual changed-path coverage. Explicit paths cannot hide Git changes, and ancestor commits require an otherwise exact snapshot.
 - `run_evaluation.py` reports `normal` or `review_only`; attestation binds accepted metrics to route-affecting bundle truth.
 
 An exact baseline is owned debt with a stable identity and exit condition, not permission to add another violation. Parser/resolver diagnostics or unmapped changed paths make evidence incomplete. Static evidence supplements rather than replaces capability, logic, data, integration, and customer-flow tests.

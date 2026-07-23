@@ -253,6 +253,7 @@ def _gather_file_growth_findings(
     comparison_commit: str,
     changed_path_loader: ChangedPathLoader | None,
     baseline_loader: OptionalBaselineLoader,
+    verified_generated_paths: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     try:
         changes = (
@@ -276,6 +277,8 @@ def _gather_file_growth_findings(
     findings: list[dict[str, Any]] = []
     for change in changes:
         source_path = change.current_path
+        if source_path in verified_generated_paths:
+            continue
         current_path = repo_root / source_path
         if not current_path.is_file() or not _is_governed_code_bearing_path(
             source_path, current_path
@@ -483,6 +486,7 @@ def gather_growth_findings(
     comparison_commit: str | None,
     changed_path_loader: ChangedPathLoader | None,
     baseline_loader: OptionalBaselineLoader,
+    verified_generated_paths: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     commit = str(
         comparison_commit
@@ -502,6 +506,7 @@ def gather_growth_findings(
         commit,
         changed_path_loader,
         baseline_loader,
+        verified_generated_paths,
     )
     if changed_path_loader is None:
         findings.extend(_gather_tree_growth_findings(repo_root, commit))

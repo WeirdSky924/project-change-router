@@ -20,11 +20,11 @@ def main() -> int:
 
     repo_root = Path(args.repo).resolve()
     bundle = route_bundle_from_repo(repo_root)
-    changed_paths = args.changed_path
-    if args.comparison_commit:
-        merged_changes = set(collect_git_changed_paths(repo_root, args.comparison_commit))
-        merged_changes.update(args.changed_path or [])
-        changed_paths = sorted(merged_changes)
+    merged_changes = set(
+        collect_git_changed_paths(repo_root, args.comparison_commit)
+    )
+    merged_changes.update(args.changed_path or [])
+    changed_paths = sorted(merged_changes)
     report = freshness_report(repo_root, bundle, changed_paths)
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

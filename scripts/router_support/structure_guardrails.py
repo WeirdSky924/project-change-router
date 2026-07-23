@@ -14,6 +14,11 @@ from router_support.central_baseline import (
     measure_python_class,
     measure_python_symbol,
 )
+from router_support.generated_output_baseline.write_guard import (
+    assess_generated_output_write,
+)
+from router_support.generated_output_baseline.model import PCR_BUNDLE_ARTIFACTS
+from router_support.profile_loader import load_active_profile
 from router_support.structure_growth import (
     ChangedPathLoader,
     FILE_SIZE_THRESHOLDS,
@@ -568,6 +573,10 @@ def gather_structure_findings(
     changed_path_loader: ChangedPathLoader | None = None,
     file_baseline_loader: OptionalBaselineLoader = load_optional_git_source,
     enforce_baseline_provenance: bool | None = None,
+    expected_generated_bundle: dict[str, Any] | None = None,
+    generated_output_evidence: list[dict[str, Any]] | None = None,
+    generated_output_initialization_fingerprint: str | None = None,
+    generated_output_rebuild_error: str | None = None,
 ) -> list[dict[str, Any]]:
     rules = bundle.get("change_rules", {})
     if enforce_baseline_provenance is None:
@@ -578,13 +587,31 @@ def gather_structure_findings(
     effective_comparison = str(
         comparison_commit or bundle.get("config", {}).get("source_commit") or ""
     ).strip()
+    generated_verification = assess_generated_output_write(
+        repo_root,
+        load_active_profile(repo_root),
+        expected_generated_bundle,
+        comparison_commit=effective_comparison,
+        enforce_provenance=enforce_baseline_provenance,
+        initialization_fingerprint=generated_output_initialization_fingerprint,
+        rebuild_error=generated_output_rebuild_error,
+    )
+    if generated_output_evidence is not None:
+        generated_output_evidence.extend(generated_verification.evidence)
     findings = gather_growth_findings(
         repo_root,
         bundle,
         comparison_commit=comparison_commit,
         changed_path_loader=changed_path_loader,
         baseline_loader=file_baseline_loader,
+        verified_generated_paths=(
+            frozenset(PCR_BUNDLE_ARTIFACTS.values())
+            if generated_verification.write_allowed
+            and generated_verification.policy.protected
+            else frozenset()
+        ),
     )
+    findings.extend(generated_verification.findings)
     for baseline in rules.get("central_growth_baseline", []):
         findings.extend(
             _gather_central_growth_findings(

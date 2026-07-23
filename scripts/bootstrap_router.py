@@ -7,6 +7,9 @@ import sys
 from pathlib import Path
 
 from router_core import audit_bundle_governance, bootstrap_bundle
+from router_support.generated_output_baseline.write_guard import (
+    GeneratedOutputWriteBlocked,
+)
 
 
 def main() -> int:
@@ -17,7 +20,24 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = Path(args.repo).resolve()
-    bundle = bootstrap_bundle(repo_root, write=True)
+    try:
+        bundle = bootstrap_bundle(repo_root, write=True)
+    except GeneratedOutputWriteBlocked as exc:
+        report = {
+            "status": "fail",
+            "error_code": "generated_output_write_blocked",
+            "error": str(exc),
+        }
+        if args.output:
+            Path(args.output).write_text(
+                json.dumps(report, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        if args.format == "json":
+            print(json.dumps(report, indent=2))
+        else:
+            print(f"status=fail error={report['error_code']}")
+        return 2
     governance = audit_bundle_governance(repo_root, bundle)
     report = {
         "status": "pass",

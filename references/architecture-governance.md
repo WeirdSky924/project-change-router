@@ -66,6 +66,8 @@ Public export counts are evidence for API breadth. A large count is not automati
 - `forbidden_implementation_roots`
 - `exclusive_source_owners`
 
+The profile-only `generated_output_baseline` is a transitional fourth collection. It is deliberately not copied into generated `change-rules.yaml`, so the generated bundle cannot become a second authority for its own snapshot.
+
 It also applies the 800/1200-line file-size bands and immediate directory-width checks to changed code-bearing files. `--comparison-commit` is the explicit comparison boundary for CI and overrides the freshly generated bundle `source_commit`; without either boundary, structure evidence is incomplete and blocking. A clean committed `HEAD` cannot prove what changed from the pull-request or push base by itself.
 
 ### Central growth
@@ -86,6 +88,18 @@ Typical central owners include an application composition root, global database 
 - Any net growth from a 1200+ comparison baseline is a hard failure unless an exact, time-bounded exception applies.
 
 Existing large files are debt baselines, not permanent exemptions. A later governance package should reduce the baseline.
+
+### Pinned generated outputs
+
+Use `generated_output_baseline` only when reviewed core PCR outputs still preserve curated records that a canonical-input-only rebuild cannot yet reproduce. The `pinned-idempotent-v1` mode covers one closed seven-reference artifact group; profile data cannot supply paths, globs, commands, or ignored fields. `router-config.yaml` remains governed by evaluation attestation and freshness and is excluded to prevent a profile-to-attestation digest cycle.
+
+Every artifact records its own `source_commit` (`full SHA` or `null`), a semantic projection digest, a canonical UTF-8 YAML projection digest, and line count. The closed projection removes only top-level `generated_at` and `source_commit`; for `capability_catalog`, it also removes `last_verified_at` and the dates of `curated_bundle_lifecycle_calibrated` and `generated_from_repository_structure` events. No other field is volatile. The rule `source_commit` is the initialization authorization boundary. A non-null artifact source may be older, but it must be an ancestor of both the rule source and the current rebuild source. A 40-character prefix in a SHA-256 repository, symbolic revision, or other resolvable abbreviation is not a full immutable SHA.
+
+The pin binds `canonical_source` to the repository's unique active `.project-change-router.yaml` or `.project-change-router.yml` path and reads that same path from committed provenance. `check_structure.py` and the write-enabled rebuild perform a current no-write rebuild. The actual tracked artifact retains its declared pinned source; a current rebuild may carry a descendant source when the projected semantics are identical. A `null` artifact must rebuild as `null`. Byte comparison substitutes top-level `generated_at`, the listed capability clocks, and only in this verified ancestor mode the pinned artifact source. Raw tracked bytes still have to be canonical and match their pinned digest and line snapshot. A missing artifact, source-mode drift, non-ancestor source, duplicate YAML key, comment, formatting or CRLF change, projected digest mismatch, owner/fingerprint drift, or non-idempotent rebuild invalidates the entire group and preserves all ordinary size findings.
+
+Ordinary `rebuild_index.py` verifies the group before writing. On success it preserves all seven reference files, refreshes `router-config.yaml`, copied schemas, and `latest.json`, and recomputes evaluation attestation against the effective persisted bundle. On failure it writes none of those files and returns structured blocking findings. `bootstrap_router.py` is blocked while the current or committed profile still declares the pin, while the declaration is malformed, or while removal exists only in the worktree. This prevents clear-and-rewrite and deletion bypasses.
+
+The pin requires a stable, non-provisional capability owner with a normalized identity distinct from every reviewer, plus a trusted full source SHA, initialization record, reason, exit stage, and exit condition. When the comparison commit has no prior pin, pass the exact approved fingerprint through `check_structure.py --initialize-generated-output-baseline <fingerprint>` and through `rebuild_index.py --initialize-generated-output-baseline <fingerprint>` for the first write. The profile's initialization record is audit context and cannot authorize itself. A committed prior pin is matched by the closed artifact group, so renaming its ID cannot reset provenance. Remove it only after protected curated records move into canonical profile or governed feedback inputs, `canonical_only` rebuild converges, and the lifecycle removal is committed. It is not an ignore rule or a permanent exemption.
 
 ### Directory width
 
@@ -137,7 +151,9 @@ Read these fields together:
 - actual changed-path coverage;
 - snapshot/parser diagnostics.
 
-File timestamps are not freshness truth. Generated reports, progress logs, and PCR runtime artifacts are excluded from the structural digest so that checks do not invalidate themselves.
+File timestamps are not freshness truth. Canonical `router-config.yaml`, the seven core references, and copied schemas remain part of the structural digest even when repository `ignore_paths` cover the bundle; a `system-managed` label identifies ownership but does not prove content. Generated reports, progress logs, and PCR runtime artifacts remain excluded so that checks do not invalidate themselves, with `latest.json` as the explicit self-reference exemption.
+
+Caller-supplied `--changed-path` values are unioned with real staged, unstaged, untracked, and deleted paths; they never replace Git evidence. An indexed source older than current `HEAD` passes only when it is a full immutable ancestor and the structure digest, indexed paths, stale entries, indexed status, current diagnostics, and indexed diagnostics are all exact. A syntactically valid JSON report with a non-object root or wrong collection field types fails with structured `indexed_snapshot_schema` evidence rather than a traceback.
 
 An unmapped changed path fails freshness. Do not remove the path, enlarge ignore patterns, or rewrite evidence to make the check pass. Add or repair the correct owner/path mapping after source review.
 

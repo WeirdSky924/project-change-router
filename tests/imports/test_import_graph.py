@@ -195,14 +195,28 @@ def test_rebuild_preserves_curated_change_rules(tmp_path: Path) -> None:
     assert rebuilt["exception_registry"] == existing["exception_registry"]
 
 
-def test_yaml_writer_preserves_semantically_equal_existing_text(tmp_path: Path) -> None:
+def test_yaml_writer_rewrites_semantically_equal_text_canonically(tmp_path: Path) -> None:
     path = tmp_path / "curated.yaml"
     original = "items: [one, two]\n"
     path.write_text(original, encoding="utf-8")
 
     router_core.dump_yaml_file(path, {"items": ["one", "two"]})
 
-    assert path.read_text(encoding="utf-8") == original
+    canonical = "items:\n- one\n- two\n"
+    assert path.read_text(encoding="utf-8") == canonical
+
+    router_core.dump_yaml_file(path, {"items": ["one", "two"]})
+
+    assert path.read_text(encoding="utf-8") == canonical
+
+
+def test_yaml_writer_rewrites_crlf_to_canonical_utf8_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "curated.yaml"
+    path.write_bytes(b"items:\r\n- one\r\n- two\r\n")
+
+    router_core.dump_yaml_file(path, {"items": ["one", "two"]})
+
+    assert path.read_bytes() == b"items:\n- one\n- two\n"
 
 
 def test_rebuild_missing_paths_excludes_only_planned_modules(tmp_path: Path) -> None:

@@ -5,7 +5,16 @@ import argparse
 import json
 from pathlib import Path
 
-from router_core import audit_bundle_governance, load_bundle, resolve_bundle_root, validate_bundle_files
+from router_core import (
+    audit_bundle_governance,
+    load_bundle,
+    resolve_bundle_root,
+    schema_dir,
+    validate_against_schema,
+    validate_bundle_files,
+)
+from router_support.generated_output_baseline import validate_generated_output_rules
+from router_support.profile_loader import load_active_profile
 
 
 def main() -> int:
@@ -18,6 +27,27 @@ def main() -> int:
     repo_root = Path(args.repo).resolve()
     bundle_root = resolve_bundle_root(repo_root)
     errors = validate_bundle_files(bundle_root)
+    profile = load_active_profile(repo_root)
+    guardrails = profile.get("guardrails", {})
+    generated_rules = (
+        guardrails.get("generated_output_baseline", [])
+        if isinstance(guardrails, dict)
+        else guardrails
+    )
+    errors.extend(
+        "generated-output-baseline: " + item
+        for item in validate_against_schema(
+            generated_rules,
+            schema_dir() / "generated-output-baseline.schema.json",
+        )
+    )
+    errors.extend(
+        "generated-output-baseline: "
+        + str(item.get("diagnostic_code"))
+        + ": "
+        + str(item.get("message"))
+        for item in validate_generated_output_rules(profile, repo_root=repo_root)
+    )
     bundle = load_bundle(bundle_root)
     governance = audit_bundle_governance(repo_root, bundle) if bundle else {}
     report = {

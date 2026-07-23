@@ -12,6 +12,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from router_support.structure_guardrails import gather_structure_findings
+from router_support.structure_growth import gather_growth_findings
 
 
 def _write(path: Path, content: str = "VALUE = 1\n") -> Path:
@@ -83,6 +84,32 @@ def test_large_file_net_growth_is_blocking_inside_existing_bands(
     assert growth["growth_policy"] == policy
     assert growth["baseline_lines"] == baseline_lines
     assert growth["current_lines"] == current_lines
+
+
+def test_verified_generated_path_skips_only_its_file_size_finding(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    generated = "project-change-router/references/module-map.yaml"
+    regular = "config/application.yaml"
+    _write(repo / generated, "value: 1\n" * 1202)
+    _write(repo / regular, "value: 1\n" * 1202)
+
+    findings = gather_growth_findings(
+        repo,
+        {"config": {"source_commit": "baseline"}},
+        comparison_commit="baseline",
+        changed_path_loader=lambda _repo: (generated, regular),
+        baseline_loader=lambda _repo, _commit, _path: "value: 1\n" * 1201,
+        verified_generated_paths=frozenset({generated}),
+    )
+
+    assert not any(item["source"] == generated for item in findings)
+    assert any(
+        item["source"] == regular
+        and item["rule"] == "code-file-size-hard-growth"
+        for item in findings
+    )
 
 
 @pytest.mark.parametrize("baseline_lines,current_lines", [(900, 899), (1202, 1201)])

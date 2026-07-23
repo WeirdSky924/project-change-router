@@ -44,7 +44,7 @@ Advisory direction layer:
 6. Read the required capability entries and public code entry points before editing.
 7. Apply the change only in the routed layer.
 8. Run the required guardrails and capability-bound tests.
-9. Run `check_structure.py` for central-file growth, file-size bands, forbidden implementation roots, and exclusive canonical owners when the bundle declares those baselines.
+9. Run `check_structure.py` for central-file growth, file-size bands, forbidden implementation roots, exclusive canonical owners, and exact pinned generated-output verification when the profile declares those baselines. For a new pin, require the user-approved exact fingerprint through `--initialize-generated-output-baseline` on structure verification and the first write-enabled rebuild; never treat profile text as authorization. While a current or committed pin remains active, malformed, or only worktree-removed, use the verified rebuild path and never bootstrap over its seven protected refs.
 10. For `check_reuse`, inspect `result_status`, `completion_status`, `evidence_complete`, and the resolved capability scope together. Do not interpret bounded, incomplete, timed-out, cancelled, or errored evidence as proof that duplicate implementations are absent.
 11. If evaluation thresholds or attestation are not satisfied, keep PCR in `review_only`; do not convert a correct capability match into unattended write authority.
 12. If the route is `review`, stop automatic product-code editing and report `block_reason`, `missing_evidence`, `analysis_directions`, `safe_next_steps`, and scoped `override_requirements`.

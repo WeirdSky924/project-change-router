@@ -5,10 +5,28 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 SKILL_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 import router_core
+from router_support.generated_output_baseline import (
+    generated_output_rule_fingerprint,
+    make_pinned_generated_output_baseline,
+)
+
+
+def git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return result.stdout.strip()
 
 
 def create_profiled_repo(tmp_path: Path) -> Path:
@@ -297,3 +315,94 @@ def test_rebuild_preserves_curated_architecture_records(tmp_path: Path) -> None:
     if len(capability_ids) != len(set(capability_ids)):
         failures.append("duplicate capability IDs were generated")
     assert failures == []
+
+
+def test_canonical_only_rebuild_keeps_governed_manual_feedback(
+    tmp_path: Path,
+) -> None:
+    repo = create_profiled_repo(tmp_path)
+    feedback_dir = repo / "project-change-router" / "reports" / "manual-feedback"
+    feedback_dir.mkdir(parents=True)
+    (feedback_dir / "confirmed-route.json").write_text(
+        json.dumps(
+            {
+                "final_capability": "payment-core",
+                "confirmed_owner": True,
+                "profile_update_recommended": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rebuilt = router_core.build_router_bundle(repo, input_mode="canonical_only")
+
+    assert rebuilt["config"]["repo_stage_signals"]["manual_feedback_count"] == 1
+    assert "no manual feedback confirmations have been recorded yet" not in rebuilt[
+        "config"
+    ]["warnings"]
+
+
+def test_bundle_validation_binds_generated_pin_to_active_yml_profile(
+    tmp_path: Path,
+) -> None:
+    repo = create_profiled_repo(tmp_path)
+    yaml_profile = repo / ".project-change-router.yaml"
+    yml_profile = repo / ".project-change-router.yml"
+    yaml_profile.rename(yml_profile)
+    profile = yaml.safe_load(yml_profile.read_text(encoding="utf-8"))
+    profile["capabilities"][0].update({"status": "stable", "stage": "stable"})
+    profile["capability_ownership"] = [
+        {
+            "target": "payment-core",
+            "primary": "payments-maintainers",
+            "reviewers": ["payments-reviewers"],
+        }
+    ]
+    yml_profile.write_text(
+        yaml.safe_dump(profile, sort_keys=False), encoding="utf-8"
+    )
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "pcr@example.invalid")
+    git(repo, "config", "user.name", "PCR Test")
+    git(repo, "add", ".project-change-router.yml", "services")
+    git(repo, "commit", "-qm", "canonical profile source")
+    source_commit = git(repo, "rev-parse", "HEAD")
+    bundle = router_core.bootstrap_bundle(repo, write=True)
+    rule = make_pinned_generated_output_baseline(
+        repo,
+        bundle,
+        baseline_id="PCR-GEN-001",
+        source_commit=source_commit,
+        owner="payment-core",
+        reason="Exercise active profile source binding.",
+        exit_stage="PCR-GEN-CANONICAL-INPUTS",
+        exit_condition="Remove after canonical inputs converge.",
+        initialization_authorization="Explicit test authorization.",
+    )
+    rule["canonical_source"] = ".project-change-router.yaml"
+    rule["fingerprint"] = generated_output_rule_fingerprint(rule)
+    profile["guardrails"] = {"generated_output_baseline": [rule]}
+    yml_profile.write_text(
+        yaml.safe_dump(profile, sort_keys=False), encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "validate_router_bundle.py"),
+            "--repo",
+            str(repo),
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    report = json.loads(result.stdout)
+
+    assert result.returncode == 1
+    assert any(
+        "generated_output_baseline_invalid" in error
+        for error in report["errors"]
+    )

@@ -331,18 +331,289 @@ def test_ambiguous_typescript_slash_is_incomplete_not_import_evidence(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.ts",
+            "const previous = condition\n/import(moduleName)/\n",
+        ),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert not snapshot.edges
+    assert {
+        (item.code, item.path, item.language, item.blocking)
+        for item in snapshot.diagnostics
+    } == {
+        ("typescript-lexical-scan-incomplete", "entry.ts", "typescript", True),
+    }
+
+
+def test_control_statement_regex_does_not_create_dynamic_import_edges(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.ts",
+            "if (ready) /import('./ghost')/ instanceof RegExp\n",
+        ),
+        _write(repo / "ghost.ts", "export const ghost = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert not snapshot.edges
+    assert not snapshot.diagnostics
+
+
+def test_statement_prefix_regex_does_not_create_dynamic_import_edges(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.ts",
+            "if (ready) {} else /import('./ghost-else')/ instanceof RegExp\n"
+            "do /import('./ghost-do')/.test(value); while (pending)\n",
+        ),
+        _write(repo / "ghost-else.ts", "export const ghostElse = true\n"),
+        _write(repo / "ghost-do.ts", "export const ghostDo = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert not snapshot.edges
+    assert not snapshot.diagnostics
+
+
+def test_typescript_angle_assertion_is_not_reclassified_by_later_tag_text(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.ts",
+            "const value = <T>source\n"
+            "const dependency = import('./hidden')\n"
+            "const marker = '</T>'\n",
+        ),
+        _write(repo / "hidden.ts", "export const hidden = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert [
+        (item.source, item.target, item.runtime) for item in snapshot.edges
+    ] == [("entry.ts", "hidden.ts", True)]
+    assert not snapshot.diagnostics
+
+
+def test_tsx_tag_slashes_are_not_incomplete_lexical_regions(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.tsx",
+            "import { icon } from './icon'\n"
+            "export function View() {\n"
+            "  return (\n"
+            "    <Panel>\n"
+            "      <Section></Section>\n"
+            "      <Icon value={icon} /></Panel>\n"
+            "  )\n"
+            "}\n",
+        ),
+        _write(repo / "icon.ts", "export const icon = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert [
+        (item.source, item.target, item.runtime) for item in snapshot.edges
+    ] == [("entry.tsx", "icon.ts", True)]
+    assert not snapshot.diagnostics
+
+
+def test_jsx_text_in_js_does_not_create_dynamic_import_edges(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.js",
+            "export const view = <div>import('./ghost')</div>\n",
+        ),
+        _write(repo / "ghost.js", "export const ghost = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert not snapshot.edges
+    assert not snapshot.diagnostics
+
+
+def test_tsx_nested_attribute_elements_and_text_slashes_are_complete(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.tsx",
+            "import { icon } from './icon'\n"
+            "export function View({ ready, total, label }) {\n"
+            "  return (\n"
+            "    <Routes>\n"
+            "      <Route\n"
+            "        element={<Panel><Icon value={icon} /></Panel>}\n"
+            "        detail={<span>{ready}/{total} ready / {label}</span>}\n"
+            "      />\n"
+            "    </Routes>\n"
+            "  )\n"
+            "}\n",
+        ),
+        _write(repo / "icon.ts", "export const icon = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert [
+        (item.source, item.target, item.runtime) for item in snapshot.edges
+    ] == [("entry.tsx", "icon.ts", True)]
+    assert not snapshot.diagnostics
+
+
+def test_tsx_generic_component_tags_preserve_child_text_boundaries(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.tsx",
+            "import { Box } from './box'\n"
+            "export const view = <Box<string>>import('./ghost')</Box>\n",
+        ),
+        _write(repo / "box.tsx", "export const Box = () => null\n"),
+        _write(repo / "ghost.ts", "export const ghost = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert [
+        (item.source, item.target, item.runtime) for item in snapshot.edges
+    ] == [("entry.tsx", "box.tsx", True)]
+    assert not snapshot.diagnostics
+
+
+def test_tsx_generic_arrow_preserves_following_dynamic_import(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.tsx",
+            "const identity = <T extends unknown>(value: T) => value\n"
+            "const pair = <T,>(value: T) => [value, value]\n"
+            "export const dependency = import('./dependency')\n",
+        ),
+        _write(repo / "dependency.ts", "export const dependency = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert [
+        (item.source, item.target, item.runtime) for item in snapshot.edges
+    ] == [("entry.tsx", "dependency.ts", True)]
+    assert not snapshot.diagnostics
+
+
+def test_tsx_component_attributes_are_not_generic_arrow_prefixes(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.tsx",
+            "import { Component } from './component'\n"
+            "export const view = (\n"
+            "  <Component value={1}>(x) => import('./ghost')</Component>\n"
+            ")\n",
+        ),
+        _write(repo / "component.tsx", "export const Component = () => null\n"),
+        _write(repo / "ghost.ts", "export const ghost = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert [
+        (item.source, item.target, item.runtime) for item in snapshot.edges
+    ] == [("entry.tsx", "component.tsx", True)]
+    assert not snapshot.diagnostics
+
+
+def test_same_line_parenthesized_division_chain_is_not_regex_ambiguity(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
     source = _write(
         repo / "entry.ts",
-        "const previous = condition\n/import(moduleName)/\n",
+        "export const score = Number(((((1 + 2 + 3) / 3) / 2).toFixed(1))\n",
     )
 
     snapshot = build_import_graph(repo, [source])
 
     assert not snapshot.edges
+    assert not snapshot.diagnostics
+
+
+def test_typescript_angle_assertion_keeps_dynamic_import_in_code(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.ts",
+            "export const plugin = <unknown>import('./plugin')\n",
+        ),
+        _write(repo / "plugin.ts", "export const plugin = true\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
     assert [
+        (item.source, item.target, item.runtime) for item in snapshot.edges
+    ] == [("entry.ts", "plugin.ts", True)]
+    assert not snapshot.diagnostics
+
+
+def test_unterminated_typescript_regexes_remain_incomplete(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    files = [
+        _write(
+            repo / "entry.ts",
+            "const pattern = /unterminated\nexport const value = true\n",
+        ),
+        _write(repo / "delimiter.ts", "export const pattern = />\n"),
+    ]
+
+    snapshot = build_import_graph(repo, files)
+
+    assert not snapshot.edges
+    assert {
         (item.code, item.path, item.language, item.blocking)
         for item in snapshot.diagnostics
-    ] == [("typescript-lexical-scan-incomplete", "entry.ts", "typescript", True)]
+    } == {
+        (
+            "typescript-lexical-scan-incomplete",
+            "delimiter.ts",
+            "typescript",
+            True,
+        ),
+        ("typescript-lexical-scan-incomplete", "entry.ts", "typescript", True),
+    }
 
 
 def test_commonjs_dynamic_and_template_requires_are_complete_or_blocking(

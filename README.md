@@ -433,8 +433,9 @@ PCR 0.3 把原先容易依赖人工审查的结构约束变成可回归的通用
 - `central_growth_baseline` 阻止 composition root、global gateway、顶层 controller 等中央 owner 继续吸收领域实现。
 - `forbidden_implementation_roots` 阻止在 legacy、compat、generated 或非 canonical 根新增正式实现。
 - `exclusive_source_owners` 阻止 profile 明确声明的受保护实现 token 出现在 canonical owner 之外；不同标识符的 raw transport、cache/store 或 DTO 重复仍需项目级 import、identifier 或 AST 门。
+- `generated_output_baseline` 仅用于 canonical profile 迁移期的七个固定 PCR reference 产物，并绑定仓库唯一启用的 `.project-change-router.yaml` 或 `.project-change-router.yml`。规则源和每个非空 artifact provenance 都必须是该仓库对象格式的完整不可变 SHA；artifact 可以早于规则源，但必须是规则源与当前 rebuild source 的祖先，`null` 模式必须保持 `null`。固定摘要只投影掉顶层 `generated_at`、`source_commit` 和 capability catalog 中明确列出的 generator clock；实际产物仍须保持 pinned source、canonical UTF-8 字节和行数，并与当前无写入 rebuild 的 projected semantics 一致。普通 `rebuild_index.py` 验证成功后保留七个 tracked refs，只刷新 `router-config.yaml`、schemas 和 `latest.json`；失败时不写任何 bundle/report。evaluation attestation 会针对实际持久化的“新 config + pinned refs”重算。首次建立 pin 必须向 `check_structure.py` 或 `rebuild_index.py` 传入 `--initialize-generated-output-baseline <fingerprint>`；profile 文字不能自行授权。pin 启用、格式错误或尚未提交移除时，`bootstrap_router.py` 禁止清空正式 refs。
 - stable capability 必须有唯一 `capability_ownership` 记录、真实 primary owner、不同 reviewer、lifecycle、contract/test binding 和 evaluation 覆盖；自动生成的 owner 标签、`UNKNOWN`、unassigned、缺失、重复或 provisional owner 都不提供自动写入授权。
-- freshness 同时校验 commit、内容结构摘要、stale entries、索引路径和 changed-path coverage，不能用文件时间或删除真实 changed path 伪造通过。
+- freshness 同时校验 commit、内容结构摘要、stale entries、索引路径、报告字段形状和 changed-path coverage。canonical config、七个 refs 与 schemas 即使被 bundle `ignore_paths` 命中也必须进入摘要，只有自引用的 `latest.json` 例外；显式 `--changed-path` 始终与真实 staged、unstaged、untracked、deleted 路径取并集；历史 source 只在其为当前 HEAD 祖先且快照、状态与诊断全部精确一致时通过。
 - evaluation attestation 或阈值不满足时保持 `review_only`，不能因为 capability 命中正确就假定 action 和写入授权也可靠。
 
 现有债务应先建立精确 baseline 来阻止新增，再由后续治理包持续降低 baseline；不能通过扩大 ignore、弱化规则或伪造 evaluation case 获得通过。字段、退出条件和 CI 组合见 [references/architecture-governance.md](./references/architecture-governance.md)。

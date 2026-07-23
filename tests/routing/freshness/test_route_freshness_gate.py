@@ -9,6 +9,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 import router_core
+from router_support.freshness_checks import canonical_bundle_snapshot_paths
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -162,6 +163,7 @@ def _persisted_route_bundle(
     snapshot = router_core.build_structure_snapshot(
         repo,
         router_core.default_ignore_patterns(bundle["config"]),
+        required_patterns=canonical_bundle_snapshot_paths(repo, bundle_root),
     )
     latest = bundle_root / "reports" / "index-rebuild" / "latest.json"
     router_core.dump_json_file(
@@ -172,6 +174,8 @@ def _persisted_route_bundle(
             "indexed_paths": list(snapshot.paths),
             "mapped_path_patterns": ["src/formatter/**"],
             "stale_entries": [],
+            "diagnostics": [],
+            "status": "pass",
         },
     )
     return repo, bundle, latest
@@ -219,6 +223,27 @@ def test_resolve_blocks_when_persisted_freshness_snapshot_is_missing(
     assert decision.block_reason["code"] == "stale_bundle"
     assert decision.allowed_write_paths == []
     assert bundle["_runtime"]["freshness"]["status"] == "fail"
+
+
+def test_resolve_explicit_route_paths_cannot_hide_other_git_changes(
+    tmp_path: Path,
+) -> None:
+    repo, bundle, _latest = _persisted_route_bundle(tmp_path)
+    outside = repo / "outside/unmapped.py"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("VALUE = 1\n", encoding="utf-8")
+
+    decision = router_core.resolve_request(
+        "Extend formatter output compatibility.",
+        ["src/formatter/service.py"],
+        bundle,
+        repo / "project-change-router",
+    )
+
+    freshness = bundle["_runtime"]["freshness"]
+    assert decision.action == "review"
+    assert "outside/unmapped.py" in freshness["changed_paths"]
+    assert freshness["unmapped_changed_paths"] == ["outside/unmapped.py"]
 
 
 def test_evaluation_self_check_does_not_require_a_persisted_freshness_snapshot(

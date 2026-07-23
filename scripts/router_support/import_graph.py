@@ -12,6 +12,7 @@ from router_support.architecture_baseline import (
     validate_architecture_baseline,
 )
 from router_support.import_source_scan import (
+    JSX_SOURCE_SUFFIXES,
     python_all_exports,
     python_dynamic_bindings,
     scan_typescript_source,
@@ -525,7 +526,10 @@ def _typescript_graph_items(
         ]
     edges: list[ImportEdge] = []
     diagnostics: list[GraphDiagnostic] = []
-    scan = scan_typescript_source(source)
+    scan = scan_typescript_source(
+        source,
+        allow_jsx=path.suffix.lower() in JSX_SOURCE_SUFFIXES,
+    )
     if scan.incomplete_dynamic_imports:
         diagnostics.append(
             GraphDiagnostic(

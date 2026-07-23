@@ -16,16 +16,33 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
-import yaml
 from jsonschema import Draft202012Validator
 
+from router_support.bundle_io import (
+    dump_json_file,
+    dump_yaml_file,
+    load_json_file,
+    load_yaml_file,
+    prepare_router_bundle_for_preserved_write,
+    write_router_bundle as write_bundle,
+    write_text_in_chunks,
+)
 from router_support.import_graph import build_import_graph, classify_findings_against_baseline
-from router_support.import_source_scan import scan_typescript_source
+from router_support.import_source_scan import JSX_SOURCE_SUFFIXES, scan_typescript_source
 from router_support.java_source_scan import java_imports
 from router_support.freshness_checks import (
-    assess_index_freshness,
     build_structure_snapshot,
-    collect_git_changed_paths,
+    repository_freshness_report,
+)
+from router_support.generated_output_baseline import (
+    validate_generated_output_rules,
+)
+from router_support.generated_output_baseline.write_guard import (
+    assert_bootstrap_write_allowed,
+)
+from router_support.index_rebuild import (
+    IndexRebuildOperations,
+    rebuild_router_index,
 )
 from router_support.evaluation_policy import evaluate_configured_policy, make_evaluation_attestation, policy_for_bundle
 from router_support.governance_coverage import (
@@ -306,55 +323,6 @@ def profile_dir(skill_root: Optional[Path] = None) -> Path:
 
 def schema_dir(skill_root: Optional[Path] = None) -> Path:
     return (skill_root or project_root_from_file()) / "schemas"
-
-
-def load_yaml_file(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return data or {}
-
-
-def write_text_in_chunks(path: Path, content: str, max_lines: int = 300, max_chars: int = 12_000) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = content.splitlines(keepends=True)
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        chunk: list[str] = []
-        char_count = 0
-        for line in lines:
-            if len(line) > max_chars:
-                if chunk:
-                    handle.write("".join(chunk))
-                    chunk, char_count = [], 0
-                for offset in range(0, len(line), max_chars):
-                    handle.write(line[offset : offset + max_chars])
-                continue
-            if chunk and (len(chunk) >= max_lines or char_count + len(line) > max_chars):
-                handle.write("".join(chunk))
-                chunk, char_count = [], 0
-            chunk.append(line)
-            char_count += len(line)
-        if chunk:
-            handle.write("".join(chunk))
-
-
-def dump_yaml_file(path: Path, data: dict[str, Any]) -> None:
-    if path.exists() and load_yaml_file(path) == data:
-        return
-    content = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
-    write_text_in_chunks(path, content)
-
-
-def load_json_file(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def dump_json_file(path: Path, data: dict[str, Any]) -> None:
-    if path.exists() and load_json_file(path) == data:
-        return
-    write_text_in_chunks(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def iso_now() -> str:
@@ -1377,7 +1345,13 @@ def parse_python_imports(path: Path) -> list[str]:
 
 def parse_js_imports(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8", errors="ignore")
-    return [item.specifier for item in scan_typescript_source(text).imports]
+    return [
+        item.specifier
+        for item in scan_typescript_source(
+            text,
+            allow_jsx=path.suffix.lower() in JSX_SOURCE_SUFFIXES,
+        ).imports
+    ]
 
 
 def parse_java_imports(path: Path) -> list[str]:
@@ -2951,6 +2925,20 @@ def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str
     generated_ids = {capability.id for capability in capabilities if capability.source_of_truth == "generated"}
     profile_backed_ids = {capability.id for capability in capabilities if capability.source_of_truth == "profile"}
     findings = profile_source_lifecycle_findings(repo_root)
+    for issue in validate_generated_output_rules(profile, repo_root=repo_root):
+        add_governance_finding(
+            findings,
+            "P0",
+            str(issue.get("diagnostic_code") or "generated-output-baseline-invalid"),
+            str(issue.get("message") or "Generated output baseline is invalid."),
+            str(issue.get("source") or "profile.guardrails.generated_output_baseline"),
+            "Repair the exact pinned generated-output metadata before trusting structure results.",
+            {
+                key: value
+                for key, value in issue.items()
+                if key not in {"severity", "rule", "source", "blocking", "message"}
+            },
+        )
 
     capability_owner_targets = [
         str(item.get("target") or "")
@@ -3361,11 +3349,21 @@ def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str
     }
 
 
-def build_router_bundle(repo_root: Path) -> dict[str, Any]:
+def build_router_bundle(
+    repo_root: Path,
+    *,
+    input_mode: str = "preserve_curated",
+) -> dict[str, Any]:
+    if input_mode not in {"preserve_curated", "canonical_only"}:
+        raise ValueError(f"unsupported router bundle input mode: {input_mode}")
     profile = load_active_profile(repo_root)
     bundle_root = resolve_bundle_root(repo_root)
     feedback_items = load_manual_feedback(bundle_root)
-    existing_bundle = load_bundle(bundle_root) if bundle_root.exists() else {}
+    existing_bundle = (
+        load_bundle(bundle_root)
+        if input_mode == "preserve_curated" and bundle_root.exists()
+        else {}
+    )
     preliminary_modules = discover_modules(repo_root, {}, profile)
     initial_stage, initial_stage_info = classify_repo_stage(preliminary_modules, [], profile, repo_root, feedback_items)
     config = build_router_config(repo_root, preliminary_modules, profile, initial_stage_info)
@@ -5271,24 +5269,6 @@ def bundle_metadata(bundle: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_bundle(bundle_root: Path, bundle: dict[str, Any]) -> None:
-    bundle_root.mkdir(parents=True, exist_ok=True)
-    (bundle_root / "references").mkdir(parents=True, exist_ok=True)
-    (bundle_root / "schemas").mkdir(parents=True, exist_ok=True)
-    (bundle_root / "reports" / "route-decisions").mkdir(parents=True, exist_ok=True)
-    (bundle_root / "reports" / "index-rebuild").mkdir(parents=True, exist_ok=True)
-    (bundle_root / "reports" / "guardrail-results").mkdir(parents=True, exist_ok=True)
-    (bundle_root / "reports" / "evaluation").mkdir(parents=True, exist_ok=True)
-    dump_yaml_file(bundle_root / "router-config.yaml", bundle["config"])
-    dump_yaml_file(bundle_root / "references" / "capability-catalog.yaml", bundle["capability_catalog"])
-    dump_yaml_file(bundle_root / "references" / "module-map.yaml", bundle["module_map"])
-    dump_yaml_file(bundle_root / "references" / "ownership.yaml", bundle["ownership"])
-    dump_yaml_file(bundle_root / "references" / "change-rules.yaml", bundle["change_rules"])
-    dump_yaml_file(bundle_root / "references" / "path-to-capability-map.yaml", bundle["path_to_capability_map"])
-    dump_yaml_file(bundle_root / "references" / "exception-registry.yaml", bundle["exception_registry"])
-    dump_yaml_file(bundle_root / "references" / "evaluation-set.yaml", bundle["evaluation_set"])
-
-
 def create_bundle_directory(repo_root: Path) -> Path:
     bundle_root = resolve_bundle_root(repo_root)
     for rel in [
@@ -5352,6 +5332,7 @@ def bootstrap_bundle(repo_root: Path, write: bool = True) -> dict[str, Any]:
     bundle["root"] = bundle_root
     bundle["_resolution_context"] = "bootstrap"
     if write:
+        assert_bootstrap_write_allowed(repo_root, load_active_profile(repo_root))
         create_bundle_directory(repo_root)
         clear_core_reference_files(bundle_root)
         write_bundle(bundle_root, bundle)
@@ -5489,56 +5470,61 @@ def evaluate_bundle(bundle: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     return report
 
 
-def rebuild_index(repo_root: Path, write_back: bool = False) -> dict[str, Any]:
-    bundle_root = resolve_bundle_root(repo_root)
-    existing = load_bundle(bundle_root) if bundle_root.exists() else {}
-    rebuilt = build_router_bundle(repo_root)
-    rebuilt["root"] = bundle_root
-    existing_modules = {item["path"] for item in existing.get("module_map", {}).get("modules", [])}
-    new_modules = {item["path"] for item in rebuilt["module_map"]["modules"]}
-    stale_entries = [{"path": path, "kind": "module"} for path in sorted(existing_modules - new_modules)]
-    missing_paths = [
-        item["path"]
-        for item in rebuilt["module_map"]["modules"]
-        if item.get("status", "active") != "planned"
-        and not (repo_root / item["path"]).exists()
-        and item["path"] != "."
-    ]
-    if write_back:
-        evaluation_summary = evaluate_bundle(rebuilt, repo_root)
-        evaluation_config = rebuilt.get("config", {}).get("evaluation", {})
-        if evaluation_summary.get("status") == "pass":
-            evaluation_config["attestation"] = make_evaluation_attestation(rebuilt, evaluation_summary)
-        else:
-            evaluation_config.pop("attestation", None)
-        create_bundle_directory(repo_root)
-        write_bundle(bundle_root, rebuilt)
-        copy_skill_schemas_to_bundle(bundle_root)
-    snapshot = build_structure_snapshot(repo_root, default_ignore_patterns(rebuilt.get("config", {})))
-    mapped_path_patterns = sorted(
-        str(item.get("path_pattern"))
-        for item in rebuilt.get("path_to_capability_map", {}).get("path_index", [])
-        if item.get("path_pattern")
+def build_write_ready_router_bundle(
+    repo_root: Path,
+    *,
+    input_mode: str = "preserve_curated",
+) -> dict[str, Any]:
+    bundle = build_router_bundle(repo_root, input_mode=input_mode)
+    bundle["root"] = resolve_bundle_root(repo_root)
+    evaluation_summary = evaluate_bundle(bundle, repo_root)
+    evaluation_config = bundle.get("config", {}).get("evaluation", {})
+    if evaluation_summary.get("status") == "pass":
+        evaluation_config["attestation"] = make_evaluation_attestation(
+            bundle, evaluation_summary
+        )
+    else:
+        evaluation_config.pop("attestation", None)
+    return bundle
+
+
+def rebuild_index(
+    repo_root: Path,
+    write_back: bool = False,
+    *,
+    generated_output_initialization_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    operations = IndexRebuildOperations(
+        resolve_bundle_root=resolve_bundle_root,
+        load_bundle=load_bundle,
+        load_profile=load_active_profile,
+        build_bundle=lambda root, ready: (
+            build_write_ready_router_bundle(root)
+            if ready
+            else build_router_bundle(root)
+        ),
+        create_bundle_directory=create_bundle_directory,
+        write_bundle=write_bundle,
+        prepare_preserved_bundle=prepare_router_bundle_for_preserved_write,
+        copy_schemas=copy_skill_schemas_to_bundle,
+        build_snapshot=build_structure_snapshot,
+        ignore_patterns=default_ignore_patterns,
+        capability_conflicts=capability_conflicts,
+        write_report=write_report,
+        report_id=lambda: (
+            "rebuild-"
+            + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        ),
+        timestamp=iso_now,
     )
-    conflicts = capability_conflicts(rebuilt)
-    report = {
-        "report_id": f"rebuild-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-        "timestamp": iso_now(),
-        "source_commit": snapshot.source_commit,
-        "structure_digest": snapshot.digest,
-        "indexed_paths": list(snapshot.paths),
-        "mapped_path_patterns": mapped_path_patterns,
-        "diagnostics": list(snapshot.diagnostics),
-        "generated_modules_count": len(rebuilt["module_map"]["modules"]),
-        "curated_entries_count": len(rebuilt["capability_catalog"]["capabilities"]),
-        "conflicts": conflicts,
-        "stale_entries": stale_entries,
-        "missing_paths": missing_paths,
-        "status": "pass" if not missing_paths and not conflicts and not stale_entries and not snapshot.diagnostics else "fail",
-    }
-    if write_back:
-        write_report(bundle_root / "reports" / "index-rebuild" / "latest.json", report)
-    return report
+    return rebuild_router_index(
+        repo_root,
+        write_back=write_back,
+        operations=operations,
+        generated_output_initialization_fingerprint=(
+            generated_output_initialization_fingerprint
+        ),
+    )
 
 
 def freshness_report(
@@ -5547,20 +5533,12 @@ def freshness_report(
     changed_paths: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     bundle_root = bundle.get("root", resolve_bundle_root(repo_root))
-    latest_path = bundle_root / "reports" / "index-rebuild" / "latest.json"
-    try:
-        indexed = load_json_file(latest_path) if latest_path.exists() else {}
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        indexed = {"diagnostics": [f"latest-report-error:{exc}"]}
-    snapshot = build_structure_snapshot(repo_root, default_ignore_patterns(bundle.get("config", {})))
-    effective_changes = list(changed_paths) if changed_paths is not None else list(collect_git_changed_paths(repo_root))
-    assessment = assess_index_freshness(snapshot, indexed, effective_changes)
-    return {
-        "report_id": f"freshness-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-        "timestamp": iso_now(),
-        **assessment,
-        "missing_references": [] if latest_path.exists() else [str(latest_path.relative_to(repo_root))],
-    }
+    return repository_freshness_report(
+        repo_root,
+        Path(bundle_root),
+        default_ignore_patterns(bundle.get("config", {})),
+        changed_paths,
+    )
 
 
 def generate_feedback(bundle_root: Path) -> dict[str, Any]:

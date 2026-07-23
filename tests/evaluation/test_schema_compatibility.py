@@ -133,3 +133,53 @@ def test_evaluation_schemas_expose_optional_v030_policy_contract() -> None:
     assert "enforcement_mode" in summary["properties"]
     assert "secondary_contract_accuracy" in summary["required"]
     assert "strict_secondary_case_count" in summary["required"]
+
+
+def test_generated_output_baseline_schema_is_closed_and_requires_authorization() -> None:
+    artifact_keys = (
+        "capability_catalog",
+        "module_map",
+        "ownership",
+        "change_rules",
+        "path_to_capability_map",
+        "exception_registry",
+        "evaluation_set",
+    )
+    baseline = [{
+        "id": "PCR-GEN-001",
+        "mode": "pinned-idempotent-v1",
+        "generator_id": "pcr-router-bundle-v1",
+        "canonical_source": ".project-change-router.yaml",
+        "source_commit": "a" * 40,
+        "owner": "routing-governance",
+        "reason": "Pin reviewed generated outputs during profile migration.",
+        "exit_stage": "PCR-GEN-CANONICAL-INPUTS",
+        "exit_condition": "Remove after canonical-only rebuild converges.",
+        "initialization_authorization": "Explicit repository-owner review.",
+        "artifacts": [
+                {
+                    "bundle_key": key,
+                    "source_commit": "a" * 40,
+                    "semantic_digest": "b" * 64,
+                "canonical_text_digest": "c" * 64,
+                "line_count": 1,
+            }
+            for key in artifact_keys
+        ],
+        "fingerprint": "d" * 64,
+    }]
+    validator = Draft202012Validator(
+        _schema("generated-output-baseline.schema.json")
+    )
+
+    assert list(validator.iter_errors(baseline)) == []
+    yml_baseline = json.loads(json.dumps(baseline))
+    yml_baseline[0]["canonical_source"] = ".project-change-router.yml"
+    missing_authorization = json.loads(json.dumps(baseline))
+    del missing_authorization[0]["initialization_authorization"]
+    unknown_artifact = json.loads(json.dumps(baseline))
+    unknown_artifact[0]["artifacts"][0]["bundle_key"] = "arbitrary"
+
+    assert list(validator.iter_errors(missing_authorization))
+    assert list(validator.iter_errors(unknown_artifact))
+    assert list(validator.iter_errors(yml_baseline)) == []

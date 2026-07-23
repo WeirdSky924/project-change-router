@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "maxItems": 1,
+  "items": {
+    "type": "object",
+    "required": [
+      "id",
+      "mode",
+      "generator_id",
+      "canonical_source",
+      "source_commit",
+      "owner",
+      "reason",
+      "exit_stage",
+      "exit_condition",
+      "initialization_authorization",
+      "artifacts",
+      "fingerprint"
+    ],
+    "properties": {
+      "id": { "$ref": "#/$defs/nonEmptyString" },
+      "mode": { "const": "pinned-idempotent-v1" },
+      "generator_id": { "const": "pcr-router-bundle-v1" },
+      "canonical_source": {
+        "enum": [
+          ".project-change-router.yaml",
+          ".project-change-router.yml"
+        ]
+      },
+      "source_commit": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$",
+        "description": "Full immutable repository SHA that authorized initialization of the pin; symbolic names and object-id prefixes are invalid."
+      },
+      "owner": { "$ref": "#/$defs/nonEmptyString" },
+      "reason": { "$ref": "#/$defs/nonEmptyString" },
+      "exit_stage": { "$ref": "#/$defs/nonEmptyString" },
+      "exit_condition": { "$ref": "#/$defs/nonEmptyString" },
+      "initialization_authorization": {
+        "$ref": "#/$defs/nonEmptyString",
+        "description": "Audit note only; initial activation requires the exact external CLI fingerprint."
+      },
+      "artifacts": {
+        "type": "array",
+        "minItems": 7,
+        "maxItems": 7,
+        "items": { "$ref": "#/$defs/artifact" }
+      },
+      "fingerprint": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "additionalProperties": false
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "bundle_key",
+        "source_commit",
+        "semantic_digest",
+        "canonical_text_digest",
+        "line_count"
+      ],
+      "properties": {
+        "bundle_key": {
+          "enum": [
+            "capability_catalog",
+            "module_map",
+            "ownership",
+            "change_rules",
+            "path_to_capability_map",
+            "exception_registry",
+            "evaluation_set"
+          ]
+        },
+        "source_commit": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+            }
+          ],
+          "description": "Artifact-specific pinned provenance; a non-null full SHA must be an ancestor of both the rule source and each verified current rebuild source."
+        },
+        "semantic_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Digest of the closed semantic projection with only controlled generator clocks removed."
+        },
+        "canonical_text_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Digest of canonical UTF-8 YAML for the same closed projection; raw current bytes are verified separately."
+        },
+        "line_count": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

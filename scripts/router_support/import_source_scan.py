@@ -5,6 +5,15 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
+from router_support.typescript_scan import (
+    JsxContext,
+    closing_parenthesis_is_control_header,
+    closing_tag_name,
+    generic_arrow_prefix,
+    opening_tag_name,
+)
+
+JSX_SOURCE_SUFFIXES = frozenset({".js", ".jsx", ".tsx"})
 
 _TS_IMPORT_FROM = re.compile(
     r"""
@@ -254,7 +263,12 @@ class _LexicalView:
         position = match.start() + offset
         return offset >= 0 and bool(self.code_positions[position])
 
-def _typescript_lexical_view(source: str) -> _LexicalView:
+
+def _typescript_lexical_view(
+    source: str,
+    *,
+    allow_jsx: bool = False,
+) -> _LexicalView:
     """Blank comments/template text while retaining interpolation code."""
     scrubbed = list(source)
     code = bytearray(len(source))
@@ -336,6 +350,7 @@ def _typescript_lexical_view(source: str) -> _LexicalView:
         regex_allowed = True
         last_token = ""
         line_break_since_token = False
+        jsx_contexts: list[JsxContext] = []
         while index < len(source):
             current = source[index]
             following = source[index + 1] if index + 1 < len(source) else ""
@@ -344,6 +359,29 @@ def _typescript_lexical_view(source: str) -> _LexicalView:
                 line_break_since_token = line_break_since_token or current in {"\n", "\r"}
                 index += 1
                 continue
+            jsx_context = jsx_contexts[-1] if allow_jsx and jsx_contexts else None
+            if jsx_context is not None and jsx_context.kind == "children":
+                if current == "<":
+                    tag_name = closing_tag_name(source, index) if following == "/" else (
+                        opening_tag_name(source, index)
+                    )
+                    if following == "/" and tag_name != jsx_context.name:
+                        incomplete_regions += 1
+                    elif tag_name is not None:
+                        kind = "closing" if following == "/" else "opening"
+                        jsx_contexts.append(JsxContext(kind, tag_name))
+                        code[index] = 1
+                        index += 1
+                        regex_allowed = True
+                        last_token = "<"
+                        line_break_since_token = False
+                        continue
+                elif current == "{":
+                    jsx_contexts.append(JsxContext("expression"))
+                else:
+                    blank(index, index + 1)
+                    index += 1
+                    continue
             if current in {"'", '"'}:
                 index = scan_quoted(index)
                 regex_allowed = False
@@ -369,19 +407,62 @@ def _typescript_lexical_view(source: str) -> _LexicalView:
                 blank(index, end)
                 index = end
                 continue
+            jsx_context = jsx_contexts[-1] if allow_jsx and jsx_contexts else None
+            if jsx_context is not None and current == "{" and (
+                jsx_context.kind in {"opening", "closing"}
+            ):
+                jsx_contexts.append(JsxContext("expression"))
+                jsx_context = jsx_contexts[-1]
+            if allow_jsx and current == "<" and regex_allowed and (
+                jsx_context is None or jsx_context.kind == "expression"
+            ) and not generic_arrow_prefix(source, index):
+                opening_name = opening_tag_name(source, index)
+                if opening_name is not None:
+                    jsx_contexts.append(JsxContext("opening", opening_name))
+                    code[index] = 1
+                    index += 1
+                    regex_allowed = True
+                    last_token = "<"
+                    line_break_since_token = False
+                    continue
             if current == "/":
+                jsx_context = jsx_contexts[-1] if allow_jsx and jsx_contexts else None
+                jsx_closing_slash = (
+                    jsx_context is not None
+                    and jsx_context.kind == "closing"
+                    and index > 0
+                    and source[index - 1] == "<"
+                )
+                jsx_self_closing_slash = (
+                    jsx_context is not None
+                    and jsx_context.kind == "opening"
+                    and following == ">"
+                )
+                if jsx_closing_slash or jsx_self_closing_slash:
+                    code[index] = 1
+                    jsx_context.self_closing = jsx_self_closing_slash
+                    index += 1
+                    regex_allowed = True
+                    last_token = "/"
+                    line_break_since_token = False
+                    continue
                 regex_end = scan_regex(index)
-                ambiguous = line_break_since_token or last_token in {")", "]", "}"}
-                if regex_end is not None and (regex_allowed or ambiguous):
+                control_regex = (
+                    last_token == ")"
+                    and closing_parenthesis_is_control_header(source, code, index)
+                )
+                effective_regex_allowed = regex_allowed or control_regex
+                ambiguous = line_break_since_token or last_token == "}"
+                if regex_end is not None and (effective_regex_allowed or ambiguous):
                     blank(index, regex_end)
-                    if not regex_allowed:
+                    if not effective_regex_allowed:
                         incomplete_regions += 1
                     index = regex_end
                     regex_allowed = False
                     last_token = "value"
                     line_break_since_token = False
                     continue
-                if regex_allowed and regex_end is None:
+                if effective_regex_allowed and regex_end is None:
                     newline = source.find("\n", index + 1)
                     end = len(source) if newline < 0 else newline
                     blank(index, end)
@@ -407,8 +488,9 @@ def _typescript_lexical_view(source: str) -> _LexicalView:
                 for position in range(start, index):
                     code[position] = 1
                 word = source[start:index]
-                regex_allowed = word in {
-                    "await", "case", "delete", "in", "instanceof", "new",
+                regex_allowed = last_token != "." and word in {
+                    "await", "case", "delete", "do", "else", "in",
+                    "instanceof", "new",
                     "of", "return", "throw", "typeof", "void", "yield",
                 }
                 last_token = "identifier"
@@ -427,6 +509,51 @@ def _typescript_lexical_view(source: str) -> _LexicalView:
                 last_token = "value"
                 line_break_since_token = False
                 continue
+            jsx_context = jsx_contexts[-1] if allow_jsx and jsx_contexts else None
+            if jsx_context is not None and jsx_context.kind == "expression":
+                if current == "{":
+                    jsx_context.brace_depth += 1
+                elif current == "}":
+                    jsx_context.brace_depth -= 1
+                    if jsx_context.brace_depth == 0:
+                        jsx_contexts.pop()
+            elif jsx_context is not None and current == ">" and (
+                jsx_context.kind in {"opening", "closing"}
+            ):
+                if (
+                    jsx_context.kind == "opening"
+                    and jsx_context.type_argument_depth > 0
+                ):
+                    if index == 0 or source[index - 1] != "=":
+                        jsx_context.type_argument_depth -= 1
+                    code[index] = 1
+                    index += 1
+                    continue
+                completed_value = jsx_context.kind == "closing" or jsx_context.self_closing
+                jsx_contexts.pop()
+                if jsx_context.kind == "opening" and not jsx_context.self_closing:
+                    jsx_contexts.append(JsxContext("children", jsx_context.name))
+                elif jsx_context.kind == "closing":
+                    if (
+                        not jsx_contexts
+                        or jsx_contexts[-1].kind != "children"
+                        or jsx_contexts[-1].name != jsx_context.name
+                    ):
+                        incomplete_regions += 1
+                    else:
+                        jsx_contexts.pop()
+                code[index] = 1
+                index += 1
+                regex_allowed = not completed_value
+                last_token = "value" if completed_value else ">"
+                line_break_since_token = False
+                continue
+            elif (
+                jsx_context is not None
+                and jsx_context.kind == "opening"
+                and current == "<"
+            ):
+                jsx_context.type_argument_depth += 1
             if stop_at_template_brace and current == "{":
                 brace_depth += 1
             elif stop_at_template_brace and current == "}":
@@ -444,6 +571,8 @@ def _typescript_lexical_view(source: str) -> _LexicalView:
             last_token = current
             line_break_since_token = False
             index += 1
+        if allow_jsx and jsx_contexts:
+            incomplete_regions += 1
         return index
 
     scan_code(0)
@@ -542,8 +671,12 @@ def _commonjs_object_members(source: str) -> tuple[set[str], bool]:
     return members, incomplete
 
 
-def scan_typescript_source(source: str) -> TypeScriptSourceScan:
-    view = _typescript_lexical_view(source)
+def scan_typescript_source(
+    source: str,
+    *,
+    allow_jsx: bool = False,
+) -> TypeScriptSourceScan:
+    view = _typescript_lexical_view(source, allow_jsx=allow_jsx)
     imports: list[TypeScriptImport] = []
     for match in _TS_IMPORT_FROM.finditer(view.source):
         if not view.keyword_is_code(match, "import"):
