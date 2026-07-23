@@ -99,6 +99,7 @@ jobs:
                   "20",
                   "--hard-timeout-seconds",
                   "30",
+                  "--strict-completeness",
                   "--format",
                   "json",
               ],
@@ -110,11 +111,8 @@ jobs:
           assert result.returncode == 0, result.stderr
           report = json.loads(result.stdout)
           assert report["blocking"] is False
-          assert report["completion_status"] in {"complete", "bounded"}
-          if report["completion_status"] == "bounded":
-              assert report["evidence_complete"] is False
-          else:
-              assert report["evidence_complete"] is True
+          assert report["completion_status"] == "complete"
+          assert report["evidence_complete"] is True
           PY
 
       - name: Verify Atomic Install

@@ -444,3 +444,6 @@ def test_ci_smoke_runs_all_architecture_guardrail_clis() -> None:
     assert "python scripts/check_deps.py --repo . --format json" in workflow
     assert "python scripts/check_public_api.py --repo . --format json" in workflow
     assert "python scripts/check_structure.py --repo . --format json" in workflow
+    assert '"--strict-completeness",' in workflow
+    assert 'assert report["completion_status"] == "complete"' in workflow
+    assert 'assert report["evidence_complete"] is True' in workflow
