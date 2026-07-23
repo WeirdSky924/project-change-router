@@ -475,3 +475,27 @@ def test_ci_smoke_runs_all_architecture_guardrail_clis() -> None:
     assert 'assert report["completion_status"] == "complete"' in workflow
     assert 'assert report["evidence_complete"] is True' in workflow
     assert '"scripts/router_support/owner_identity.py",' in workflow
+
+
+@pytest.mark.parametrize("readme_name", ("README.md", "README.en.md"))
+def test_upgrade_docs_use_trusted_comparison_boundary(
+    readme_name: str,
+) -> None:
+    readme = (SKILL_ROOT / readme_name).read_text(encoding="utf-8")
+
+    for script in (
+        "check_index_freshness.py",
+        "check_deps.py",
+        "check_public_api.py",
+        "check_structure.py",
+    ):
+        command = next(
+            line
+            for line in readme.splitlines()
+            if "<new-skill-root>" in line and script in line
+        )
+        assert "--comparison-commit <trusted-base-commit>" in command
+    assert (
+        "--changed-path scripts/router_support/owner_identity.py "
+        "--strict-completeness"
+    ) in readme

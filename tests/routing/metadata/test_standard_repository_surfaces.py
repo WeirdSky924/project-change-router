@@ -101,6 +101,101 @@ def test_standard_ci_surface_discovery_respects_explicit_ignore(
     assert ".circleci" in paths
 
 
+def test_root_readmes_use_project_documentation_capability(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "README.md", "# Project\n")
+    _write(tmp_path / "README.en.md", "# Project\n")
+
+    modules = router_core.discover_modules(tmp_path)
+    capabilities = router_core.infer_capabilities_from_modules(
+        tmp_path,
+        modules,
+        {},
+        "structured",
+    )
+    path_map = router_core.build_path_to_capability_map(
+        tmp_path,
+        capabilities,
+        modules,
+    )
+
+    readmes = [module for module in modules if module.path.startswith("README")]
+    assert {module.path for module in readmes} == {"README.md", "README.en.md"}
+    assert all(module.domain == "project-documentation" for module in readmes)
+    assert all(module.layer == "infra" for module in readmes)
+    assert all(
+        module.owner == "provisional:project-documentation"
+        for module in readmes
+    )
+    assert path_map["lookup"]["README.md"] == ["project-documentation"]
+    assert path_map["lookup"]["README.en.md"] == ["project-documentation"]
+
+
+def test_profile_capability_id_collision_keeps_readme_provisional(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "README.md", "# Project\n")
+    _write(tmp_path / "docs/guide.md", "# Guide\n")
+    _write(tmp_path / "tools/unmapped/__init__.py", "VALUE = 1\n")
+    profile = {
+        "profile_id": "documentation-profile",
+        "module_overrides": [
+            {
+                "path": "tools/unmapped",
+                "domain": "project-documentation-unmapped",
+            }
+        ],
+        "capabilities": [
+            {
+                "id": "project-documentation",
+                "name": "Project Documentation",
+                "status": "stable",
+                "stage": "stable",
+                "path_patterns": ["docs/**"],
+                "allow_non_code_paths": True,
+                "public_entries": ["docs/guide.md"],
+            },
+        ],
+    }
+
+    modules = router_core.discover_modules(tmp_path, profile=profile)
+    capabilities = router_core.infer_capabilities_from_modules(
+        tmp_path,
+        modules,
+        profile,
+        "governed",
+    )
+    path_map = router_core.build_path_to_capability_map(
+        tmp_path,
+        capabilities,
+        modules,
+        profile,
+    )
+
+    capability_ids = [capability.id for capability in capabilities]
+    assert len(capability_ids) == len(set(capability_ids))
+    assert "project-documentation" in capability_ids
+    assert "project-documentation-unmapped" in capability_ids
+    assert "project-documentation-unmapped-unmapped" in capability_ids
+    generated = next(
+        capability
+        for capability in capabilities
+        if capability.id == "project-documentation-unmapped"
+    )
+    assert generated.stage == "provisional"
+    assert generated.route_defaults == {"preferred_action": "review"}
+    assert generated.lifecycle["profile_capability_collision"] == (
+        "project-documentation"
+    )
+    assert path_map["lookup"]["README.md"] == [
+        "project-documentation-unmapped"
+    ]
+    assert path_map["lookup"]["tools/unmapped/**"] == [
+        "project-documentation-unmapped-unmapped"
+    ]
+
+
 @pytest.mark.parametrize(
     "pattern",
     (".github/workflows/**", "/.github/workflows/*"),

@@ -17,12 +17,17 @@ STANDARD_REPOSITORY_SURFACE_FILES = (
     "bitbucket-pipelines.yml",
     "Jenkinsfile",
 )
+STANDARD_REPOSITORY_DOCUMENTATION_FILES = (
+    "README.md",
+    "README.en.md",
+)
 
 
 @dataclass(frozen=True)
 class RepositorySurface:
     path: str
     kind: str
+    domain: str
     purpose: str
     key_files: tuple[str, ...]
 
@@ -35,7 +40,10 @@ def standard_repository_surface_kind(path: str) -> str | None:
     normalized = _normalized(path)
     if normalized in STANDARD_REPOSITORY_SURFACE_DIRECTORIES:
         return "directory"
-    if normalized in STANDARD_REPOSITORY_SURFACE_FILES:
+    if normalized in {
+        *STANDARD_REPOSITORY_SURFACE_FILES,
+        *STANDARD_REPOSITORY_DOCUMENTATION_FILES,
+    }:
         return "file"
     return None
 
@@ -46,7 +54,10 @@ def is_standard_repository_surface_file(path: str) -> bool:
 
 def is_within_standard_repository_surface(path: str) -> bool:
     normalized = _normalized(path)
-    if normalized in STANDARD_REPOSITORY_SURFACE_FILES:
+    if normalized in {
+        *STANDARD_REPOSITORY_SURFACE_FILES,
+        *STANDARD_REPOSITORY_DOCUMENTATION_FILES,
+    }:
         return True
     return any(
         normalized == root or normalized.startswith(root + "/")
@@ -89,6 +100,7 @@ def discover_standard_repository_surfaces(
             RepositorySurface(
                 path=relative,
                 kind="directory",
+                domain="development-infrastructure",
                 purpose=f"Standard CI repository surface at {relative}",
                 key_files=tuple(
                     path.relative_to(root).as_posix()
@@ -108,7 +120,21 @@ def discover_standard_repository_surfaces(
             RepositorySurface(
                 path=relative,
                 kind="file",
+                domain="development-infrastructure",
                 purpose=f"Standard CI repository surface at {relative}",
+                key_files=(root.name,),
+            )
+        )
+    for relative in STANDARD_REPOSITORY_DOCUMENTATION_FILES:
+        root = repo_root / relative
+        if not root.is_file() or ignored(root):
+            continue
+        surfaces.append(
+            RepositorySurface(
+                path=relative,
+                kind="file",
+                domain="project-documentation",
+                purpose=f"Standard repository documentation at {relative}",
                 key_files=(root.name,),
             )
         )
@@ -139,7 +165,7 @@ def overlay_standard_repository_surface_records(
             "id": "module-" + _slug(surface.path),
             "path": surface.path,
             "layer": "infra",
-            "domain": "development-infrastructure",
+            "domain": surface.domain,
             "purpose": surface.purpose,
             "public_api": existing.get("public_api"),
             "source_of_truth": "generated",
@@ -186,16 +212,28 @@ def _slug(value: str) -> str:
     ).strip("-") or "item"
 
 
+def has_standard_ci_surface(repo_root: Path) -> bool:
+    return any(
+        (repo_root / relative).exists()
+        for relative in (
+            *STANDARD_REPOSITORY_SURFACE_DIRECTORIES,
+            *STANDARD_REPOSITORY_SURFACE_FILES,
+        )
+    )
+
+
 def has_standard_repository_surface(repo_root: Path) -> bool:
     return bool(discover_standard_repository_surfaces(repo_root))
 
 
 __all__ = [
     "RepositorySurface",
+    "STANDARD_REPOSITORY_DOCUMENTATION_FILES",
     "STANDARD_REPOSITORY_SURFACE_DIRECTORIES",
     "STANDARD_REPOSITORY_SURFACE_FILES",
     "discover_standard_repository_surfaces",
     "files_for_standard_repository_surface",
+    "has_standard_ci_surface",
     "has_standard_repository_surface",
     "is_standard_repository_surface_file",
     "is_within_standard_repository_surface",

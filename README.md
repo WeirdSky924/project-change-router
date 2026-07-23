@@ -220,10 +220,10 @@ python scripts/install_skill.py --target both --verify-only
 ```powershell
 python <new-skill-root>\scripts\validate_router_bundle.py --repo <existing-repo> --format json
 python <new-skill-root>\scripts\check_bundle_governance.py --repo <existing-repo> --format json
-python <new-skill-root>\scripts\check_index_freshness.py --repo <existing-repo> --changed-path <known-path> --format json
-python <new-skill-root>\scripts\check_deps.py --repo <existing-repo> --format json
-python <new-skill-root>\scripts\check_public_api.py --repo <existing-repo> --format json
-python <new-skill-root>\scripts\check_structure.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\check_index_freshness.py --repo <existing-repo> --changed-path <known-path> --comparison-commit <trusted-base-commit> --format json
+python <new-skill-root>\scripts\check_deps.py --repo <existing-repo> --comparison-commit <trusted-base-commit> --format json
+python <new-skill-root>\scripts\check_public_api.py --repo <existing-repo> --comparison-commit <trusted-base-commit> --format json
+python <new-skill-root>\scripts\check_structure.py --repo <existing-repo> --comparison-commit <trusted-base-commit> --format json
 python <new-skill-root>\scripts\run_evaluation.py --repo <existing-repo> --format json
 python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-path <known-path> --strict-completeness --format json
 ```
@@ -279,7 +279,7 @@ python scripts/check_deps.py --repo . --format json
 python scripts/check_public_api.py --repo . --format json
 python scripts/check_structure.py --repo . --format json
 python scripts/run_evaluation.py --repo . --format json
-python scripts/check_reuse.py --repo . --changed-path scripts/check_reuse.py --strict-completeness --format json
+python scripts/check_reuse.py --repo . --changed-path scripts/router_support/owner_identity.py --strict-completeness --format json
 python scripts/install_skill.py --target codex --codex-home <temporary-codex-home>
 python scripts/install_skill.py --target codex --codex-home <temporary-codex-home> --verify-only
 ```

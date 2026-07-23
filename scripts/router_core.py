@@ -36,17 +36,12 @@ from router_support.governance_coverage import (
     matching_capability_contract_boundaries,
 )
 from router_support.profile_loader import (
-    deep_merge,
-    load_active_profile,
-    profile_candidates,
-    profile_source_lifecycle_findings,
-    retired_profile_path_routes,
+    deep_merge, disambiguate_generated_capability_id, load_active_profile,
+    profile_candidates, profile_source_lifecycle_findings, retired_profile_path_routes,
 )
 from router_support.repository_surfaces import (
-    discover_standard_repository_surfaces,
-    has_standard_repository_surface,
-    overlay_standard_repository_surface_records,
-    standard_repository_surface_kind,
+    discover_standard_repository_surfaces, has_standard_ci_surface,
+    overlay_standard_repository_surface_records, standard_repository_surface_kind,
 )
 from router_support.ownership_governance import (
     build_ownership, capability_conflicts, codeowner_for_module, load_codeowners,
@@ -1170,7 +1165,7 @@ def classify_repo_stage(modules: list[ModuleEntry], capabilities: list[Capabilit
     has_profile = bool(profile)
     explicit_profile_stage = profile_stage(profile)
     has_codeowners = bool(load_codeowners(repo_root))
-    has_ci = has_standard_repository_surface(repo_root)
+    has_ci = has_standard_ci_surface(repo_root)
     boundary_evidence = detect_boundary_evidence(repo_root)
     module_count = len(modules)
     meaningful_count = meaningful_module_count(modules)
@@ -1993,6 +1988,7 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
     feedback_meta = feedback_summary(feedback_items)
     confirmation_counts = feedback_meta["capability_confirmation_counts"]
     profile_caps, consumed = apply_profile_capabilities(repo_root, modules, profile)
+    used_capability_ids = {str(item.get("id")) for item in profile.get("capabilities", []) if item.get("id")}
     grouped: dict[str, list[ModuleEntry]] = defaultdict(list)
     for module in modules:
         if module.path in consumed:
@@ -2007,6 +2003,9 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
     for cap_id, grouped_modules in sorted(grouped.items()):
         if not grouped_modules:
             continue
+        generated_cap_id = disambiguate_generated_capability_id(cap_id, used_capability_ids)
+        used_capability_ids.add(generated_cap_id)
+        profile_collision = generated_cap_id != cap_id
         domain = grouped_modules[0].domain
         public_entries = infer_public_entries_from_modules(grouped_modules)
         extension_points = infer_extension_points(repo_root, grouped_modules, ignore_patterns)
@@ -2020,8 +2019,8 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
             flat_keywords.append(module.domain)
             flat_keywords.extend(public_import_names(module))
         keywords = sorted({keyword for keyword in flat_keywords if keyword})
-        stage, maturity = capability_stage_for_generated(grouped_modules, public_entries, repo_stage)
-        confirmation_count = int(confirmation_counts.get(cap_id, 0))
+        stage, maturity = ("provisional", "provisional") if profile_collision else capability_stage_for_generated(grouped_modules, public_entries, repo_stage)
+        confirmation_count = int(confirmation_counts.get(generated_cap_id, 0))
         if stage == "provisional" and confirmation_count >= 1 and repo_stage in {"emerging", "structured", "governed"}:
             stage, maturity = "candidate", "candidate"
         if stage == "candidate" and confirmation_count >= 2 and repo_stage in {"structured", "governed"}:
@@ -2029,7 +2028,7 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
         status = "stable" if stage in {"stable", "governed-capability"} else "candidate"
         capabilities.append(
             CapabilityEntry(
-                id=cap_id,
+                id=generated_cap_id,
                 name=f"{title_from_slug(domain)} Capability",
                 status=status,
                 maturity=maturity,
@@ -2051,8 +2050,8 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
                 related_tests=related_tests,
                 test_bindings=[
                     {
-                        "id": f"tests-{cap_id}",
-                        "label": f"Run tests related to {cap_id}",
+                        "id": f"tests-{generated_cap_id}",
+                        "label": f"Run tests related to {generated_cap_id}",
                         "when_actions": ["extend", "extract", "review"],
                         "when_changed_paths": [f"{module.path}/**" for module in grouped_modules if module.path != "."],
                         "related_tests": related_tests,
@@ -2074,6 +2073,7 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
                     ],
                     "public_entry_semantics": public_entry_semantics(public_entries, repo_stage, False),
                     "confirmation_count": confirmation_count,
+                    "profile_capability_collision": cap_id if profile_collision else None,
                     "promotion_criteria": [
                         "profile-backed ownership rule",
                         "confirmed public entry",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
@@ -30,6 +30,22 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
         else:
             result[key] = value
     return result
+
+
+def disambiguate_generated_capability_id(
+    capability_id: str,
+    reserved_ids: Iterable[str],
+) -> str:
+    reserved = set(reserved_ids)
+    if capability_id not in reserved:
+        return capability_id
+    base = f"{capability_id}-unmapped"
+    candidate = base
+    ordinal = 2
+    while candidate in reserved:
+        candidate = f"{base}-{ordinal}"
+        ordinal += 1
+    return candidate
 
 
 def _existing(repo_root: Path, names: tuple[str, ...]) -> list[Path]:

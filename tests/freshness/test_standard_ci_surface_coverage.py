@@ -84,6 +84,44 @@ def test_fresh_rebuild_maps_committed_github_workflow_change(
     assert report["unmapped_changed_paths"] == []
 
 
+def test_fresh_rebuild_maps_committed_root_readme_change(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write(repo / ".gitignore", "project-change-router/\n")
+    readme = _write(repo / "README.md", "# First\n")
+    base_commit = _commit(repo, "base")
+    readme.write_text("# Second\n", encoding="utf-8")
+    _commit(repo, "change readme")
+
+    router_core.bootstrap_bundle(repo, write=True)
+    rebuild = router_core.rebuild_index(repo, write_back=True)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "check_index_freshness.py"),
+            "--repo",
+            str(repo),
+            "--comparison-commit",
+            base_commit,
+            "--format",
+            "json",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    report = json.loads(result.stdout)
+
+    assert rebuild["status"] == "pass"
+    assert "README.md" in rebuild["mapped_path_patterns"]
+    assert result.returncode == 0, result.stderr
+    assert report["changed_paths"] == ["README.md"]
+    assert report["failure_reasons"] == []
+    assert report["unmapped_changed_paths"] == []
+
+
 def test_extensionless_jenkinsfile_changes_structure_digest(
     tmp_path: Path,
 ) -> None:
