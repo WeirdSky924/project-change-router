@@ -19,7 +19,30 @@
     "repo_stage_reasons": { "type": "array", "items": { "type": "string" } },
     "repo_stage_signals": { "type": "object" },
     "freshness_windows": { "type": "object" },
-    "evaluation": { "type": "object" },
+    "evaluation": {
+      "type": "object",
+      "properties": {
+        "enforcement_enabled": { "type": "boolean" },
+        "top1_accuracy_threshold": { "type": "number", "minimum": 0.85, "maximum": 1 },
+        "top1_capability_accuracy_threshold": { "type": "number", "minimum": 0.85, "maximum": 1 },
+        "review_precision_threshold": { "type": "number", "minimum": 0.90, "maximum": 1 },
+        "review_recall_threshold": { "type": "number", "minimum": 1, "maximum": 1 },
+        "secondary_contract_accuracy_threshold": { "type": "number", "minimum": 1, "maximum": 1 },
+        "minimum_capability_coverage_ratio": { "type": "number", "minimum": 0.80, "maximum": 1 },
+        "minimum_case_count": { "type": "integer", "minimum": 30 },
+        "mode": { "type": "string" },
+        "attestation": {
+          "type": "object",
+          "properties": {
+            "evaluation_engine_version": { "type": "integer", "minimum": 1 },
+            "input_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "metrics": { "type": "object" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
     "route_reports_dir": { "type": "string" },
     "rebuild_reports_dir": { "type": "string" },
     "guardrail_reports_dir": { "type": "string" },

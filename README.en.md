@@ -53,7 +53,9 @@ This skill can:
 - Bootstrap a repository-local `project-change-router/` bundle.
 - Discover modules, capabilities, owners, public entries, path ownership, and dependency direction.
 - Produce a route report from a request and changed path hints, including mandatory guardrails and advisory actions.
-- Run guardrails for duplicate implementation, wrong boundaries, public API bypasses, and dependency direction.
+- Run guardrails for duplicate implementation, wrong boundaries, public API bypasses, reversed dependencies, and runtime cycles; TypeScript type-only edges are not misclassified as runtime edges.
+- Check freshness from the current commit, a content-derived structure digest, indexed paths, stale entries, and actual changed-path coverage.
+- Use exact baselines to stop net-new central-file growth, 800/1200-line threshold crossings, forbidden implementation roots, and second canonical owners.
 - Generate `path-to-capability-map.yaml` to expose direct path ownership, shared ownership, and uncovered modules.
 - Validate bundles and reports with schemas.
 - Run evaluation cases to detect route quality regressions.
@@ -187,7 +189,9 @@ Install paths:
 
 This is soft enforcement that reminds the agent to invoke the skill before feature-level create / modify / delete work. It is not a background daemon and it does not bypass the conversation trigger model.
 
-The installer uses staging, file-hash/API verification, and atomic replacement. It replaces the old skill only after the new copy passes all checks, and restores the old copy on failure. This prevents mixed installations such as a new `check_reuse.py` with an old `router_core.py`.
+The installer uses staging, a recursive payload hash, recursive Python compilation, governance API probes, and atomic replacement. It replaces the old skill only after the new copy passes all checks, and restores the old copy on failure. This prevents top-level scripts, `router_support`, schemas, or documentation from being installed as a mixed version.
+
+The source checkout and destination must be different paths. If this Git checkout already lives at `~/.codex/skills/project-change-router`, do not install Codex over itself; use a separate checkout to install both targets, or install only the other target. `--verify-only` requires the trusted manifest created by an atomic 0.3 installation. A legacy copy without that manifest must be reinstalled once before hash verification is meaningful.
 
 ## Safely Upgrade an Existing PCR Installation
 
@@ -216,7 +220,12 @@ python scripts/install_skill.py --target both --verify-only
 ```powershell
 python <new-skill-root>\scripts\validate_router_bundle.py --repo <existing-repo> --format json
 python <new-skill-root>\scripts\check_bundle_governance.py --repo <existing-repo> --format json
-python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-path <known-path> --format json
+python <new-skill-root>\scripts\check_index_freshness.py --repo <existing-repo> --changed-path <known-path> --format json
+python <new-skill-root>\scripts\check_deps.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\check_public_api.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\check_structure.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\run_evaluation.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-path <known-path> --strict-completeness --format json
 ```
 
 5. Continue using the existing bundle after those checks. Do not run `bootstrap_router.py` or `rebuild_index.py` merely because the installed skill changed.
@@ -224,10 +233,14 @@ python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-
 Compatibility guarantees:
 
 - The new skill continues to read bundle schema v1.
+- Version 0.3 adds architecture governance API v1 while preserving reuse engine API v2.
+- New evaluation fields in schema v1 remain optional. Safe runtime defaults are read in memory and are not written back to old YAML during compatibility checks; missing or disabled evaluation enforcement remains `review_only` rather than granting write authority.
+- `normal` requires at least 30 real cases named by `curated_case_ids`, the complete six-category calibration matrix, explicit capability expectations, and a valid attestation. Thresholds may only be tightened; generated or legacy cases without provenance remain `review_only`.
 - If an old bundle lacks `reuse_scan_scope`, `reuse_scan_runtime`, or `reuse_scan_retention`, code defaults apply without writing those defaults back to YAML.
 - New fingerprints, checkpoints, canonical reports, and diagnostics live in the user cache by default. They do not modify the target repository or require a new `.gitignore` entry.
 - The installer does not search project directories and does not modify profiles, manual feedback, evaluation cases, owners, or lifecycle metadata.
 - An incorrect repository-wide `** -> concrete capability` entry in an old bundle cannot expand a reuse scan when a more specific mapping exists. Governance audit still reports that metadata debt.
+- Read compatibility does not mean every historical report satisfies the current output schema. Regenerate reports that are kept as current examples or CI fixtures.
 
 Run rebuild only when repository structure, ownership, public entries, or capability boundaries actually changed. Before rebuilding, migrate human truth written directly into generated YAML into `.project-change-router.yaml`, and preserve manual feedback, curated evaluation cases, and lifecycle data. Use the [existing-bundle update prompt](./examples/agent-workflows/update-existing-router-bundle-prompt.md) for that controlled refresh.
 
@@ -256,11 +269,20 @@ Full smoke test in this repository:
 ```powershell
 python -m pytest tests/test_router_core.py -q
 python scripts/bootstrap_router.py --repo . --format json
+python scripts/rebuild_index.py --repo . --format json
 python scripts/validate_router_bundle.py --repo . --format json
 python scripts/check_bundle_governance.py --repo . --format json
 python scripts/check_index_freshness.py --repo . --format json
+python scripts/check_deps.py --repo . --format json
+python scripts/check_public_api.py --repo . --format json
+python scripts/check_structure.py --repo . --format json
 python scripts/run_evaluation.py --repo . --format json
+python scripts/check_reuse.py --repo . --changed-path scripts/check_reuse.py --strict-completeness --format json
+python scripts/install_skill.py --target codex --codex-home <temporary-codex-home>
+python scripts/install_skill.py --target codex --codex-home <temporary-codex-home> --verify-only
 ```
+
+A fresh bootstrap deliberately keeps PCR in `review_only` until the evaluation set has enough real cases, the complete calibration matrix, and a current attestation. Therefore `run_evaluation.py` returns exit code `1` with `status=fail`, `enforcement_mode=review_only`, and an `evaluation_cases_not_curated` reason in this smoke flow. CI asserts that exact safety result instead of weakening the threshold or treating generated seed cases as production calibration evidence.
 
 ## Onboard a Target Repository
 
@@ -304,10 +326,13 @@ project-change-router.profile.yaml
 project-change-router.profile.yml
 ```
 
+These names are selected by canonical, legacy, and skill-fallback priority; they are not merged. Exactly one file may exist at the selected level. A `.yaml`/`.yml` sibling conflict fails closed until one source of truth remains.
+
 Profiles can declare:
 
 - capability-to-path mappings
 - ownership rules
+- explicit capability ownership with one real primary owner and distinct reviewers
 - module overrides
 - public entries
 - contracts
@@ -315,6 +340,8 @@ Profiles can declare:
 - lifecycle metadata
 - evaluation cases
 - risk rules
+- exact dependency/cycle debt baselines
+- central-growth, forbidden-root, and exclusive-owner structure rules
 
 Minimal profile templates are in [examples/profiles/README.md](./examples/profiles/README.md).
 
@@ -369,6 +396,10 @@ Do not create a second implementation center when an existing capability or cano
 
 After routed changes, run the required closeout checks and record feedback/evaluation cases when a review, override, lifecycle change, or routing correction occurred.
 
+Run dependency, public API, structure, freshness, evaluation, and strict-completeness reuse checks when their routed boundary is affected. Static checks supplement rather than replace logic, data, integration, and customer-flow verification.
+
+If evaluation is below threshold or its attestation is missing or stale, keep PCR in review-only mode even when the capability match itself looks correct.
+
 When running check_reuse, inspect result_status, completion_status, evidence_complete, and summary.scan.scope together. Only completion_status=complete with evidence_complete=true closes the duplicate check for that capability scope. A bounded, incomplete, timeout, cancelled, or error result requires targeted source analysis and must not be reported as proof that no duplicate implementation exists.
 ```
 
@@ -387,10 +418,26 @@ Upgrading the skill does not require an automatic bundle refresh. Use [examples/
 | Check duplicate implementation | `python scripts/check_reuse.py --repo <repo-root> --changed-path <path> --format json` |
 | Check dependency direction | `python scripts/check_deps.py --repo <repo-root> --format json` |
 | Check public API boundaries | `python scripts/check_public_api.py --repo <repo-root> --format json` |
+| Check central growth, file size, and exclusive owners | `python scripts/check_structure.py --repo <repo-root> --format json` |
 | Check index freshness | `python scripts/check_index_freshness.py --repo <repo-root> --format json` |
 | Routing governance health check | `python scripts/check_bundle_governance.py --repo <repo-root> --format json` |
 | Route quality regression evaluation | `python scripts/run_evaluation.py --repo <repo-root> --format json` |
 | Manual feedback write-back | `python scripts/sync_feedback.py --repo <repo-root> --feedback-file feedback.json --format json` |
+
+## Architecture Governance
+
+PCR 0.3 turns structure constraints that previously depended on manual review into repository-neutral regression guardrails:
+
+- The Python and TypeScript/JavaScript import graph separates runtime from type-only edges and reports runtime cycles, resolver diagnostics, and dependency direction.
+- `architecture_baseline` records exact existing debt. Registered debt can remain visible without blocking, while new findings or net growth fail. It is never a wildcard exemption.
+- `central_growth_baseline` prevents composition roots, global gateways, top-level controllers, and other central owners from absorbing more domain implementation.
+- `forbidden_implementation_roots` prevents new production implementations under legacy, compatibility, generated, or otherwise non-canonical roots.
+- `exclusive_source_owners` prevents profile-declared protected implementation tokens outside their canonical owner. Raw transports, caches/stores, or DTO duplicates that use unrelated identifiers still require repository-specific import, identifier, or AST gates.
+- Every stable capability needs one explicit `capability_ownership` record with a real primary owner and distinct reviewer, lifecycle metadata, contracts/test bindings, and positive plus boundary evaluation coverage. Generated owner labels, `UNKNOWN`, unassigned, missing, duplicate, and provisional owners cannot authorize unattended writes.
+- Freshness checks the current commit, content-derived structure digest, stale entries, indexed paths, and changed-path coverage. File timestamps or omitted changed paths are not valid freshness evidence.
+- Missing, stale, or below-threshold evaluation attestation keeps PCR in `review_only`; a correct capability match alone does not prove that the action or write authority is reliable.
+
+Baseline existing debt exactly, stop new growth first, and reduce the baseline in later governance work. Do not gain a pass by enlarging ignore patterns, weakening rules, or fabricating evaluation cases. See [references/architecture-governance.md](./references/architecture-governance.md) for field contracts, exit metadata, and the recommended CI sequence.
 
 ## Reuse Scan Runtime
 
@@ -411,6 +458,9 @@ Key behavior:
 - A changed path outside `modules[].path` is still included when it is a key file, index source, related test, test binding, or exact path-map entry.
 - An unresolved capability returns `completion_status=incomplete`; the scanner never silently falls back to the full repository.
 - When a specific mapping exists, a repository-wide `** -> concrete capability` entry from an old bundle cannot expand the scope.
+- Exact path-map ownership takes precedence over broad module ownership. A second owner is retained only when the same exact path explicitly declares shared ownership.
+- Dependency scope expands one hop only across observed runtime import edges. TypeScript type-only edges and transitive dependencies do not expand the scan.
+- Import parser or resolver diagnostics make evidence incomplete; they are never treated as a clean dependency graph.
 - Test paths prefer same-capability related tests, test bindings, and owner surfaces instead of every product module.
 - A file pair is computed once. If multiple capabilities reference it, one finding merges all capability IDs and retains the strongest severity.
 - Large pairs that cannot use exact comparison but have strong fingerprints produce a P2 `duplicate-fingerprint-candidate`. It requires targeted source analysis and is not exact duplicate proof.
@@ -502,6 +552,7 @@ It checks:
 - dependency priority covers all capabilities.
 - the evaluation set covers profile-backed capabilities.
 - deprecated capabilities include `superseded_by`, `deprecation_date`, and `migration_note`.
+- stable capabilities have a non-provisional owner, a distinct reviewer, lifecycle metadata, and positive plus boundary evaluation coverage.
 
 Default exit behavior:
 
@@ -594,6 +645,7 @@ Output samples:
 - [examples/outputs/resolve-entry.seed-new-capability.json](./examples/outputs/resolve-entry.seed-new-capability.json)
 - [examples/outputs/check-deps.pass.json](./examples/outputs/check-deps.pass.json)
 - [examples/outputs/check-public-api.pass.json](./examples/outputs/check-public-api.pass.json)
+- [examples/outputs/check-structure.pass.json](./examples/outputs/check-structure.pass.json)
 - [examples/outputs/check-reuse.pass.json](./examples/outputs/check-reuse.pass.json)
 - [examples/outputs/check-reuse.warn.json](./examples/outputs/check-reuse.warn.json)
 - [examples/outputs/check-reuse.timeout.json](./examples/outputs/check-reuse.timeout.json)
@@ -608,6 +660,7 @@ Reference documents:
 - [references/repo-discovery.md](./references/repo-discovery.md)
 - [references/evaluation.md](./references/evaluation.md)
 - [references/schema-overview.md](./references/schema-overview.md)
+- [references/architecture-governance.md](./references/architecture-governance.md)
 - [references/reuse-scan-runtime.md](./references/reuse-scan-runtime.md)
 
 ## Scripts
@@ -620,6 +673,7 @@ Reference documents:
 - `scripts/reuse_runtime.py`
 - `scripts/check_deps.py`
 - `scripts/check_public_api.py`
+- `scripts/check_structure.py`
 - `scripts/check_index_freshness.py`
 - `scripts/check_bundle_governance.py`
 - `scripts/run_evaluation.py`
@@ -637,8 +691,11 @@ The GitHub Actions workflow is in [.github/workflows/ci.yml](./.github/workflows
 - bundle validation.
 - governance audit.
 - freshness check.
+- dependency direction, runtime-cycle, and public API checks.
+- central-growth, 800/1200-line file-size, forbidden-root, and exclusive-owner structure checks.
 - route evaluation.
 - capability-scoped reuse scan, isolated worker, and strict completeness check.
+- atomic installation and `--verify-only` validation from a temporary installation root.
 
 ## Boundaries and Risks
 
@@ -647,6 +704,7 @@ Be explicit about these limits:
 - First bootstrap is only a first pass.
 - Without a profile, results intentionally skew conservative.
 - Generated-only evaluation only proves system self-consistency, not architecture maturity.
+- A correct capability match does not prove that action, secondary-contract, or write-authority prediction is reliable; below-threshold evaluation remains `review_only`.
 - When `review_required=true` or `forbidden_write_paths=["**"]`, agents should not automatically write product code; they may perform read-only analysis, gather evidence, propose profile repairs, or request a scoped override.
 - `decision_confidence=high` does not mean writing is allowed; it may mean the router is highly confident that the agent should stop.
 - `action` is advisory direction, not a final engineering command; write boundaries, vetoes, owners, canonical roots, and lifecycle constraints have higher priority.

@@ -6,14 +6,26 @@
 
 1. Collect exact files from every `--changed-path`.
 2. Resolve capabilities through the path map, owner modules, scope paths, public entries, module key/index files, related tests, and test bindings.
-3. Expand to directly related dependency capabilities when configured.
+3. Expand one hop to directly related capabilities only through observed runtime import edges when configured. Type-only and transitive edges do not expand scope.
 4. Ignore repository-wide concrete mappings such as `** -> database-schema-migrations` when a specific mapping exists. A broad concrete mapping alone is not trusted as an automatic scope.
 5. Enumerate owner and test surfaces only for the resolved capability scope.
 6. Load or compute native fingerprints and rank candidate pairs.
-7. Run exact text similarity only for bounded Top-K pairs.
+7. Run exact text similarity only for bounded Top-K pairs. If Top-K drops a planned pair, evidence is `bounded`, not complete.
 8. Emit canonical, checkpoint, and diagnostic report classes.
 
-If a changed path cannot be resolved, the scan returns `completion_status=incomplete`. It never falls back to unrelated capability owners.
+If a changed path cannot be resolved, references a capability absent from the catalog, has import-parser diagnostics, or resolves to no readable canonical owner files, the scan returns `completion_status=incomplete`. A full scan with no governed capabilities is also incomplete. It never falls back to unrelated capability owners or treats an empty comparison surface as proof of uniqueness.
+
+Budget values are validated fail-closed. Integer limits must be non-negative, ratio values must be finite, `max_length_ratio` cannot be stricter than `8.0`, and token/path prefilter thresholds cannot exceed the generated safe defaults. Invalid or skip-all configuration produces `reuse-scan-configuration-invalid` with incomplete evidence rather than silently reducing comparisons.
+
+## Reuse Engine API v2
+
+The stable v2 integration surface is:
+
+- the `check_reuse.py` CLI and its report schema;
+- `router_core.gather_reuse_report(...)`;
+- `router_core.gather_reuse_findings(...)`.
+
+`router_support` modules and former non-underscored scan helpers are implementation details, not a separately versioned Python library API. Consumers should not import them directly. The installer probes the two supported Python entry points and validates the complete CLI payload before atomic replacement.
 
 ## Native Fingerprint Cache
 

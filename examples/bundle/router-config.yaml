@@ -28,9 +28,12 @@ freshness_windows:
   exception_registry_days: 30
   evaluation_set_days: 30
 evaluation:
-  top1_accuracy_threshold: 0.8
+  top1_accuracy_threshold: 0.85
+  top1_capability_accuracy_threshold: 0.85
   review_precision_threshold: 0.9
-  minimum_case_count: 12
+  review_recall_threshold: 1.0
+  secondary_contract_accuracy_threshold: 1.0
+  minimum_case_count: 30
   minimum_capability_coverage_ratio: 0.8
 repo_stage: structured
 repo_stage_score: 0.72

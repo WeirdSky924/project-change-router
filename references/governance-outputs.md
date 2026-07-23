@@ -14,6 +14,8 @@ Mandatory fields are execution guardrails. The agent must obey them before produ
 - `veto_reasons`
 - lifecycle review requirements
 - confirmed owners, public entries, canonical roots, and dependency direction
+- freshness, dependency/runtime-cycle, public API, and structure guardrail failures
+- evaluation `review_only` when thresholds or attestation are not satisfied
 
 Advisory fields are structured direction. The agent should use them to decide what to inspect, repair, or ask next, but they are not a substitute for source-code analysis:
 
@@ -38,7 +40,7 @@ Fields:
 - `suggested_questions`
 - `override_requirements`
 
-Trigger this group when `action=review`, when a lifecycle intent is detected, when early-repo policy blocks automatic routing, when the path map has no candidate, or when multiple capabilities overlap.
+Trigger this group when `action=review`, when evaluation enforcement is `review_only`, when a lifecycle intent is detected, when early-repo policy blocks automatic routing, when the path map has no candidate, or when multiple capabilities overlap.
 
 Expected agent behavior:
 
@@ -47,6 +49,7 @@ Expected agent behavior:
 - Use `analysis_directions` to decide what code, imports, callers, public entries, tests, and profile entries to inspect.
 - Ask only the relevant `suggested_questions`.
 - Continue with writes only when the user gives an override matching `override_requirements`.
+- Keep unattended product writes stopped when evaluation is missing, stale, or below threshold even if top-1 capability selection appears correct.
 
 Do not:
 
@@ -91,6 +94,7 @@ Expected agent behavior:
 - Treat repair hints as profile/catalog/governance work, not product implementation.
 - Convert repeated manual confirmations into `.project-change-router.yaml` profile entries.
 - Add contracts, public entries, ownership rules, lifecycle metadata, and evaluation cases after human confirmation.
+- Give each stable capability one explicit `capability_ownership` primary owner and a distinct reviewer. Missing, duplicate, generated-placeholder, `UNKNOWN`, unassigned, and provisional identities remain review-only.
 - Run `check_bundle_governance.py` after profile or catalog changes.
 
 Do not:
@@ -111,6 +115,7 @@ Expected agent behavior:
 - Rebuild the index when boundaries, public entries, or lifecycle metadata changed.
 - Validate the bundle after route-affecting edits.
 - Run governance audit after capability/profile/path-map changes.
+- Run freshness, dependency/runtime-cycle, public API, and structure checks when their routed boundary changed.
 - Run route evaluation before committing router metadata.
 - Record feedback after review, override, or human correction.
 
@@ -178,3 +183,15 @@ Do not:
 
 - Treat evaluation pass as proof that profile boundaries are correct.
 - Fix a false negative without adding a regression case.
+
+## Architecture Guardrail Context
+
+The seven output groups are interpreted alongside the read-only architecture reports; those reports are not an eighth advisory action group.
+
+- `check_deps.py` distinguishes Python and TypeScript/JavaScript runtime edges from Python `TYPE_CHECKING` and TypeScript type-only edges. Runtime cycles and reversed dependencies block unless an exact approved baseline identity matches.
+- `check_public_api.py` reports cross-module private-surface bypasses and public export breadth against the same exact-baseline contract.
+- `check_structure.py` enforces changed-file 800/1200-line bands plus `central_growth_baseline`, `forbidden_implementation_roots`, and `exclusive_source_owners`.
+- `check_index_freshness.py` binds evidence to the current commit, a content-derived structure digest, indexed/stale paths, and actual changed-path coverage.
+- `run_evaluation.py` reports `normal` or `review_only`; attestation binds accepted metrics to route-affecting bundle truth.
+
+An exact baseline is owned debt with a stable identity and exit condition, not permission to add another violation. Parser/resolver diagnostics or unmapped changed paths make evidence incomplete. Static evidence supplements rather than replaces capability, logic, data, integration, and customer-flow tests.

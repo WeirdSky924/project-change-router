@@ -1,0 +1,11 @@
+{
+  "report_id": "check-structure",
+  "timestamp": "2026-07-22T16:00:00Z",
+  "script": "check_structure.py",
+  "status": "pass",
+  "blocking": false,
+  "summary": {
+    "finding_count": 0
+  },
+  "findings": []
+}

@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["decision_id", "timestamp", "request_type", "request_summary", "repo_stage", "action", "decision_basis", "routing_confidence", "routing_confidence_level", "decision_confidence", "decision_confidence_level", "confidence", "confidence_level", "overlap_score", "primary_capability", "primary_capability_stage", "secondary_capabilities", "candidate_capabilities", "candidate_modules", "required_reads", "required_checks", "forbidden_paths", "review_required", "coordination_required", "composite_route_required", "recommended_next_action", "recommended_next_steps", "why_not_actions", "block_reason", "missing_evidence", "analysis_directions", "safe_next_steps", "suggested_questions", "profile_repair_hints", "override_requirements", "allowed_write_paths", "forbidden_write_paths", "must_read_before_edit", "post_change_closeout", "composite_route", "capability_lifecycle_action", "evaluation_regression_hints", "confidence_reasons", "veto_reasons", "positive_signals", "negative_signals", "risk_signals", "reasoning", "source_of_truths"],
+  "required": ["decision_id", "timestamp", "request_type", "request_summary", "changed_paths", "repo_stage", "action", "decision_basis", "routing_confidence", "routing_confidence_level", "decision_confidence", "decision_confidence_level", "confidence", "confidence_level", "overlap_score", "primary_capability", "primary_capability_stage", "secondary_capabilities", "candidate_capabilities", "candidate_modules", "required_reads", "required_checks", "forbidden_paths", "review_required", "coordination_required", "composite_route_required", "recommended_next_action", "recommended_next_steps", "why_not_actions", "block_reason", "missing_evidence", "analysis_directions", "safe_next_steps", "suggested_questions", "profile_repair_hints", "override_requirements", "allowed_write_paths", "forbidden_write_paths", "must_read_before_edit", "post_change_closeout", "composite_route", "capability_lifecycle_action", "evaluation_regression_hints", "confidence_reasons", "veto_reasons", "positive_signals", "negative_signals", "risk_signals", "reasoning", "source_of_truths"],
   "properties": {
     "decision_id": { "type": "string" },
     "timestamp": { "type": "string" },
     "request_type": { "type": "string" },
     "request_summary": { "type": "string" },
+    "changed_paths": { "type": "array", "items": { "type": "string" } },
     "repo_stage": { "type": "string" },
     "action": { "type": "string" },
     "decision_basis": { "type": "string" },

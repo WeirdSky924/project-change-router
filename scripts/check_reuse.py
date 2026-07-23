@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import multiprocessing
 import os
@@ -16,7 +17,6 @@ from typing import Any, Optional
 from reuse_runtime import (
     ReuseRuntimeStore,
     atomic_write_json,
-    file_stat_key,
     iso_now,
     retention_policy_from_bundle,
     runtime_policy_from_bundle,
@@ -24,6 +24,7 @@ from reuse_runtime import (
     semantic_digest,
     semantic_report_value,
 )
+from router_support.freshness_checks import build_structure_snapshot
 from router_core import (
     changed_path_candidate_files,
     default_ignore_patterns,
@@ -201,17 +202,13 @@ def build_input_fingerprint(
     changed_paths: list[str],
     budget_overrides: dict[str, Any],
 ) -> str:
-    source_versions = {
-        key: bundle.get(key, {}).get("source_commit")
-        for key in ("module_map", "capability_catalog", "path_to_capability_map")
-    }
     identity_files = changed_path_candidate_files(
         repo_root,
         changed_paths,
         default_ignore_patterns(bundle.get("config", {})),
     )
     changed_identities = {
-        normalize_rel_path(repo_root, path): file_stat_key(path)
+        normalize_rel_path(repo_root, path): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in identity_files
     }
     for changed_path in changed_paths:
@@ -225,13 +222,46 @@ def build_input_fingerprint(
         text=True,
         check=False,
     )
+    head_state = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    full_scan_snapshot = None
+    if not changed_paths:
+        snapshot = build_structure_snapshot(
+            repo_root, default_ignore_patterns(bundle.get("config", {}))
+        )
+        full_scan_snapshot = {
+            "source_commit": snapshot.source_commit,
+            "structure_digest": snapshot.digest,
+            "indexed_paths": list(snapshot.paths),
+            "diagnostics": list(snapshot.diagnostics),
+        }
+    routing_truth = {
+        key: bundle.get(key, {})
+        for key in (
+            "config",
+            "module_map",
+            "capability_catalog",
+            "ownership",
+            "path_to_capability_map",
+            "change_rules",
+        )
+    }
     return semantic_digest(
         {
             "repo": str(repo_root.resolve()),
             "changed_paths": sorted(path.replace("\\", "/") for path in changed_paths),
             "changed_identities": changed_identities,
             "budget_overrides": budget_overrides,
-            "source_versions": source_versions,
+            "routing_truth_digest": semantic_digest(routing_truth),
+            "head_commit": (
+                head_state.stdout.strip() if head_state.returncode == 0 else None
+            ),
+            "full_scan_snapshot": full_scan_snapshot,
             "worktree_state": git_state.stdout if git_state.returncode == 0 else None,
         }
     )

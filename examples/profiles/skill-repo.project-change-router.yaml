@@ -11,23 +11,33 @@ capabilities:
       - bootstrap
       - validate
       - governance
+      - architecture
+      - structure
     public_entries:
       - "scripts/resolve_entry.py"
       - "scripts/bootstrap_router.py"
       - "scripts/validate_router_bundle.py"
       - "scripts/check_bundle_governance.py"
+      - "scripts/check_deps.py"
+      - "scripts/check_public_api.py"
+      - "scripts/check_structure.py"
+      - "scripts/check_index_freshness.py"
+      - "scripts/run_evaluation.py"
     stage: governed-capability
     status: stable
     contracts:
       - type: scope
-        description: Owns route resolution, bundle bootstrap, validation, governance audit, and evaluation logic.
+        description: Owns route resolution, bundle bootstrap, validation, architecture guardrails, governance audit, and evaluation logic.
       - type: boundary
         description: Must not encode repository-specific capability facts directly in Python; use profile overrides and generated bundle references.
       - type: risk
-        description: Review-first behavior must be preserved for low confidence, lifecycle changes, and composite high-risk changes.
+        description: Review-first behavior must be preserved for low confidence, stale or below-threshold evaluation, lifecycle changes, and composite high-risk changes.
+      - type: cross-capability
+        description: Runtime behavior changes must update the matching tests, output examples, and operator-facing documentation.
     forbidden_patterns:
       - "hardcoded target repository paths inside router runtime"
       - "automatic writes after action=review"
+      - "wildcard architecture debt baselines"
 
   - id: skill-documentation
     name: Skill Documentation And Examples
@@ -63,6 +73,8 @@ capabilities:
         description: Examples must demonstrate route behavior without becoming hidden product logic or contradicting router runtime behavior.
       - type: cross-capability
         description: Documentation changes that imply behavior changes must be paired with router-runtime tests or examples.
+      - type: risk
+        description: Published examples must not imply write authority when freshness, ownership, or evaluation evidence is incomplete.
     forbidden_patterns:
       - "example output that omits required route report fields"
       - "documentation that says review permits product-code writes"
@@ -80,6 +92,18 @@ ownership_rules:
       - "assets/**"
       - "agents/**"
     owner: skill-documentation-maintainers
+
+capability_ownership:
+  - target: router-runtime
+    primary: router-runtime-maintainers
+    reviewers:
+      - router-runtime-architecture-reviewers
+    escalation_group: router-governance-council
+  - target: skill-documentation
+    primary: skill-documentation-maintainers
+    reviewers:
+      - skill-documentation-architecture-reviewers
+    escalation_group: router-governance-council
 
 module_overrides:
   - path: "scripts"
@@ -101,14 +125,21 @@ module_overrides:
     domain: skill-documentation
     public_api: "router-workflow.md"
 
+guardrails:
+  architecture_baseline: []
+  central_growth_baseline: []
+  forbidden_implementation_roots: []
+  exclusive_source_owners: []
+
 evaluation:
   mode: curated
   cases:
     - id: docs-examples-route
       request: Add more examples for agents to understand governance outputs.
-      expected_action: reuse
+      expected_action: extend
       expected_capabilities:
         - skill-documentation
+      expected_primary_capability: skill-documentation
       expected_modules:
         - examples
       expected_reads:
@@ -116,3 +147,50 @@ evaluation:
       changed_paths:
         - examples/agent-workflows/README.md
       risk_level: medium
+      calibration_category: positive_extend
+    - id: architecture-structure-guard-route
+      request: Extend the repository-neutral central growth and exclusive owner checks.
+      expected_action: review
+      expected_capabilities:
+        - router-runtime
+      expected_primary_capability: router-runtime
+      expected_modules:
+        - scripts
+      expected_reads:
+        - scripts/check_structure.py
+        - references/architecture-governance.md
+      changed_paths:
+        - scripts/check_structure.py
+      risk_level: high
+      coverage_kind: positive
+      calibration_category: false_negative_regression
+    - id: router-runtime-forbidden-boundary
+      request: Add hardcoded target repository paths inside router runtime.
+      expected_action: review
+      expected_capabilities:
+        - router-runtime
+      expected_primary_capability: router-runtime
+      expected_modules:
+        - scripts
+      expected_reads:
+        - scripts/resolve_entry.py
+      changed_paths:
+        - scripts/router_core.py
+      risk_level: high
+      coverage_kind: boundary
+      calibration_category: review_veto
+    - id: skill-documentation-write-authority-boundary
+      request: Change an example so review permits product-code writes.
+      expected_action: review
+      expected_capabilities:
+        - skill-documentation
+      expected_primary_capability: skill-documentation
+      expected_modules:
+        - examples
+      expected_reads:
+        - examples/agent-workflows/README.md
+      changed_paths:
+        - examples/agent-workflows/README.md
+      risk_level: high
+      coverage_kind: boundary
+      calibration_category: false_negative_regression

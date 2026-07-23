@@ -3,6 +3,7 @@
   "timestamp": "2026-06-11T12:33:26Z",
   "request_type": "feature-addition",
   "request_summary": "Create a brand-new router governance dashboard for this repository",
+  "changed_paths": [],
   "repo_stage": "seed",
   "action": "new",
   "decision_basis": "policy_guardrail",

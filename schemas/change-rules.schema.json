@@ -10,8 +10,126 @@
     "source_commit": { "type": ["string", "null"] },
     "confidence": { "type": "object" },
     "high_risk_conditions": { "type": "array", "items": { "type": "string" } },
+    "high_risk_capability_ids": { "type": "array", "items": { "type": "string" } },
+    "high_risk_module_patterns": { "type": "array", "items": { "type": "string" } },
+    "sensitive_review_phrases": { "type": "array", "items": { "type": "string" } },
     "route_rules": { "type": "array", "items": { "type": "object" } },
-    "decision_policy": { "type": "object" }
+    "decision_policy": { "type": "object" },
+    "architecture_baseline": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/architectureBaseline" }
+    },
+    "central_growth_baseline": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/centralGrowthBaseline" }
+    },
+    "reuse_scan_budget": {
+      "$ref": "#/$defs/reuseScanBudget"
+    }
   },
-  "additionalProperties": true
+  "additionalProperties": true,
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "reuseScanBudget": {
+      "type": "object",
+      "properties": {
+        "max_candidate_files": { "type": "integer", "minimum": 0 },
+        "max_owner_files_per_capability": { "type": "integer", "minimum": 0 },
+        "max_owner_files": { "type": "integer", "minimum": 0 },
+        "max_comparisons": { "type": "integer", "minimum": 0 },
+        "max_file_bytes_for_full_similarity": { "type": "integer", "minimum": 0 },
+        "max_file_bytes": { "type": "integer", "minimum": 0 },
+        "max_normalized_chars_for_full_similarity": { "type": "integer", "minimum": 0 },
+        "max_similarity_char_product": { "type": "integer", "minimum": 0 },
+        "top_k_owner_files_per_candidate": { "type": "integer", "minimum": 0 },
+        "max_length_ratio": { "type": "number", "minimum": 8 },
+        "min_token_jaccard": { "type": "number", "minimum": 0, "maximum": 0.08 },
+        "min_path_token_overlap": { "type": "number", "minimum": 0, "maximum": 0.05 },
+        "min_fingerprint_advisory_score": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "architectureBaseline": {
+      "type": "object",
+      "required": ["id", "rule", "owner", "exit_stage", "fingerprint"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "rule": {
+          "type": "string",
+          "enum": ["dependency-direction", "runtime-cycle", "type-only-cycle", "public-api-bypass", "public-export-count"]
+        },
+        "owner": { "$ref": "#/$defs/nonEmptyString" },
+        "exit_stage": { "$ref": "#/$defs/nonEmptyString" },
+        "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "source": { "type": "string" },
+        "source_file": { "type": "string" },
+        "source_module": { "type": "string" },
+        "target": { "type": "string" },
+        "target_file": { "type": "string" },
+        "target_module": { "type": "string" },
+        "import": { "type": "string" },
+        "language": { "type": "string" },
+        "module": { "type": "string" },
+        "diagnostic_code": { "type": "string" },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "centralGrowthBaseline": {
+      "type": "object",
+      "required": ["id", "kind", "path", "symbol", "source_commit", "owner", "exit_stage", "max_file_lines"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": {
+          "type": "string",
+          "enum": ["python-class-remove-only", "python-function-remove-only"]
+        },
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "symbol": { "$ref": "#/$defs/nonEmptyString" },
+        "source_commit": { "$ref": "#/$defs/nonEmptyString" },
+        "owner": { "$ref": "#/$defs/nonEmptyString" },
+        "exit_stage": { "$ref": "#/$defs/nonEmptyString" },
+        "max_file_lines": { "type": "integer", "minimum": 0 },
+        "max_methods": { "type": "integer", "minimum": 0 },
+        "max_public_methods": { "type": "integer", "minimum": 0 },
+        "max_symbol_lines": { "type": "integer", "minimum": 0 },
+        "max_nested_functions": { "type": "integer", "minimum": 0 },
+        "max_decorated_handlers": { "type": "integer", "minimum": 0 },
+        "max_tracked_members_present": { "type": "integer", "minimum": 0 },
+        "tracked_members": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "allowed_tracked_members_present": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "forbidden_source_terms": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "python-function-remove-only" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["max_symbol_lines", "max_nested_functions", "max_decorated_handlers"]
+          }
+        }
+      ]
+    }
+  }
 }

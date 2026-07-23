@@ -11,9 +11,12 @@
   "capability_count": 3,
   "covered_capability_count": 3,
   "capability_coverage_ratio": 1.0,
+  "secondary_contract_accuracy": 1.0,
+  "strict_secondary_case_count": 0,
   "uncovered_capabilities": [],
   "per_case_results": [],
   "evaluation_mode": "generated_only",
+  "enforcement_mode": "normal",
   "status": "pass",
   "status_reasons": []
 }

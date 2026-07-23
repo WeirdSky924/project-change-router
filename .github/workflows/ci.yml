@@ -11,6 +11,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Structure Comparison Commit
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            comparison_commit="${{ github.event.pull_request.base.sha }}"
+          else
+            comparison_commit="${{ github.event.before }}"
+          fi
+          if [[ -z "$comparison_commit" || "$comparison_commit" =~ ^0+$ ]]; then
+            comparison_commit="$(git rev-parse HEAD^)"
+          fi
+          git cat-file -e "$comparison_commit^{commit}"
+          echo "PCR_COMPARISON_COMMIT=$comparison_commit" >> "$GITHUB_ENV"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -41,8 +57,68 @@ jobs:
       - name: Smoke Test
         run: |
           python scripts/bootstrap_router.py --repo . --format json
+          python scripts/rebuild_index.py --repo . --format json
           python scripts/validate_router_bundle.py --repo . --format json
           python scripts/check_bundle_governance.py --repo . --format json
-          python scripts/check_index_freshness.py --repo . --format json
-          python scripts/run_evaluation.py --repo . --format json
-          python scripts/check_reuse.py --repo . --changed-path scripts/check_reuse.py --timeout-seconds 20 --hard-timeout-seconds 30 --strict-completeness --format json
+          python scripts/check_index_freshness.py --repo . --format json --comparison-commit "$PCR_COMPARISON_COMMIT"
+          python scripts/check_deps.py --repo . --format json --comparison-commit "$PCR_COMPARISON_COMMIT"
+          python scripts/check_public_api.py --repo . --format json --comparison-commit "$PCR_COMPARISON_COMMIT"
+          python scripts/check_structure.py --repo . --format json --comparison-commit "$PCR_COMPARISON_COMMIT"
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          result = subprocess.run(
+              [sys.executable, "scripts/run_evaluation.py", "--repo", ".", "--format", "json"],
+              capture_output=True,
+              text=True,
+              check=False,
+          )
+          print(result.stdout)
+          assert result.returncode == 1, result.stderr
+          report = json.loads(result.stdout)
+          assert report["status"] == "fail"
+          assert report["enforcement_mode"] == "review_only"
+          assert report["status_reasons"] == ["evaluation_cases_not_curated"]
+          PY
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          result = subprocess.run(
+              [
+                  sys.executable,
+                  "scripts/check_reuse.py",
+                  "--repo",
+                  ".",
+                  "--changed-path",
+                  "scripts/check_reuse.py",
+                  "--timeout-seconds",
+                  "20",
+                  "--hard-timeout-seconds",
+                  "30",
+                  "--format",
+                  "json",
+              ],
+              capture_output=True,
+              text=True,
+              check=False,
+          )
+          print(result.stdout)
+          assert result.returncode == 0, result.stderr
+          report = json.loads(result.stdout)
+          assert report["blocking"] is False
+          assert report["completion_status"] in {"complete", "bounded"}
+          if report["completion_status"] == "bounded":
+              assert report["evidence_complete"] is False
+          else:
+              assert report["evidence_complete"] is True
+          PY
+
+      - name: Verify Atomic Install
+        run: |
+          codex_home="$(mktemp -d)"
+          python scripts/install_skill.py --target codex --codex-home "$codex_home"
+          python scripts/install_skill.py --target codex --codex-home "$codex_home" --verify-only

@@ -5,25 +5,40 @@ import argparse
 import json
 from pathlib import Path
 
-from router_core import gather_dependency_findings, route_bundle_from_repo
+from router_core import gather_dependency_findings, guardrail_status, route_bundle_from_repo
+from router_support.architecture_baseline import filter_architecture_baseline_by_provenance
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check architectural dependency direction against the module map.")
     parser.add_argument("--repo", required=True, help="Repository root path.")
+    parser.add_argument(
+        "--comparison-commit",
+        help="Trusted commit whose architecture baselines predate this change.",
+    )
     parser.add_argument("--format", choices=["json", "text"], default="text")
     parser.add_argument("--output", help="Optional report output path.")
     args = parser.parse_args()
 
     repo_root = Path(args.repo).resolve()
     bundle = route_bundle_from_repo(repo_root)
+    trusted, provenance_findings = filter_architecture_baseline_by_provenance(
+        repo_root,
+        bundle.get("change_rules", {}).get("architecture_baseline", []),
+        args.comparison_commit,
+    )
+    bundle = dict(bundle)
+    bundle["change_rules"] = dict(bundle.get("change_rules", {}))
+    bundle["change_rules"]["architecture_baseline"] = trusted
     findings = gather_dependency_findings(repo_root, bundle)
-    blocking = any(finding["severity"] in {"P0", "P1"} for finding in findings)
+    findings.extend(provenance_findings)
+    status, blocking = guardrail_status(findings)
     report = {
         "report_id": "check-deps",
         "timestamp": bundle["config"]["generated_at"],
         "script": "check_deps.py",
-        "status": "fail" if blocking else "pass",
+        "comparison_commit": args.comparison_commit,
+        "status": status,
         "blocking": blocking,
         "summary": {"finding_count": len(findings)},
         "findings": findings,

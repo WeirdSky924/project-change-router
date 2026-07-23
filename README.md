@@ -53,7 +53,9 @@ PCR 的输出分为两层，使用时不要混在一起理解。
 - 为目标仓库生成本地 `project-change-router/` bundle。
 - 识别仓库模块、capability、owner、public entry、路径归属和依赖方向。
 - 根据请求和 changed paths 输出 route report，包含强约束和建议动作。
-- 对重复实现、错误边界、public API 绕过和依赖方向问题做 guardrail 检查。
+- 对重复实现、错误边界、public API 绕过、反向依赖和 runtime cycle 做 guardrail 检查；TypeScript type-only edge 不会被误算成 runtime edge。
+- 用 commit、内容结构摘要、索引路径、stale entry 和实际 changed paths 校验 freshness。
+- 用 exact baseline 阻止中央文件、800/1200 行文件、禁用实现根和第二 canonical owner 的新增净增长。
 - 通过 `path-to-capability-map.yaml` 暴露路径归属、共享归属和未覆盖模块。
 - 用 schema 校验 bundle 与报告。
 - 用 evaluation set 检查路由质量是否退化。
@@ -187,7 +189,9 @@ python scripts/install_skill.py --target both --inject-hints
 
 这是一种“伪强制”提醒，用于让 agent 在功能级 create / modify / delete 前主动触发 skill。它不是后台守护进程，也不会绕过对话触发机制。
 
-安装器使用 staging、文件哈希/API 校验和原子替换。只有新副本完整通过校验后才替换旧 skill；失败时会恢复旧安装，避免出现新版 `check_reuse.py` 搭配旧版 `router_core.py` 的混装状态。
+安装器使用 staging、完整载荷递归哈希、递归 Python 编译、治理 API probe 和原子替换。只有新副本完整通过校验后才替换旧 skill；失败时会恢复旧安装，避免顶层脚本、`router_support`、schemas 或文档出现跨版本混装。
+
+源码 checkout 和安装目标必须是不同路径。如果当前 Git checkout 已位于 `~/.codex/skills/project-change-router`，不要用安装器覆盖它；需要同时安装两个目标时使用独立 checkout，或只安装另一个目标。`--verify-only` 必须读取 0.3 原子安装建立的可信 manifest；没有该 manifest 的旧副本需要先原子重装一次，之后哈希验证才有来源完整性意义。
 
 ## 从旧版安全升级
 
@@ -216,7 +220,12 @@ python scripts/install_skill.py --target both --verify-only
 ```powershell
 python <new-skill-root>\scripts\validate_router_bundle.py --repo <existing-repo> --format json
 python <new-skill-root>\scripts\check_bundle_governance.py --repo <existing-repo> --format json
-python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-path <known-path> --format json
+python <new-skill-root>\scripts\check_index_freshness.py --repo <existing-repo> --changed-path <known-path> --format json
+python <new-skill-root>\scripts\check_deps.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\check_public_api.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\check_structure.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\run_evaluation.py --repo <existing-repo> --format json
+python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-path <known-path> --strict-completeness --format json
 ```
 
 5. 验证通过后直接继续使用原 bundle。不要仅仅因为升级 skill 就运行 `bootstrap_router.py` 或 `rebuild_index.py`。
@@ -224,10 +233,14 @@ python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-
 兼容保证：
 
 - 新版本继续读取 schema v1 bundle。
+- 0.3 新增架构治理 API v1，同时保持 reuse engine API v2。
+- schema v1 的新增 evaluation 字段保持 optional；runtime 使用安全默认值且不写回旧 YAML，缺少或显式关闭 evaluation enforcement 都保持 `review_only`，不能授予写入权限。
+- `normal` 只接受至少 30 个带 `curated_case_ids` 的真实案例、完整六类校准矩阵、明确 capability 期望以及合法 attestation；阈值只能收紧，生成案例和缺少 provenance 的旧案例始终保持 `review_only`。
 - 旧 bundle 没有 `reuse_scan_scope`、`reuse_scan_runtime` 或 `reuse_scan_retention` 时，代码使用新默认值，但不会写回或改动 YAML。
 - 新 fingerprint、checkpoint、canonical 和 diagnostic 默认写到用户缓存目录，不写入目标仓库，也不要求修改目标仓库 `.gitignore`。
 - 安装器不会搜索任何项目目录，不会修改已有 profile、manual feedback、evaluation case、owner 或 lifecycle 数据。
 - 旧 bundle 中错误的仓库级 `** -> concrete capability` 映射，在存在更具体映射时不会扩大 reuse 扫描范围；治理审计仍会提示修正元数据。
+- “旧 bundle 可读”不表示历史报告永远满足新版输出 schema；需要作为当前样例或 CI fixture 使用的报告应按当前报告契约重新生成。
 
 只有在项目结构、owner、public entry 或 capability 边界确实发生变化时才执行 rebuild。执行前应先把直接写在生成 YAML 中的人工真值迁移到 `.project-change-router.yaml`，并保留 manual feedback、curated evaluation 和 lifecycle 数据。可使用 [旧 bundle 更新提示词](./examples/agent-workflows/update-existing-router-bundle-prompt.md) 让 agent 做这次受控刷新。
 
@@ -258,11 +271,20 @@ Skill is valid!
 ```powershell
 python -m pytest tests/test_router_core.py -q
 python scripts/bootstrap_router.py --repo . --format json
+python scripts/rebuild_index.py --repo . --format json
 python scripts/validate_router_bundle.py --repo . --format json
 python scripts/check_bundle_governance.py --repo . --format json
 python scripts/check_index_freshness.py --repo . --format json
+python scripts/check_deps.py --repo . --format json
+python scripts/check_public_api.py --repo . --format json
+python scripts/check_structure.py --repo . --format json
 python scripts/run_evaluation.py --repo . --format json
+python scripts/check_reuse.py --repo . --changed-path scripts/check_reuse.py --strict-completeness --format json
+python scripts/install_skill.py --target codex --codex-home <temporary-codex-home>
+python scripts/install_skill.py --target codex --codex-home <temporary-codex-home> --verify-only
 ```
+
+全新 bootstrap 会有意让 PCR 保持 `review_only`，直到 evaluation set 具备足量真实案例、完整校准矩阵和当前 attestation。因此在这条 smoke 流程中，`run_evaluation.py` 会以退出码 `1` 返回 `status=fail`、`enforcement_mode=review_only` 和 `evaluation_cases_not_curated` 原因。CI 会显式断言这一安全结果，而不是降低阈值，或把生成的种子案例冒充生产校准证据。
 
 ## 在目标仓库接入
 
@@ -306,10 +328,13 @@ project-change-router.profile.yaml
 project-change-router.profile.yml
 ```
 
+这些名称按 canonical、legacy、skill fallback 的优先级选择，不会合并。同一优先级只能存在一份；`.yaml` 与 `.yml` 并存会 fail-closed，必须先确定唯一真值源。
+
 profile 可声明：
 
 - capability 到路径的映射
 - ownership rules
+- 显式 capability ownership，包括一个真实 primary owner 和不同的 reviewers
 - module overrides
 - public entries
 - contracts
@@ -371,6 +396,10 @@ Do not create a second implementation center when an existing capability or cano
 
 After routed changes, run the required closeout checks and record feedback/evaluation cases when a review, override, lifecycle change, or routing correction occurred.
 
+Run dependency, public API, structure, freshness, evaluation, and strict-completeness reuse checks when their routed boundary is affected. Static checks supplement rather than replace logic, data, integration, and customer-flow verification.
+
+If evaluation is below threshold or its attestation is missing/stale, keep PCR review-only even when the capability match itself looks correct.
+
 When running check_reuse, inspect result_status, completion_status, evidence_complete, and summary.scan.scope together. Only completion_status=complete with evidence_complete=true closes the duplicate check for that capability scope. A bounded, incomplete, timeout, cancelled, or error result requires targeted source analysis and must not be reported as proof that no duplicate implementation exists.
 ```
 
@@ -389,10 +418,26 @@ When running check_reuse, inspect result_status, completion_status, evidence_com
 | 检查重复实现 | `python scripts/check_reuse.py --repo <repo-root> --changed-path <path> --format json` |
 | 检查依赖方向 | `python scripts/check_deps.py --repo <repo-root> --format json` |
 | 检查 public API 边界 | `python scripts/check_public_api.py --repo <repo-root> --format json` |
+| 检查中央增长、文件规模和唯一 owner | `python scripts/check_structure.py --repo <repo-root> --format json` |
 | 检查索引新鲜度 | `python scripts/check_index_freshness.py --repo <repo-root> --format json` |
 | 路由治理健康检查 | `python scripts/check_bundle_governance.py --repo <repo-root> --format json` |
 | 路由质量回归评估 | `python scripts/run_evaluation.py --repo <repo-root> --format json` |
 | 人工反馈回写 | `python scripts/sync_feedback.py --repo <repo-root> --feedback-file feedback.json --format json` |
+
+## 架构治理
+
+PCR 0.3 把原先容易依赖人工审查的结构约束变成可回归的通用 guardrail：
+
+- Python 和 TypeScript/JavaScript import graph 区分 runtime 与 type-only edge，并报告 runtime cycle、解析诊断和依赖方向。
+- `architecture_baseline` 只登记精确旧债；已登记问题可以告警，新问题或净增长失败。它不是 wildcard 豁免。
+- `central_growth_baseline` 阻止 composition root、global gateway、顶层 controller 等中央 owner 继续吸收领域实现。
+- `forbidden_implementation_roots` 阻止在 legacy、compat、generated 或非 canonical 根新增正式实现。
+- `exclusive_source_owners` 阻止 profile 明确声明的受保护实现 token 出现在 canonical owner 之外；不同标识符的 raw transport、cache/store 或 DTO 重复仍需项目级 import、identifier 或 AST 门。
+- stable capability 必须有唯一 `capability_ownership` 记录、真实 primary owner、不同 reviewer、lifecycle、contract/test binding 和 evaluation 覆盖；自动生成的 owner 标签、`UNKNOWN`、unassigned、缺失、重复或 provisional owner 都不提供自动写入授权。
+- freshness 同时校验 commit、内容结构摘要、stale entries、索引路径和 changed-path coverage，不能用文件时间或删除真实 changed path 伪造通过。
+- evaluation attestation 或阈值不满足时保持 `review_only`，不能因为 capability 命中正确就假定 action 和写入授权也可靠。
+
+现有债务应先建立精确 baseline 来阻止新增，再由后续治理包持续降低 baseline；不能通过扩大 ignore、弱化规则或伪造 evaluation case 获得通过。字段、退出条件和 CI 组合见 [references/architecture-governance.md](./references/architecture-governance.md)。
 
 ## Reuse 扫描运行时
 
@@ -413,6 +458,9 @@ changed paths
 - changed path 即使不在 `modules[].path` 中，只要它是 key file、index source、related test、test binding 或精确 path-map 项，也会直接进入候选集。
 - 无法解析 capability 时返回 `completion_status=incomplete`，不会静默回退全仓扫描。
 - 有具体 path mapping 时，旧 bundle 中的仓库级 `** -> concrete capability` 不参与扩展范围。
+- 精确 path-map owner 优先于宽 module owner；只有同一精确路径显式声明 shared owner 时才保留第二 owner。
+- dependency scope 只沿已解析的 runtime import edge 双向扩张一跳；TypeScript type-only edge 和传递依赖不会扩张扫描范围。
+- import parser/resolver diagnostic 会令 evidence incomplete，不会被当成干净依赖图。
 - test path 优先使用同 capability 的 related tests、test bindings 和 owner surface，不默认比较所有产品模块。
 - 相同文件对只计算一次；多个 capability 命中同一重复对时合并 capability 列表和最高严重度。
 - 超过全文比较大小限制但 fingerprint 高度相似的文件会输出 P2 `duplicate-fingerprint-candidate`，要求 agent 做定向源码分析；它不是精确重复结论。
@@ -504,6 +552,7 @@ python scripts/check_reuse.py --repo <repo-root> --cleanup-only --format json
 - dependency priority 是否覆盖所有 capability。
 - evaluation set 是否覆盖 profile-backed capability。
 - deprecated capability 是否具备 `superseded_by`、`deprecation_date`、`migration_note`。
+- stable capability 是否具备非 provisional owner、reviewer、lifecycle、正例与边界 evaluation 覆盖。
 
 默认退出码：
 
@@ -596,6 +645,7 @@ Bundle 样例：
 - [examples/outputs/resolve-entry.seed-new-capability.json](./examples/outputs/resolve-entry.seed-new-capability.json)
 - [examples/outputs/check-deps.pass.json](./examples/outputs/check-deps.pass.json)
 - [examples/outputs/check-public-api.pass.json](./examples/outputs/check-public-api.pass.json)
+- [examples/outputs/check-structure.pass.json](./examples/outputs/check-structure.pass.json)
 - [examples/outputs/check-reuse.pass.json](./examples/outputs/check-reuse.pass.json)
 - [examples/outputs/check-reuse.warn.json](./examples/outputs/check-reuse.warn.json)
 - [examples/outputs/check-reuse.timeout.json](./examples/outputs/check-reuse.timeout.json)
@@ -610,6 +660,7 @@ Bundle 样例：
 - [references/repo-discovery.md](./references/repo-discovery.md)
 - [references/evaluation.md](./references/evaluation.md)
 - [references/schema-overview.md](./references/schema-overview.md)
+- [references/architecture-governance.md](./references/architecture-governance.md)
 - [references/reuse-scan-runtime.md](./references/reuse-scan-runtime.md)
 
 ## 脚本列表
@@ -622,6 +673,7 @@ Bundle 样例：
 - `scripts/reuse_runtime.py`
 - `scripts/check_deps.py`
 - `scripts/check_public_api.py`
+- `scripts/check_structure.py`
 - `scripts/check_index_freshness.py`
 - `scripts/check_bundle_governance.py`
 - `scripts/run_evaluation.py`
@@ -639,8 +691,11 @@ GitHub Actions workflow 位于 [.github/workflows/ci.yml](./.github/workflows/ci
 - validate bundle。
 - governance audit。
 - freshness check。
+- dependency direction、runtime cycle 与 public API check。
+- central growth、800/1200 文件规模、forbidden root 与 exclusive owner structure check。
 - route evaluation。
 - capability-scoped reuse scan、隔离 worker 和严格完整性检查。
+- 临时目录中的原子安装与 `--verify-only` 完整载荷校验。
 
 ## 边界与风险
 
@@ -649,6 +704,7 @@ GitHub Actions workflow 位于 [.github/workflows/ci.yml](./.github/workflows/ci
 - 首次 bootstrap 只是 first pass。
 - 没有 profile 时，结果会偏保守。
 - generated-only evaluation 只能说明系统自洽，不代表架构成熟。
+- capability 命中正确不代表 action、secondary contract 或写入授权可靠；evaluation 未达阈值时仍为 `review_only`。
 - `review_required=true` 或 `forbidden_write_paths=["**"]` 时，agent 不应自动写产品代码；可以做只读分析、补证据、修 profile 建议或请求 scoped override。
 - `decision_confidence=high` 不代表可以写；它可能代表“很确定应该停”。
 - `action` 是建议动作，不是最终工程命令；写入边界、veto、owner、canonical root 和生命周期约束优先级更高。

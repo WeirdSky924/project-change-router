@@ -44,17 +44,19 @@ Advisory direction layer:
 6. Read the required capability entries and public code entry points before editing.
 7. Apply the change only in the routed layer.
 8. Run the required guardrails and capability-bound tests.
-9. For `check_reuse`, inspect `result_status`, `completion_status`, `evidence_complete`, and the resolved capability scope together. Do not interpret bounded, incomplete, timed-out, cancelled, or errored evidence as proof that duplicate implementations are absent.
-10. If the route is `review`, stop automatic product-code editing and report `block_reason`, `missing_evidence`, `analysis_directions`, `safe_next_steps`, and scoped `override_requirements`.
-11. Apply writes only inside `allowed_write_paths`, never inside `forbidden_write_paths`, and read `must_read_before_edit` first.
-12. If the change reveals stale indexes, ownership gaps, or missing capability coverage, run the governance audit before deciding whether to rebuild.
-13. Rebuild the bundle only when routing references are stale or the user explicitly asks to refresh repository-local routing data.
-14. After a routed change, follow `post_change_closeout` and record feedback or evaluation regressions when review, override, delete, merge, or capability correction happened.
-15. For concrete route interpretation examples, read `examples/agent-workflows/README.md` before inventing behavior that is not described by the route report.
+9. Run `check_structure.py` for central-file growth, file-size bands, forbidden implementation roots, and exclusive canonical owners when the bundle declares those baselines.
+10. For `check_reuse`, inspect `result_status`, `completion_status`, `evidence_complete`, and the resolved capability scope together. Do not interpret bounded, incomplete, timed-out, cancelled, or errored evidence as proof that duplicate implementations are absent.
+11. If evaluation thresholds or attestation are not satisfied, keep PCR in `review_only`; do not convert a correct capability match into unattended write authority.
+12. If the route is `review`, stop automatic product-code editing and report `block_reason`, `missing_evidence`, `analysis_directions`, `safe_next_steps`, and scoped `override_requirements`.
+13. Apply writes only inside `allowed_write_paths`, never inside `forbidden_write_paths`, and read `must_read_before_edit` first.
+14. If the change reveals stale indexes, ownership gaps, or missing capability coverage, run the governance audit before deciding whether to rebuild.
+15. Rebuild the bundle only when routing references are stale or the user explicitly asks to refresh repository-local routing data.
+16. After a routed change, follow `post_change_closeout` and record feedback or evaluation regressions when review, override, delete, merge, or capability correction happened.
+17. For concrete route interpretation examples, read `examples/agent-workflows/README.md` before inventing behavior that is not described by the route report.
 
 ## Execution Modes
 
-- Read-only mode: use `scripts/resolve_entry.py`, `scripts/check_reuse.py`, `scripts/check_deps.py`, `scripts/check_public_api.py`, `scripts/check_index_freshness.py`, `scripts/check_bundle_governance.py`, and `scripts/run_evaluation.py`
+- Read-only mode: use `scripts/resolve_entry.py`, `scripts/check_reuse.py`, `scripts/check_deps.py`, `scripts/check_public_api.py`, `scripts/check_structure.py`, `scripts/check_index_freshness.py`, `scripts/check_bundle_governance.py`, and `scripts/run_evaluation.py`
 - Write mode: use `scripts/bootstrap_router.py` or `scripts/rebuild_index.py` only when the user explicitly asks to create or refresh repository-local routing data
 
 Do not silently create or rebuild `project-change-router/` during an unrelated code-edit request.
@@ -93,7 +95,9 @@ Repository-level overrides are loaded from:
 - `project-change-router.profile.yaml`
 - `project-change-router.profile.yml`
 
-These overrides can define capability mappings, ownership rules, risk rules, and module overrides without patching the global skill code.
+Canonical, legacy, and skill-profile locations are compatibility priority levels, not merge layers. Exactly one file may exist at the selected level; `.yaml` and `.yml` siblings at the same level are a fail-closed source conflict.
+
+These overrides can define capability mappings, path-level ownership rules, explicit `capability_ownership` primary/reviewer records, repository-specific risk review phrases, and module overrides without patching the global skill code. Missing, duplicate, malformed, unknown, provisional, or same-person capability ownership remains review-only.
 
 ## References
 
@@ -103,6 +107,7 @@ These overrides can define capability mappings, ownership rules, risk rules, and
 - `references/schema-overview.md`
 - `references/evaluation.md`
 - `references/governance-outputs.md`
+- `references/architecture-governance.md`
 - `references/reuse-scan-runtime.md`
 - `examples/agent-workflows/README.md`
 
@@ -114,6 +119,7 @@ These overrides can define capability mappings, ownership rules, risk rules, and
 - `scripts/check_reuse.py`
 - `scripts/check_deps.py`
 - `scripts/check_public_api.py`
+- `scripts/check_structure.py`
 - `scripts/check_index_freshness.py`
 - `scripts/check_bundle_governance.py`
 - `scripts/run_evaluation.py`
@@ -139,4 +145,5 @@ These overrides can define capability mappings, ownership rules, risk rules, and
 - Codex requests can invoke it as `$project-change-router`; Claude Code requests should invoke it as `/project-change-router`.
 - It does not depend on a specific repository.
 - The repository-local router bundle is generated on demand and is not the skill itself.
-- Updating the installed skill does not bootstrap, rebuild, or overwrite an existing repository-local bundle. Bundle schema v1 remains readable; runtime fingerprints and managed scan reports live outside the repository by default.
+- Version 0.3 exposes architecture governance API v1 while preserving reuse engine API v2.
+- Updating the installed skill does not bootstrap, rebuild, or overwrite an existing repository-local bundle. Bundle schema v1 remains readable; missing 0.3 fields use runtime defaults without being written back. Runtime fingerprints and managed scan reports live outside the repository by default.

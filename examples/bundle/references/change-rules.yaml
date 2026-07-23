@@ -13,6 +13,10 @@ high_risk_capability_ids: []
 high_risk_module_patterns: []
 dependency_priority:
   billing: 1
+architecture_baseline: []
+central_growth_baseline: []
+forbidden_implementation_roots: []
+exclusive_source_owners: []
 reuse_scan_budget:
   max_candidate_files: 200
   max_owner_files_per_capability: 400

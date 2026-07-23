@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import time
 import xml.etree.ElementTree as ET
@@ -21,14 +20,65 @@ from typing import Any, Iterable, Iterator, Optional
 import yaml
 from jsonschema import Draft202012Validator
 
-from reuse_runtime import (
-    FINGERPRINT_VERSION,
-    ReuseRuntimePolicy,
-    ReuseRuntimeStore,
-    file_stat_key,
-    iso_now as runtime_iso_now,
-    token_sketch,
+from router_support.import_graph import build_import_graph, classify_findings_against_baseline
+from router_support.import_source_scan import scan_typescript_source
+from router_support.java_source_scan import java_imports
+from router_support.freshness_checks import (
+    assess_index_freshness,
+    build_structure_snapshot,
+    collect_git_changed_paths,
 )
+from router_support.evaluation_policy import evaluate_configured_policy, make_evaluation_attestation, policy_for_bundle
+from router_support.governance_coverage import (
+    build_governance_repair_suggestions,
+    build_stable_capability_governance_findings,
+    capabilities_owner_assessment,
+    contract_description,
+    matching_capability_contract_boundaries,
+)
+from router_support.profile_loader import (
+    deep_merge,
+    load_active_profile,
+    profile_candidates,
+    profile_source_lifecycle_findings,
+    retired_profile_path_routes,
+)
+from router_support.ownership_governance import build_ownership, capability_conflicts
+from router_support.route_capability_contracts import (
+    compare_capability_contract,
+    ordered_secondary_capabilities,
+)
+from router_support.route_constraints import glob_match, required_checks_for, scoped_owner_modules
+from router_support.route_read_paths import build_required_read_paths
+from router_support.route_authorization import authorization_audit_fields
+from router_support.reuse_scan import (
+    ReuseScanBudget,
+    ReuseScanEnvironment,
+    changed_path_candidate_files as _changed_path_candidate_files,
+)
+from router_support.reuse_scan_engine import (
+    gather_reuse_report as _gather_reuse_report,
+)
+from router_support.route_intent import (
+    high_risk_keyword_scope as _high_risk_keyword_scope,
+    module_path_proximity,
+    owner_evidence_paths as _owner_evidence_paths,
+    parse_request_type,
+    positive_request_scope as _positive_request_scope,
+    request_additive_intent,
+    request_duplicate_signal,
+    request_duplicates_existing_owner,
+    request_has_high_risk_keyword as _request_has_high_risk_keyword,
+    request_has_phrase as _request_has_phrase,
+    request_lifecycle_intent,
+    request_lifecycle_target,
+    request_prefers_extract,
+    request_prefers_reuse,
+    request_requires_review,
+    request_requires_sensitive_review,
+    request_targets_existing_capability,
+)
+from router_support.structure_guardrails import refresh_profile_structure_guardrails
 
 
 DEFAULT_IGNORE_GLOBS = [
@@ -136,21 +186,6 @@ EXTENSION_FILE_MARKERS = ("plugin", "registry", "hook", "extension", "adapter", 
 CHANGE_VERBS = ("add", "change", "extend", "modify", "update", "introduce", "create", "implement", "fix", "refactor", "增加", "变更", "扩展", "修改", "新增", "实现", "修复", "重构")
 
 @dataclass
-class ReuseScanBudget:
-    max_candidate_files: int = 200
-    max_owner_files_per_capability: int = 400
-    max_comparisons: int = 5000
-    max_file_bytes_for_full_similarity: int = 256_000
-    max_normalized_chars_for_full_similarity: int = 180_000
-    max_similarity_char_product: int = 120_000_000
-    max_length_ratio: float = 8.0
-    min_token_jaccard: float = 0.08
-    min_path_token_overlap: float = 0.05
-    min_fingerprint_advisory_score: float = 0.55
-    top_k_owner_files_per_candidate: int = 40
-
-
-@dataclass
 class ModuleEntry:
     id: str
     path: str
@@ -189,7 +224,7 @@ class CapabilityEntry:
     public_entries: list[str] = field(default_factory=list)
     extension_points: list[str] = field(default_factory=list)
     route_defaults: dict[str, Any] = field(default_factory=dict)
-    contracts: list[str] = field(default_factory=list)
+    contracts: list[Any] = field(default_factory=list)
     related_tests: list[str] = field(default_factory=list)
     test_bindings: list[dict[str, Any]] = field(default_factory=list)
     forbidden_patterns: list[str] = field(default_factory=list)
@@ -208,6 +243,7 @@ class RouteDecision:
     timestamp: str
     request_type: str
     request_summary: str
+    changed_paths: list[str]
     repo_stage: str
     action: str
     decision_basis: str
@@ -277,10 +313,34 @@ def load_yaml_file(path: Path) -> dict[str, Any]:
     return data or {}
 
 
-def dump_yaml_file(path: Path, data: dict[str, Any]) -> None:
+def write_text_in_chunks(path: Path, content: str, max_lines: int = 300, max_chars: int = 12_000) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    lines = content.splitlines(keepends=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
-        yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=True)
+        chunk: list[str] = []
+        char_count = 0
+        for line in lines:
+            if len(line) > max_chars:
+                if chunk:
+                    handle.write("".join(chunk))
+                    chunk, char_count = [], 0
+                for offset in range(0, len(line), max_chars):
+                    handle.write(line[offset : offset + max_chars])
+                continue
+            if chunk and (len(chunk) >= max_lines or char_count + len(line) > max_chars):
+                handle.write("".join(chunk))
+                chunk, char_count = [], 0
+            chunk.append(line)
+            char_count += len(line)
+        if chunk:
+            handle.write("".join(chunk))
+
+
+def dump_yaml_file(path: Path, data: dict[str, Any]) -> None:
+    if path.exists() and load_yaml_file(path) == data:
+        return
+    content = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+    write_text_in_chunks(path, content)
 
 
 def load_json_file(path: Path) -> dict[str, Any]:
@@ -290,8 +350,9 @@ def load_json_file(path: Path) -> dict[str, Any]:
 
 
 def dump_json_file(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if path.exists() and load_json_file(path) == data:
+        return
+    write_text_in_chunks(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def iso_now() -> str:
@@ -402,19 +463,6 @@ def match_strength(text: str, keywords: Iterable[str]) -> float:
     return best
 
 
-def glob_match(patterns: Iterable[str], value: str) -> bool:
-    normalized = value.replace("\\", "/")
-    for pattern in patterns:
-        normalized_pattern = pattern.replace("\\", "/")
-        if fnmatch.fnmatchcase(normalized, normalized_pattern):
-            return True
-        if normalized_pattern.endswith("/**"):
-            root = normalized_pattern[:-3].rstrip("/")
-            if normalized == root or normalized.startswith(root + "/"):
-                return True
-    return False
-
-
 def current_git_commit(repo_root: Path) -> Optional[str]:
     try:
         result = subprocess.run(
@@ -443,6 +491,10 @@ def should_ignore_path(path: Path, ignore_patterns: Iterable[str], root: Path) -
 
 
 def iter_source_files(root: Path, ignore_patterns: Iterable[str]) -> Iterator[Path]:
+    if root.is_file():
+        if root.suffix.lower() in CODE_SUFFIXES | {".json", ".yaml", ".yml", ".xml", ".toml"}:
+            yield root
+        return
     for base, dirs, files in os.walk(root):
         base_path = Path(base)
         dirs[:] = [
@@ -484,49 +536,6 @@ def repo_root_from(start: Path | str | None = None) -> Path:
             best = candidate
             best_score = score
     return best or current
-
-
-def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    result = dict(base)
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = deep_merge(result[key], value)
-        elif key in result and isinstance(result[key], list) and isinstance(value, list):
-            merged = list(result[key])
-            for item in value:
-                if item not in merged:
-                    merged.append(item)
-            result[key] = merged
-        else:
-            result[key] = value
-    return result
-
-
-def profile_candidates(repo_root: Path) -> list[Path]:
-    candidates = [
-        repo_root / ".project-change-router.yaml",
-        repo_root / ".project-change-router.yml",
-        repo_root / "project-change-router.profile.yaml",
-        repo_root / "project-change-router.profile.yml",
-    ]
-    skill_profiles = profile_dir()
-    if skill_profiles.exists():
-        candidates.extend(
-            [
-                skill_profiles / f"{repo_root.name}.yaml",
-                skill_profiles / f"{repo_root.name}.yml",
-            ]
-        )
-    return [path for path in candidates if path.exists()]
-
-
-def load_active_profile(repo_root: Path) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    for path in profile_candidates(repo_root):
-        data = load_yaml_file(path)
-        if data:
-            merged = deep_merge(merged, data)
-    return merged
 
 
 def load_bundle(bundle_root: Path) -> dict[str, Any]:
@@ -1378,7 +1387,10 @@ def public_import_names(module: ModuleEntry) -> list[str]:
 
 
 def module_for_path(path: str, modules: list[ModuleEntry]) -> Optional[ModuleEntry]:
-    normalized = path.replace("\\", "/").strip("./")
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.rstrip("/")
     candidates: list[tuple[int, ModuleEntry]] = []
     for module in modules:
         if module.path == ".":
@@ -1413,26 +1425,76 @@ def parse_python_imports(path: Path) -> list[str]:
 
 def parse_js_imports(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8", errors="ignore")
-    patterns = [
-        r"""import\s+(?:type\s+)?(?:[\w*\s{},]+\s+from\s+)?["']([^"']+)["']""",
-        r"""export\s+(?:type\s+)?(?:[\w*\s{},]+\s+from\s+)?["']([^"']+)["']""",
-        r"""require\(\s*["']([^"']+)["']\s*\)""",
-    ]
-    imports: list[str] = []
-    for pattern in patterns:
-        imports.extend(re.findall(pattern, text))
-    return imports
+    return [item.specifier for item in scan_typescript_source(text).imports]
 
 
 def parse_java_imports(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8", errors="ignore")
-    return re.findall(r"^\s*import\s+([\w\.]+)\s*;", text, flags=re.M)
+    return java_imports(text)
+
+
+def _existing_python_import_target(candidate: Path) -> Optional[Path]:
+    if candidate.is_dir() and (candidate / "__init__.py").exists():
+        return candidate / "__init__.py"
+    if candidate.is_file():
+        return candidate
+    python_file = candidate.with_suffix(".py")
+    if python_file.exists():
+        return python_file
+    return None
+
+
+def _python_import_target(
+    name: str,
+    *,
+    repo_root: Path,
+    source_file: Path,
+) -> Optional[Path]:
+    if source_file.suffix.lower() != ".py":
+        return None
+    if name.startswith("."):
+        level = len(name) - len(name.lstrip("."))
+        remainder = name[level:]
+        base = source_file.parent
+        for _ in range(max(0, level - 1)):
+            base = base.parent
+        candidate = base.joinpath(*remainder.split(".")) if remainder else base
+        return _existing_python_import_target(candidate)
+    candidate = repo_root.joinpath(*name.split("."))
+    return _existing_python_import_target(candidate)
+
+
+def _import_match_score(name: str, module: ModuleEntry) -> Optional[tuple[int, int, int]]:
+    lower = name.lower()
+    matches: list[tuple[int, int, int]] = []
+    for import_name in public_import_names(module):
+        normalized = import_name.lower()
+        if lower == normalized or lower.startswith(normalized + ".") or lower.startswith(normalized + "/"):
+            matches.append((3, len(normalized), module.path.count("/")))
+    for prefix in module.lifecycle.get("package_prefixes", []):
+        normalized = str(prefix).lower()
+        if lower == normalized or lower.startswith(normalized + "."):
+            matches.append((2, len(normalized), module.path.count("/")))
+    if module.path != ".":
+        basename = Path(module.path).stem.lower()
+        if lower == basename or lower.startswith(basename + "/") or f"/{basename}/" in lower:
+            matches.append((1, len(basename), module.path.count("/")))
+    return max(matches) if matches else None
 
 
 def infer_import_reference(name: str, source_module: ModuleEntry, modules: list[ModuleEntry], repo_root: Path, source_file: Path) -> tuple[Optional[ModuleEntry], Optional[str]]:
     if not name:
         return None, None
     normalized = name.replace("\\", "/")
+    python_target = _python_import_target(
+        normalized,
+        repo_root=repo_root,
+        source_file=source_file,
+    )
+    if python_target is not None:
+        rel = normalize_rel_path(repo_root, python_target)
+        module = module_for_path(rel, modules)
+        return module, rel if module else None
     if normalized.startswith("."):
         target = (source_file.parent / normalized).resolve()
         if target.is_dir():
@@ -1446,19 +1508,14 @@ def infer_import_reference(name: str, source_module: ModuleEntry, modules: list[
         rel = normalize_rel_path(repo_root, target)
         module = module_for_path(rel, modules)
         return module, rel if module else None
-    lower = name.lower()
+    candidates: list[tuple[tuple[int, int, int], ModuleEntry]] = []
     for module in modules:
-        for import_name in public_import_names(module):
-            if lower == import_name.lower() or lower.startswith(import_name.lower() + ".") or lower.startswith(import_name.lower() + "/"):
-                return module, None
-        for prefix in module.lifecycle.get("package_prefixes", []):
-            if lower == prefix.lower() or lower.startswith(prefix.lower() + "."):
-                return module, None
-        if module.path != ".":
-            basename = Path(module.path).name.lower()
-            if lower == basename or lower.startswith(basename + "/") or f"/{basename}/" in lower:
-                return module, None
-    return None, None
+        score = _import_match_score(normalized, module)
+        if score is not None:
+            candidates.append((score, module))
+    if not candidates:
+        return None, None
+    return max(candidates, key=lambda item: item[0])[1], None
 
 
 def resolve_import_to_module(name: str, source_module: ModuleEntry, modules: list[ModuleEntry], repo_root: Path, source_file: Path) -> Optional[ModuleEntry]:
@@ -1494,20 +1551,103 @@ def discover_modules(repo_root: Path, config: Optional[dict[str, Any]] = None, p
     discovered.extend(python_modules(repo_root, ignore_patterns))
     discovered.extend(generic_modules(repo_root, ignore_patterns))
     modules = dedupe_modules(discovered, repo_root)
-    apply_profile_module_overrides(modules, profile)
+    apply_profile_module_overrides(repo_root, modules, profile)
+    prune_nested_module_key_files(repo_root, modules)
     infer_module_dependencies(repo_root, modules, merged_config)
     assign_module_ownership(repo_root, modules, profile)
     for module in modules:
-        if not module.allowed_outbound_to:
+        if (
+            not module.allowed_outbound_to
+            and not module.lifecycle.get("nested_module_boundary")
+        ):
             module.allowed_outbound_to = sorted(set(module.depends_on))
         module.lifecycle.setdefault("allowed_outbound_layers", infer_allowed_layers(module.layer))
     return modules
 
 
-def apply_profile_module_overrides(modules: list[ModuleEntry], profile: dict[str, Any]) -> None:
+def apply_profile_module_overrides(
+    repo_root: Path,
+    modules: list[ModuleEntry],
+    profile: dict[str, Any],
+) -> None:
     rules = profile.get("module_overrides", [])
+    existing_paths = {module.path for module in modules}
+    for rule in rules:
+        declared_path = str(rule.get("path") or "").replace("\\", "/").strip("/")
+        if not declared_path or declared_path in existing_paths:
+            continue
+        module_root = (repo_root / declared_path).resolve()
+        try:
+            module_root.relative_to(repo_root.resolve())
+        except ValueError:
+            continue
+        planned_path = rule.get("status") == "planned"
+        if not planned_path and (
+            not module_root.exists()
+            or not (module_root.is_dir() or module_root.is_file())
+        ):
+            continue
+        public_api = rule.get("public_api")
+        preferred_key_files: list[str] = []
+        if public_api:
+            normalized_public = str(public_api).replace("\\", "/")
+            if normalized_public.startswith(declared_path.rstrip("/") + "/"):
+                normalized_public = normalized_public[len(declared_path.rstrip("/")) + 1 :]
+            if (module_root / normalized_public).is_file():
+                preferred_key_files.append(normalized_public)
+        layer = rule.get("layer", classify_layer(declared_path))
+        modules.append(
+            ModuleEntry(
+                id=rule.get("id", f"module-{stable_slug(declared_path)}"),
+                path=declared_path,
+                layer=layer,
+                domain=rule.get("domain", extract_domain_from_path(declared_path)),
+                purpose=rule.get("purpose", f"Profile-declared module at {declared_path}"),
+                public_api=public_api,
+                source_of_truth="profile",
+                key_files=(
+                    list(rule["key_files"])
+                    if "key_files" in rule
+                    else (
+                        [module_root.name]
+                        if module_root.is_file()
+                        else choose_key_files(module_root, preferred_key_files)
+                    )
+                ),
+                allowed_inbound_from=list(rule.get("allowed_inbound_from", [])),
+                allowed_outbound_to=list(rule.get("allowed_outbound_to", [])),
+                generated=False,
+                index_sources=["profile.module_overrides"],
+                owner=rule.get("owner", "unassigned"),
+                status=rule.get("status", "active"),
+                lifecycle={
+                    "language": "python" if contains_code(module_root, {".py"}) else "generic",
+                    "source_roots": list(rule.get("source_roots", [declared_path])),
+                    "import_names": list(rule.get("import_names", [])),
+                    "allowed_outbound_layers": infer_allowed_layers(layer),
+                    "planned_path": planned_path,
+                    "nested_module_boundary": bool(
+                        rule.get("nested_module_boundary", False)
+                    ),
+                    **(
+                        {
+                            "declared_allowed_outbound_to": list(
+                                rule["allowed_outbound_to"]
+                            )
+                        }
+                        if "allowed_outbound_to" in rule
+                        else {}
+                    ),
+                    **dict(rule.get("lifecycle", {})),
+                },
+            )
+        )
+        existing_paths.add(declared_path)
     for module in modules:
         for rule in rules:
+            declared_path = str(rule.get("path") or "").replace("\\", "/").strip("/")
+            if declared_path and module.path != declared_path:
+                continue
             patterns = rule.get("path_patterns", [])
             if patterns and not glob_match(patterns, module.path):
                 continue
@@ -1519,11 +1659,51 @@ def apply_profile_module_overrides(modules: list[ModuleEntry], profile: dict[str
                 module.public_api = rule["public_api"]
             if "purpose" in rule:
                 module.purpose = rule["purpose"]
+            if "key_files" in rule:
+                module.key_files = list(rule["key_files"])
+            if "allowed_inbound_from" in rule:
+                module.allowed_inbound_from = list(rule["allowed_inbound_from"])
             if "owner" in rule:
                 module.owner = rule["owner"]
+            if "status" in rule:
+                module.status = rule["status"]
+                module.lifecycle["planned_path"] = rule["status"] == "planned"
+            if "nested_module_boundary" in rule:
+                module.lifecycle["nested_module_boundary"] = bool(
+                    rule["nested_module_boundary"]
+                )
+            if "lifecycle" in rule:
+                module.lifecycle.update(dict(rule["lifecycle"]))
+            if "allowed_outbound_to" in rule:
+                declared = list(rule["allowed_outbound_to"])
+                module.allowed_outbound_to = list(
+                    dict.fromkeys(module.allowed_outbound_to + declared)
+                )
+                module.lifecycle["declared_allowed_outbound_to"] = declared
             for key in ("import_names", "package_prefixes", "source_roots"):
                 if key in rule:
                     module.lifecycle[key] = list(dict.fromkeys(list(module.lifecycle.get(key, [])) + list(rule[key])))
+
+
+def prune_nested_module_key_files(repo_root: Path, modules: list[ModuleEntry]) -> None:
+    for module in modules:
+        module_root = repo_root / module.path if module.path != "." else repo_root
+        if module_root.is_file():
+            module.key_files = [module_root.name]
+            continue
+        retained: list[str] = []
+        for key_file in module.key_files:
+            normalized = key_file.replace("\\", "/").strip("/")
+            rel_path = (
+                normalized
+                if normalized == module.path
+                or normalized.startswith(module.path.rstrip("/") + "/")
+                else f"{module.path.rstrip('/')}/{normalized}"
+            )
+            owner = module_for_path(rel_path, modules)
+            if owner is None or owner.path == module.path:
+                retained.append(key_file)
+        module.key_files = retained
 
 
 def infer_module_dependencies(repo_root: Path, modules: list[ModuleEntry], config: dict[str, Any]) -> None:
@@ -1535,6 +1715,11 @@ def infer_module_dependencies(repo_root: Path, modules: list[ModuleEntry], confi
             continue
         deps = set(module.depends_on)
         for source_file in iter_source_files(module_root, ignore_patterns):
+            source_owner = module_for_path(
+                normalize_rel_path(repo_root, source_file), modules
+            )
+            if source_owner is not None and source_owner.path != module.path:
+                continue
             kind = file_suffix_kind(source_file)
             if kind == "python":
                 imports = parse_python_imports(source_file)
@@ -1582,10 +1767,35 @@ def assign_module_ownership(repo_root: Path, modules: list[ModuleEntry], profile
 def infer_public_entries_from_modules(modules: list[ModuleEntry]) -> list[str]:
     entries: list[str] = []
     for module in modules:
+        module_entries: list[str] = []
         if module.public_api:
-            entries.append(f"{module.path}/{module.public_api}" if module.path != "." else module.public_api)
-        else:
-            entries.extend(module.key_files[:1])
+            public_api = str(module.public_api).replace("\\", "/").strip("/")
+            suffix = Path(public_api).suffix.lower()
+            looks_like_entry_file = suffix in CODE_SUFFIXES or suffix in {
+                ".json",
+                ".md",
+                ".toml",
+                ".xml",
+                ".yaml",
+                ".yml",
+            }
+            if looks_like_entry_file:
+                if module.path == ".":
+                    module_entries.append(public_api)
+                elif public_api == module.path or public_api.startswith(module.path.rstrip("/") + "/"):
+                    module_entries.append(public_api)
+                else:
+                    module_entries.append(f"{module.path.rstrip('/')}/{public_api}")
+        if not module_entries:
+            for key_file in module.key_files[:1]:
+                normalized = str(key_file).replace("\\", "/").strip("/")
+                if module.path == ".":
+                    module_entries.append(normalized)
+                elif normalized == module.path or normalized.startswith(module.path.rstrip("/") + "/"):
+                    module_entries.append(normalized)
+                else:
+                    module_entries.append(f"{module.path.rstrip('/')}/{normalized}")
+        entries.extend(module_entries)
     dedup: list[str] = []
     for entry in entries:
         normalized = entry.replace("\\", "/")
@@ -1633,19 +1843,30 @@ def infer_extension_points(repo_root: Path, modules: list[ModuleEntry], ignore_p
     return dedup[:12]
 
 
-def infer_related_tests(repo_root: Path, modules: list[ModuleEntry]) -> list[str]:
+def infer_related_tests(
+    repo_root: Path,
+    modules: list[ModuleEntry],
+    ignore_patterns: Iterable[str] = (),
+) -> list[str]:
     tests: list[str] = []
     candidates = []
+    effective_ignores = list(
+        dict.fromkeys(DEFAULT_IGNORE_GLOBS + list(ignore_patterns))
+    )
     for base in ("tests", "test", "src/test", "src/tests"):
         root = repo_root / base
         if root.exists():
-            candidates.extend(root.rglob("*"))
+            candidates.extend(sorted(root.rglob("*")))
     module_tokens = set()
     for module in modules:
         module_tokens.update(text_tokens(module.domain))
         module_tokens.update(text_tokens(Path(module.path).name))
     for file in candidates:
-        if not file.is_file():
+        if (
+            not file.is_file()
+            or should_ignore_path(file, effective_ignores, repo_root)
+            or file.suffix.lower() in {".pyc", ".pyo"}
+        ):
             continue
         rel = normalize_rel_path(repo_root, file)
         if any(token and token in rel.lower() for token in module_tokens):
@@ -1723,8 +1944,17 @@ def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], prof
             item_lifecycle["deprecation_date"] = item["deprecation_date"]
         if item.get("migration_note"):
             item_lifecycle["migration_note"] = item["migration_note"]
+        declared_public_entries = list(
+            dict.fromkeys(item.get("public_entries", []))
+        )
+        inferred_public_entries = infer_public_entries_from_modules(matched)
+        public_entries = (
+            declared_public_entries
+            if item_lifecycle.get("replace_snapshot_boundaries")
+            else list(dict.fromkeys(declared_public_entries + inferred_public_entries))
+        )
         item_lifecycle["public_entry_semantics"] = public_entry_semantics(
-            list(dict.fromkeys(item.get("public_entries", []) + infer_public_entries_from_modules(matched))),
+            public_entries,
             "governed",
             True,
         )
@@ -1745,11 +1975,11 @@ def apply_profile_capabilities(repo_root: Path, modules: list[ModuleEntry], prof
                     "paths": [module.path for module in matched],
                 },
                 owner_modules=[module.path for module in matched],
-                public_entries=list(dict.fromkeys(item.get("public_entries", []) + infer_public_entries_from_modules(matched))),
+                public_entries=public_entries,
                 extension_points=list(dict.fromkeys(item.get("extension_points", []) + infer_extension_points(repo_root, matched, ignore_patterns))),
                 route_defaults=item.get("route_defaults", {"preferred_action": "reuse"}),
                 contracts=item.get("contracts", []),
-                related_tests=list(dict.fromkeys(item.get("related_tests", []) + infer_related_tests(repo_root, matched))),
+                related_tests=list(dict.fromkeys(item.get("related_tests", []) + infer_related_tests(repo_root, matched, ignore_patterns))),
                 test_bindings=item.get("test_bindings", []),
                 forbidden_patterns=item.get("forbidden_patterns", []),
                 dependent_modules=[],
@@ -1783,7 +2013,7 @@ def infer_capabilities_from_modules(repo_root: Path, modules: list[ModuleEntry],
         domain = grouped_modules[0].domain
         public_entries = infer_public_entries_from_modules(grouped_modules)
         extension_points = infer_extension_points(repo_root, grouped_modules, ignore_patterns)
-        related_tests = infer_related_tests(repo_root, grouped_modules)
+        related_tests = infer_related_tests(repo_root, grouped_modules, ignore_patterns)
         dependent_modules: set[str] = set()
         for module in grouped_modules:
             dependent_modules.update(reverse_deps.get(module.path, []))
@@ -1892,45 +2122,6 @@ def build_capability_catalog(repo_root: Path, modules: list[ModuleEntry], profil
     }
 
 
-def build_ownership(capabilities: list[CapabilityEntry], modules: list[ModuleEntry], repo_stage: str) -> dict[str, Any]:
-    owners: list[dict[str, Any]] = []
-    for capability in capabilities:
-        primary = modules[0].owner if modules else "unassigned"
-        for module in modules:
-            if module.path in capability.owner_modules:
-                primary = module.owner
-                break
-        owners.append(
-            {
-                "scope": "capability",
-                "target": capability.id,
-                "primary": primary,
-                "reviewers": [primary],
-                "escalation_group": primary,
-                "provisional": repo_stage in {"seed", "emerging"} or primary == "unassigned" or str(primary).startswith("provisional:"),
-            }
-        )
-    for module in modules:
-        owners.append(
-            {
-                "scope": "module",
-                "target": module.path,
-                "primary": module.owner,
-                "reviewers": [module.owner],
-                "escalation_group": module.owner,
-                "provisional": repo_stage in {"seed", "emerging"} or module.owner == "unassigned" or str(module.owner).startswith("provisional:"),
-            }
-        )
-    return {
-        "schema_version": 1,
-        "generated_at": iso_now(),
-        "generated_by": "bootstrap_router",
-        "source_repository": "workspace",
-        "source_commit": None,
-        "owners": owners,
-    }
-
-
 def looks_like_file_path(path: str) -> bool:
     normalized = path.replace("\\", "/").strip("/")
     if not normalized or normalized == ".":
@@ -1965,7 +2156,12 @@ def root_owner_fallback_modules(capability: CapabilityEntry, modules: list[Modul
     return sorted(dict.fromkeys(matches))
 
 
-def build_path_to_capability_map(repo_root: Path, capabilities: list[CapabilityEntry], modules: list[ModuleEntry]) -> dict[str, Any]:
+def build_path_to_capability_map(
+    repo_root: Path,
+    capabilities: list[CapabilityEntry],
+    modules: list[ModuleEntry],
+    profile: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     module_by_path = {module.path: module for module in modules}
     claims: dict[str, list[dict[str, Any]]] = defaultdict(list)
     capability_by_id = {capability.id: capability for capability in capabilities}
@@ -2001,6 +2197,45 @@ def build_path_to_capability_map(repo_root: Path, capabilities: list[CapabilityE
                         "module": str(path),
                     }
                 )
+        for raw_pattern in capability.lifecycle.get("consumer_path_patterns", []):
+            normalized = str(raw_pattern).replace("\\", "/").strip("/")
+            if not normalized:
+                continue
+            claims[normalized].append(
+                {
+                    "capability": None,
+                    "consumer_capability": capability.id,
+                    "source": "capability.consumer_path_patterns",
+                    "module": None,
+                }
+            )
+
+    for rule in (profile or {}).get("ownership_rules", []):
+        owner = str(rule.get("owner") or "")
+        for raw_pattern in rule.get("path_patterns", []):
+            normalized = str(raw_pattern).replace("\\", "/").strip("/")
+            if not normalized:
+                continue
+            pattern = normalized if any(marker in normalized for marker in "*?[") else module_path_pattern(normalized)
+            module = normalized.split("*", 1)[0].rstrip("/") or normalized
+            claims[pattern].append(
+                {
+                    "capability": owner if owner in capability_by_id else None,
+                    "source": "profile.ownership_rules",
+                    "module": module,
+                }
+            )
+
+    for retired_path, capability_id in retired_profile_path_routes(profile or {}):
+        if capability_id not in capability_by_id:
+            continue
+        claims[retired_path].append(
+            {
+                "capability": capability_id,
+                "source": "profile_lifecycle.migrations",
+                "module": None,
+            }
+        )
 
     covered_modules = {
         item["module"]
@@ -2027,6 +2262,13 @@ def build_path_to_capability_map(repo_root: Path, capabilities: list[CapabilityE
     lookup: dict[str, list[str]] = {}
     for pattern, claim_items in sorted(claims.items()):
         capability_ids = sorted({str(item["capability"]) for item in claim_items if item.get("capability")})
+        consumer_capability_ids = sorted(
+            {
+                str(item["consumer_capability"])
+                for item in claim_items
+                if item.get("consumer_capability")
+            }
+        )
         sources = sorted({str(item["source"]) for item in claim_items})
         modules_for_pattern = sorted({str(item["module"]) for item in claim_items if item.get("module")})
         code_file_count = 0
@@ -2043,6 +2285,7 @@ def build_path_to_capability_map(repo_root: Path, capabilities: list[CapabilityE
         entry = {
             "path_pattern": pattern,
             "capabilities": capability_ids,
+            "consumer_capabilities": consumer_capability_ids,
             "relationship": relationship,
             "sources": sources,
             "modules": modules_for_pattern,
@@ -2146,6 +2389,7 @@ def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, A
         ),
         "high_risk_capability_ids": high_risk_capability_ids(capabilities, profile),
         "high_risk_module_patterns": risk_profile.get("path_patterns", []),
+        "sensitive_review_phrases": risk_profile.get("review_phrases", []),
         "dependency_priority": infer_dependency_priority(capabilities, profile),
         "new_capability_policy": {
             "minimum_positive_conditions": 2,
@@ -2219,6 +2463,10 @@ def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, A
             **profile.get("reuse_scan_retention", {}),
             **profile.get("guardrails", {}).get("reuse_scan_retention", {}),
         },
+        "architecture_baseline": list(profile.get("guardrails", {}).get("architecture_baseline", [])),
+        "central_growth_baseline": list(profile.get("guardrails", {}).get("central_growth_baseline", [])),
+        "forbidden_implementation_roots": list(profile.get("guardrails", {}).get("forbidden_implementation_roots", [])),
+        "exclusive_source_owners": list(profile.get("guardrails", {}).get("exclusive_source_owners", [])),
         "capability_lifecycle_policy": {
             "stages": ["provisional", "candidate", "stable", "governed-capability", "deprecated"],
             "promotion_rules": [
@@ -2250,6 +2498,7 @@ def build_change_rules(capabilities: list[CapabilityEntry], profile: dict[str, A
             "required_steps": [
                 "rebuild_index_if_boundary_changed",
                 "validate_bundle",
+                "structure_guardrails",
                 "governance_audit",
                 "route_evaluation",
                 "record_feedback_after_review_or_override",
@@ -2303,6 +2552,7 @@ def build_router_config(repo_root: Path, modules: list[ModuleEntry], profile: di
     manifest_kind = detect_repo_manifest_kind(repo_root)
     supported_languages = discover_languages(repo_root, modules)
     discovery_profile = profile.get("discovery", {})
+    evaluation_profile = profile.get("evaluation", {})
     return {
         "schema_version": 1,
         "generated_at": iso_now(),
@@ -2330,10 +2580,14 @@ def build_router_config(repo_root: Path, modules: list[ModuleEntry], profile: di
             "evaluation_set_days": 30,
         },
         "evaluation": {
-            "top1_accuracy_threshold": 0.80,
-            "review_precision_threshold": 0.90,
-            "minimum_case_count": 12,
-            "minimum_capability_coverage_ratio": 0.80,
+            "enforcement_enabled": evaluation_profile.get("enforcement_enabled", True),
+            "top1_accuracy_threshold": evaluation_profile.get("top1_accuracy_threshold", 0.85),
+            "top1_capability_accuracy_threshold": evaluation_profile.get("top1_capability_accuracy_threshold", 0.85),
+            "review_precision_threshold": evaluation_profile.get("review_precision_threshold", 0.90),
+            "review_recall_threshold": evaluation_profile.get("review_recall_threshold", 1.0),
+            "secondary_contract_accuracy_threshold": evaluation_profile.get("secondary_contract_accuracy_threshold", 1.0),
+            "minimum_case_count": evaluation_profile.get("minimum_case_count", 30),
+            "minimum_capability_coverage_ratio": evaluation_profile.get("minimum_capability_coverage_ratio", 0.80),
             "mode": stage_info["signals"].get("evaluation_mode", "generated_only"),
         },
         "route_reports_dir": "reports/route-decisions",
@@ -2464,27 +2718,40 @@ def build_evaluation_set(capabilities: list[CapabilityEntry], module_map: dict[s
         "source_repository": "workspace",
         "source_commit": None,
         "mode": "generated_only",
+        "curated_case_ids": [],
         "cases": cases,
     }
 
 
 def merge_curated_evaluation(existing: dict[str, Any], generated: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     profile_eval = profile.get("evaluation", {})
-    curated_cases = list(profile_eval.get("cases", []))
-    if existing.get("mode") == "curated":
-        curated_cases.extend(existing.get("cases", []))
-    if profile_eval.get("mode") == "curated":
+    profile_cases = list(profile_eval.get("cases", []))
+    existing_cases = list(existing.get("cases", [])) if existing.get("mode") in {"curated", "hybrid"} else []
+    raw_existing_ids = existing.get("curated_case_ids", [])
+    existing_ids = {
+        case_id for case_id in raw_existing_ids if isinstance(case_id, str)
+    } if isinstance(raw_existing_ids, list) else set()
+    curated_cases = profile_cases + [
+        case for case in existing_cases if str(case.get("id")) in existing_ids
+    ]
+    if profile_eval.get("mode") == "curated" and profile_cases:
         mode = "curated"
     elif curated_cases:
+        mode = "hybrid"
+    elif existing_cases:
         mode = "hybrid"
     else:
         mode = generated.get("mode", "generated_only")
     merged = dict(generated)
     merged["mode"] = mode
-    if curated_cases:
+    merged["curated_case_ids"] = list(dict.fromkeys(
+        str(case.get("id")) for case in curated_cases if case.get("id")
+    ))
+    if curated_cases or existing_cases:
         seen: set[str] = set()
         ordered_cases = []
-        for case in curated_cases + generated.get("cases", []):
+        case_sources = curated_cases if mode == "curated" else curated_cases + existing_cases + generated.get("cases", [])
+        for case in case_sources:
             case_id = str(case.get("id"))
             if case_id in seen:
                 continue
@@ -2494,24 +2761,119 @@ def merge_curated_evaluation(existing: dict[str, Any], generated: dict[str, Any]
     return merged
 
 
-def capability_conflicts(bundle: dict[str, Any]) -> list[str]:
-    conflicts: list[str] = []
-    owner_to_caps: dict[str, list[str]] = defaultdict(list)
-    public_entry_to_caps: dict[str, list[str]] = defaultdict(list)
-    for capability in capability_entries(bundle):
-        for owner in capability.owner_modules:
-            owner_to_caps[owner].append(capability.id)
-        for entry in capability.public_entries:
-            public_entry_to_caps[entry].append(capability.id)
-    for owner, caps in owner_to_caps.items():
-        unique = sorted(set(caps))
-        if len(unique) > 1:
-            conflicts.append(f"module {owner} is owned by multiple capabilities: {', '.join(unique)}")
-    for entry, caps in public_entry_to_caps.items():
-        unique = sorted(set(caps))
-        if len(unique) > 1:
-            conflicts.append(f"public entry {entry} is claimed by multiple capabilities: {', '.join(unique)}")
-    return conflicts
+def merge_curated_records(existing: dict[str, Any], generated: dict[str, Any], collection: str, identity: str) -> dict[str, Any]:
+    profile_backed = {
+        str(item.get(identity)): item
+        for item in generated.get(collection, [])
+        if item.get("source_of_truth") == "profile" and item.get(identity)
+    }
+    profile_modules_by_id = {
+        str(item.get("id")): item
+        for item in generated.get(collection, [])
+        if collection == "modules"
+        and item.get("source_of_truth") == "profile"
+        and item.get("id")
+    }
+    preserved = []
+    for item in existing.get(collection, []):
+        replacement = profile_backed.get(str(item.get(identity)))
+        if replacement is not None:
+            replace_boundaries = bool(
+                replacement.get("lifecycle", {}).get("replace_snapshot_boundaries")
+            )
+            current = (
+                dict(replacement)
+                if collection == "modules" and replace_boundaries
+                else deep_merge(dict(item), replacement)
+            )
+            if collection == "modules":
+                replacement_lifecycle = replacement.get("lifecycle", {})
+                if "declared_allowed_outbound_to" not in replacement_lifecycle:
+                    current_lifecycle = dict(current.get("lifecycle", {}))
+                    current_lifecycle.pop("declared_allowed_outbound_to", None)
+                    current["lifecycle"] = current_lifecycle
+            if collection == "capabilities" and replace_boundaries:
+                for field_name in (
+                    "intent_keywords",
+                    "aliases",
+                    "business_intents",
+                    "scope",
+                    "owner_modules",
+                    "public_entries",
+                    "extension_points",
+                    "route_defaults",
+                    "contracts",
+                    "related_tests",
+                    "test_bindings",
+                    "forbidden_patterns",
+                    "dependent_modules",
+                    "anti_patterns",
+                ):
+                    if field_name in replacement:
+                        current[field_name] = replacement[field_name]
+                replacement_lifecycle = replacement.get("lifecycle", {})
+                current_lifecycle = dict(current.get("lifecycle", {}))
+                current_lifecycle.update(replacement_lifecycle)
+                current["lifecycle"] = current_lifecycle
+            preserved.append(current)
+            continue
+        if collection == "modules":
+            same_id = profile_modules_by_id.get(str(item.get("id")))
+            if same_id is not None and same_id.get(identity) != item.get(identity):
+                continue
+        if item.get("source_of_truth") == "generated":
+            continue
+        preserved.append(dict(item))
+    if collection == "capabilities":
+        for item in preserved:
+            lifecycle = dict(item.get("lifecycle", {}))
+            lifecycle.setdefault("definition_version", "1.0")
+            lifecycle.setdefault("status", item.get("status", "candidate"))
+            lifecycle.setdefault("stage", item.get("stage", lifecycle["status"]))
+            lifecycle.setdefault("changelog", [{"date": today_date(), "event": "curated_bundle_lifecycle_calibrated"}])
+            item["lifecycle"] = lifecycle
+    seen = {str(item.get(identity)) for item in preserved if item.get(identity)}
+    curated_paths = set(seen)
+    if collection == "modules":
+        curated_paths.update(
+            str(path)
+            for item in preserved
+            for field_name in ("key_files", "index_sources")
+            for path in item.get(field_name, [])
+            if path
+        )
+    curated_owner_modules = {
+        str(owner)
+        for item in preserved
+        for owner in item.get("owner_modules", [])
+        if owner
+    }
+    merged_items = list(preserved)
+    for item in generated.get(collection, []):
+        item_id = str(item.get(identity))
+        if not item_id or item_id in seen:
+            continue
+        if collection == "modules" and item.get("source_of_truth") == "generated":
+            prefix = item_id.rstrip("/") + "/"
+            if any(path.startswith(prefix) for path in curated_paths):
+                continue
+        if collection == "capabilities" and item.get("source_of_truth") == "generated":
+            generated_owners = {str(owner) for owner in item.get("owner_modules", []) if owner}
+            if generated_owners and generated_owners <= curated_owner_modules:
+                continue
+        seen.add(item_id)
+        merged_items.append(item)
+    if collection == "capabilities":
+        for item in merged_items:
+            item["related_tests"] = [
+                path
+                for path in item.get("related_tests", [])
+                if "__pycache__" not in Path(str(path).replace("\\", "/")).parts
+                and Path(str(path)).suffix.lower() not in {".pyc", ".pyo"}
+            ]
+    merged = dict(generated)
+    merged[collection] = merged_items
+    return merged
 
 
 def code_file_count_for_rel_path(repo_root: Path, rel_path: str) -> int:
@@ -2526,7 +2888,19 @@ def code_file_count_for_rel_path(repo_root: Path, rel_path: str) -> int:
 
 
 def capability_code_file_count(repo_root: Path, capability: CapabilityEntry) -> int:
-    return sum(code_file_count_for_rel_path(repo_root, module_path) for module_path in capability.owner_modules)
+    files: set[str] = set()
+    for module_path in capability.owner_modules:
+        path = repo_root / module_path
+        if module_path == ".":
+            path = repo_root
+        if path.is_file() and path.suffix.lower() in CODE_SUFFIXES:
+            files.add(path.resolve().as_posix())
+        elif path.is_dir():
+            files.update(
+                candidate.resolve().as_posix()
+                for candidate in directory_code_files(path, CODE_SUFFIXES)
+            )
+    return len(files)
 
 
 def profile_capability_ids(profile: dict[str, Any]) -> set[str]:
@@ -2568,117 +2942,6 @@ def ownership_rule_granularity(pattern: str) -> str:
     return "path"
 
 
-def build_governance_repair_suggestions(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    suggestions: list[dict[str, Any]] = []
-    for finding in findings:
-        rule = finding.get("rule")
-        details = finding.get("details", {})
-        if rule == "profile-capability-not-in-catalog":
-            for capability in details.get("missing_capabilities", []):
-                suggestions.append(
-                    {
-                        "kind": "profile_path_pattern_fix",
-                        "target": capability,
-                        "suggestion": "Fix path_patterns so this profile capability matches discovered modules, or remove the stale capability entry.",
-                        "confidence": "high",
-                    }
-                )
-        elif rule == "change-rule-references-unknown-capability":
-            for capability in details.get("unknown_capabilities", []):
-                suggestions.append(
-                    {
-                        "kind": "change_rules_reference_fix",
-                        "target": capability,
-                        "suggestion": "Remove this stale capability reference or add the missing capability before trusting routing rules.",
-                        "confidence": "high",
-                    }
-                )
-        elif rule == "catalog-has-unprofiled-capabilities":
-            for capability in details.get("generated_capabilities", []):
-                suggestions.append(
-                    {
-                        "kind": "promote_generated_capability",
-                        "target": capability,
-                        "suggestion": "If this boundary is real, add a profile capability with contracts, public_entries, ownership, lifecycle, and tests.",
-                        "confidence": "medium",
-                    }
-                )
-        elif rule in {"module-without-capability-path-index", "path-to-capability-map-missing"}:
-            for module in details.get("uncovered_modules", []) or ["project-change-router/references/path-to-capability-map.yaml"]:
-                suggestions.append(
-                    {
-                        "kind": "path_index_rebuild_or_owner_rule",
-                        "target": module,
-                        "suggestion": "Rebuild the bundle and add ownership/capability rules for uncovered stable module roots.",
-                        "confidence": "high" if rule == "path-to-capability-map-missing" else "medium",
-                    }
-                )
-        elif rule in {"capability-root-owner-too-broad", "path-map-repository-wide-capability"}:
-            for capability in details.get("capabilities", []) or [finding.get("target")]:
-                suggestions.append(
-                    {
-                        "kind": "narrow_capability_ownership",
-                        "target": capability,
-                        "suggestion": "Replace repo-root ownership with concrete owner_modules, public_entries, and path patterns such as migrations/**, app/<domain>/**, or explicit schema/test bindings.",
-                        "confidence": "high",
-                    }
-                )
-        elif rule in {"profile-capability-contracts-too-thin", "large-capability-contracts-too-thin"}:
-            suggestions.append(
-                {
-                    "kind": "contract_completion",
-                    "target": finding.get("target"),
-                    "suggestion": "Add scope, boundary, cross-capability, and risk contracts. Keep each contract concrete and enforceable.",
-                    "confidence": "high",
-                }
-            )
-        elif rule == "large-capability-forbidden-density-too-low":
-            suggestions.append(
-                {
-                    "kind": "forbidden_pattern_completion",
-                    "target": finding.get("target"),
-                    "suggestion": "Add forbidden patterns for duplicate implementation centers, bypassed public APIs, misplaced caches, and cross-layer writes.",
-                    "confidence": "medium",
-                }
-            )
-        elif rule == "dependency-priority-incomplete":
-            suggestions.append(
-                {
-                    "kind": "dependency_priority_completion",
-                    "target": "references/change-rules.yaml",
-                    "suggestion": "Assign lower priority numbers to foundation/core capabilities and higher numbers to facade, adapter, and UI capabilities.",
-                    "confidence": "high",
-                }
-            )
-        elif rule == "profile-capability-without-evaluation-case":
-            for capability in details.get("uncovered_capabilities", []):
-                suggestions.append(
-                    {
-                        "kind": "evaluation_case_completion",
-                        "target": capability,
-                        "suggestion": "Add at least one positive route case and one boundary or review case for this capability.",
-                        "confidence": "high",
-                    }
-                )
-        elif rule == "deprecated-capability-migration-metadata-missing":
-            suggestions.append(
-                {
-                    "kind": "lifecycle_metadata_completion",
-                    "target": finding.get("target"),
-                    "suggestion": "Add superseded_by, deprecation_date, migration_note, affected callers, and migration tests.",
-                    "confidence": "high",
-                }
-            )
-    deduped: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for suggestion in suggestions:
-        key = (str(suggestion.get("kind")), str(suggestion.get("target")))
-        if key not in seen:
-            seen.add(key)
-            deduped.append(suggestion)
-    return deduped[:50]
-
-
 def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str, Any]:
     profile = load_active_profile(repo_root)
     capabilities = capability_entries(bundle)
@@ -2687,7 +2950,53 @@ def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str
     profile_ids = profile_capability_ids(profile)
     generated_ids = {capability.id for capability in capabilities if capability.source_of_truth == "generated"}
     profile_backed_ids = {capability.id for capability in capabilities if capability.source_of_truth == "profile"}
-    findings: list[dict[str, Any]] = []
+    findings = profile_source_lifecycle_findings(repo_root)
+
+    capability_owner_targets = [
+        str(item.get("target") or "")
+        for item in profile.get("capability_ownership", [])
+        if isinstance(item, dict)
+    ]
+    duplicate_owner_targets = sorted(
+        target
+        for target in set(capability_owner_targets)
+        if target and capability_owner_targets.count(target) > 1
+    )
+    unknown_owner_targets = sorted(
+        target
+        for target in set(capability_owner_targets)
+        if target and target not in capability_ids
+    )
+    missing_owner_target_count = capability_owner_targets.count("")
+    if duplicate_owner_targets or unknown_owner_targets or missing_owner_target_count:
+        add_governance_finding(
+            findings,
+            "P0",
+            "capability-ownership-profile-invalid",
+            "Capability ownership records must target one existing capability exactly once.",
+            "profile.capability_ownership",
+            "Remove duplicate or stale owner records and declare one exact target per capability owner.",
+            {
+                "duplicate_targets": duplicate_owner_targets,
+                "unknown_targets": unknown_owner_targets,
+                "missing_target_count": missing_owner_target_count,
+            },
+        )
+    ownership_conflicts = [
+        conflict
+        for conflict in capability_conflicts(bundle)
+        if conflict.startswith("capability ") and " conflicts with module " in conflict
+    ]
+    if ownership_conflicts:
+        add_governance_finding(
+            findings,
+            "P0",
+            "capability-ownership-conflict",
+            "Capability and module ownership records disagree for the same canonical surface.",
+            "references/ownership.yaml",
+            "Resolve the owner conflict in the canonical profile and rebuild before routing writes.",
+            {"conflicts": ownership_conflicts},
+        )
 
     profile_missing_from_catalog = sorted(profile_ids - capability_ids)
     if profile_missing_from_catalog:
@@ -2731,6 +3040,28 @@ def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str
         )
 
     path_map = bundle.get("path_to_capability_map", {})
+    path_map_references = {
+        str(capability_id)
+        for entry in path_map.get("path_index", [])
+        for field in (
+            "capabilities",
+            "consumer_capabilities",
+            "dependent_capabilities",
+        )
+        for capability_id in entry.get(field, [])
+        if str(capability_id).strip()
+    }
+    unknown_path_map_references = sorted(path_map_references - capability_ids)
+    if unknown_path_map_references:
+        add_governance_finding(
+            findings,
+            "P0",
+            "path-map-references-unknown-capability",
+            "The path-to-capability map references capabilities absent from the catalog.",
+            "references/path-to-capability-map.yaml",
+            "Remove stale references or restore the curated capability, then rebuild and validate before routing writes.",
+            {"unknown_capabilities": unknown_path_map_references},
+        )
     if capabilities and not path_map.get("path_index"):
         add_governance_finding(
             findings,
@@ -2815,13 +3146,45 @@ def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str
         )
 
     owner_rules = profile.get("ownership_rules", [])
+    capability_by_id = {capability.id: capability for capability in capabilities}
+    module_by_path = {module.path: module for module in modules}
+    profile_capability_patterns = {
+        str(item.get("id")): {
+            str(pattern).replace("\\", "/").strip()
+            for pattern in item.get("path_patterns", [])
+        }
+        for item in profile.get("capabilities", [])
+        if item.get("id")
+    }
     broad_rules = []
     file_rules = []
     for rule in owner_rules:
         for pattern in rule.get("path_patterns", []):
             granularity = ownership_rule_granularity(str(pattern))
             if granularity in {"repository", "broad-directory"}:
-                broad_rules.append(pattern)
+                root = str(pattern).replace("\\", "/").removesuffix("/**").rstrip("/")
+                module = module_by_path.get(root)
+                stable_capabilities = [
+                    capability
+                    for capability in capability_by_id.values()
+                    if root in capability.owner_modules
+                    and capability.status == "stable"
+                    and capability.source_of_truth == "profile"
+                    and str(pattern).replace("\\", "/").strip()
+                    in profile_capability_patterns.get(capability.id, set())
+                ]
+                owner = str(rule.get("owner") or "")
+                declared_stable_root = bool(
+                    granularity == "broad-directory"
+                    and len(stable_capabilities) == 1
+                    and module
+                    and owner == str(module.owner)
+                    and owner.lower() not in {"", "unknown", "unassigned", "none"}
+                    and not owner.lower().startswith("provisional:")
+                    and module.layer in {"governance", "infra"}
+                )
+                if not declared_stable_root:
+                    broad_rules.append(pattern)
             elif granularity == "file":
                 file_rules.append(pattern)
     if broad_rules:
@@ -2876,7 +3239,10 @@ def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str
                 {"code_file_count": file_count, "contract_count": contract_count, "minimum": min_large_contracts},
             )
         if capability.contracts:
-            lengths = [len(contract) for contract in capability.contracts]
+            lengths = [
+                len(contract_description(contract))
+                for contract in capability.contracts
+            ]
             avg_len = sum(lengths) / len(lengths)
             if avg_len < min_chars:
                 add_governance_finding(
@@ -2958,22 +3324,7 @@ def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str
         )
 
     eval_cases = bundle.get("evaluation_set", {}).get("cases", [])
-    covered_capabilities = {
-        capability
-        for case in eval_cases
-        for capability in case.get("expected_capabilities", [])
-    }
-    uncovered_profile_cases = sorted(profile_backed_ids - covered_capabilities)
-    if uncovered_profile_cases:
-        add_governance_finding(
-            findings,
-            "P1",
-            "profile-capability-without-evaluation-case",
-            "Profile-backed capabilities are missing evaluation coverage.",
-            "references/evaluation-set.yaml",
-            "Add at least one positive case and one boundary/regression case for each curated capability.",
-            {"uncovered_capabilities": uncovered_profile_cases[:50]},
-        )
+    findings.extend(build_stable_capability_governance_findings(bundle))
     if bundle.get("evaluation_set", {}).get("mode") == "generated_only" and bundle.get("config", {}).get("repo_stage") in {"structured", "governed"}:
         add_governance_finding(
             findings,
@@ -3026,6 +3377,7 @@ def build_router_bundle(repo_root: Path) -> dict[str, Any]:
         "source_commit": current_git_commit(repo_root),
         "modules": [module.to_dict() for module in preliminary_modules],
     }
+    module_map = merge_curated_records(existing_bundle.get("module_map", {}), module_map, "modules", "path")
     modules = [ModuleEntry(**item) for item in module_map["modules"]]
     capability_catalog = {
         "schema_version": 1,
@@ -3038,6 +3390,9 @@ def build_router_bundle(repo_root: Path) -> dict[str, Any]:
             for capability in infer_capabilities_from_modules(repo_root, modules, profile, initial_stage, feedback_items)
         ],
     }
+    capability_catalog = merge_curated_records(
+        existing_bundle.get("capability_catalog", {}), capability_catalog, "capabilities", "id"
+    )
     capabilities = [CapabilityEntry(**item) for item in capability_catalog["capabilities"]]
     repo_stage, stage_info = classify_repo_stage(modules, capabilities, profile, repo_root, feedback_items)
     config = build_router_config(repo_root, modules, profile, stage_info)
@@ -3055,10 +3410,18 @@ def build_router_bundle(repo_root: Path) -> dict[str, Any]:
     if stage_info["signals"].get("manual_feedback_count", 0) == 0:
         warnings.append("no manual feedback confirmations have been recorded yet")
     config["warnings"] = warnings
-    ownership = build_ownership(capabilities, modules, repo_stage)
-    change_rules = build_change_rules(capabilities, profile, repo_stage)
-    path_to_capability_map = build_path_to_capability_map(repo_root, capabilities, modules)
-    exception_registry = build_exception_registry(repo_root, profile)
+    ownership = build_ownership(capabilities, modules, repo_stage, profile)
+    generated_change_rules = build_change_rules(capabilities, profile, repo_stage)
+    existing_change_rules = existing_bundle.get("change_rules", {})
+    change_rules = dict(existing_change_rules) if existing_change_rules else dict(generated_change_rules)
+    for rule_key, rule_value in generated_change_rules.items():
+        change_rules.setdefault(rule_key, rule_value)
+    change_rules = refresh_profile_structure_guardrails(change_rules, generated_change_rules)
+    change_rules["architecture_baseline"] = generated_change_rules["architecture_baseline"]
+    for metadata_key in ("schema_version", "generated_at", "generated_by", "source_repository", "source_commit"):
+        change_rules[metadata_key] = generated_change_rules[metadata_key]
+    path_to_capability_map = build_path_to_capability_map(repo_root, capabilities, modules, profile)
+    exception_registry = existing_bundle.get("exception_registry") or build_exception_registry(repo_root, profile)
     generated_evaluation = build_evaluation_set(capabilities, module_map, repo_stage)
     evaluation_set = merge_curated_evaluation(existing_bundle.get("evaluation_set", {}), generated_evaluation, profile)
     bundle = {
@@ -3087,39 +3450,10 @@ def route_bundle_from_repo(repo_root: Path) -> dict[str, Any]:
     return bundle
 
 
-def parse_request_type(request_text: str) -> str:
-    text = request_text.lower()
-    if any(word in text for word in ("bug", "fix", "repair", "regression", "修复", "修正")):
-        return "bug-fix"
-    if any(word in text for word in ("refactor", "extract", "cleanup", "重构", "抽取")):
-        return "refactor"
-    if any(word in text for word in ("migrate", "migration", "升级", "迁移")):
-        return "migration"
-    if any(word in text for word in ("add", "new", "create", "introduce", "新增", "创建", "引入")):
-        return "feature-addition"
-    return "feature-modification"
-
-
-def request_duplicate_signal(request_text: str, changed_paths: Iterable[str]) -> tuple[bool, int]:
-    text = request_text.lower()
-    words = ("extract", "duplicate", "shared", "common", "重复", "抽取", "复用", "共享")
-    count = 0
-    if any(word in text for word in words):
-        count += 1
-    normalized_paths = [path.replace("\\", "/") for path in changed_paths]
-    top_level = {item.split("/")[0] for item in normalized_paths if item}
-    if len(top_level) > 1:
-        count += 1
-    if len(normalized_paths) >= 2:
-        count += 1
-    return count >= 2, count
-
-
 def request_high_risk(request_text: str, changed_paths: Iterable[str], modules: list[ModuleEntry], bundle: dict[str, Any]) -> bool:
-    text = request_text.lower()
     rules = bundle.get("change_rules", {})
     keywords = list(dict.fromkeys(DEFAULT_HIGH_RISK_KEYWORDS + bundle.get("config", {}).get("high_risk_keywords", [])))
-    if any(keyword in text for keyword in keywords):
+    if _request_has_high_risk_keyword(request_text, keywords):
         return True
     path_patterns = rules.get("high_risk_module_patterns", [])
     for path in changed_paths:
@@ -3134,89 +3468,35 @@ def request_high_risk(request_text: str, changed_paths: Iterable[str], modules: 
     return False
 
 
-def request_targets_existing_capability(request_text: str) -> bool:
-    text = request_text.lower()
-    negative_patterns = (
-        "no existing",
-        "not existing",
-        "without existing",
-        "does not map to any existing",
-        "doesn't map to any existing",
-        "不存在现有",
-        "没有现有",
-        "不属于现有",
-    )
-    if any(pattern in text for pattern in negative_patterns):
-        return False
-    phrases = (
-        "existing",
-        "reuse",
-        "extend",
-        "current",
-        "already",
-        "现有",
-        "已有",
-        "复用",
-        "扩展",
-    )
-    return any(phrase in text for phrase in phrases)
-
-
-def request_prefers_extract(request_text: str) -> bool:
-    text = request_text.lower()
-    phrases = (
-        "extract",
-        "duplicate",
-        "shared",
-        "common",
-        "重复",
-        "抽取",
-        "复用",
-        "共享",
-    )
-    return any(phrase in text for phrase in phrases)
-
-
-def request_requires_review(request_text: str) -> bool:
-    text = request_text.lower()
-    phrases = (
-        "review",
-        "ambiguous",
-        "unclear",
-        "cross-cutting",
-        "manual",
-        "broad",
-        "审查",
-        "模糊",
-        "不明确",
-        "跨模块",
-    )
-    return any(phrase in text for phrase in phrases)
-
-
-def request_lifecycle_intent(request_text: str) -> Optional[str]:
-    text = request_text.lower()
-    if any(word in text for word in ("delete capability", "remove capability", "drop capability", "删除能力", "移除能力")):
-        return "delete"
-    if any(word in text for word in ("merge capability", "combine capability", "consolidate capability", "合并能力", "整合能力")):
-        return "merge"
-    if any(word in text for word in ("deprecate", "deprecated", "supersede", "废弃", "弃用", "替代")):
-        return "deprecate"
-    if any(word in text for word in ("rename capability", "move capability", "迁移能力", "重命名能力")):
-        return "migrate"
-    return None
-
-
-def module_path_proximity(capability: CapabilityEntry, changed_paths: list[str]) -> float:
-    owner_paths = {path.replace("\\", "/").lower() for path in capability.owner_modules}
-    if not owner_paths or not changed_paths:
+def indexed_path_proximity(
+    capability_id: str,
+    changed_paths: list[str],
+    bundle: dict[str, Any],
+) -> float:
+    if not capability_id or not changed_paths:
         return 0.0
-    hits = 0
-    for path in changed_paths:
-        normalized = path.replace("\\", "/").lower()
-        if any(normalized == owner or normalized.startswith(owner.rstrip("/") + "/") for owner in owner_paths):
-            hits += 1
-    return hits / max(1, len(changed_paths))
+    evidence_paths = _owner_evidence_paths(changed_paths)
+    hits = sum(
+        capability_id in path_index_evidence_capabilities_for_path(bundle, path)
+        for path in evidence_paths
+    )
+    return hits / max(1, len(evidence_paths))
+
+
+def capability_path_proximity(
+    capability: CapabilityEntry,
+    changed_paths: list[str],
+    bundle: dict[str, Any],
+) -> float:
+    discovered = module_path_proximity(capability, changed_paths)
+    canonical_root = capability.lifecycle.get("canonical_root", {})
+    # A governed root still owns indexed compatibility and test paths outside its module root.
+    if canonical_root.get("status") not in {"planned", "active", "verified"}:
+        return discovered
+    return max(
+        discovered,
+        indexed_path_proximity(capability.id, changed_paths, bundle),
+    )
 
 
 def capability_match_score(request_text: str, capability: CapabilityEntry) -> float:
@@ -3256,7 +3536,10 @@ def capability_positive_negative_risk_signals(
     risk: dict[str, Any] = {}
 
     positive["profile_backed"] = capability.source_of_truth == "profile"
-    positive["path_proximity"] = round(module_path_proximity(capability, changed_paths), 4)
+    positive["path_proximity"] = round(
+        capability_path_proximity(capability, changed_paths, bundle),
+        4,
+    )
     positive["dependency_proximity"] = round(dependency_proximity(capability, changed_modules), 4)
     positive["has_public_entries"] = bool(capability.public_entries)
     positive["has_extension_points"] = bool(capability.extension_points)
@@ -3274,10 +3557,14 @@ def capability_positive_negative_risk_signals(
     negative["multi_module_span"] = len({module.path for module in changed_modules}) > 1
 
     risk_keywords = list(dict.fromkeys(DEFAULT_HIGH_RISK_KEYWORDS + bundle.get("config", {}).get("high_risk_keywords", [])))
-    risk["keyword_hit"] = any(keyword in request_text.lower() for keyword in risk_keywords)
+    risk["keyword_hit"] = _request_has_high_risk_keyword(request_text, risk_keywords)
     risk["high_risk_capability"] = capability.id in set(bundle.get("change_rules", {}).get("high_risk_capability_ids", []))
     risk["repo_stage"] = bundle.get("config", {}).get("repo_stage")
     risk["request_requires_review"] = request_requires_review(request_text)
+    risk["request_requires_sensitive_review"] = request_requires_sensitive_review(
+        request_text,
+        bundle.get("change_rules", {}).get("sensitive_review_phrases", []),
+    )
     risk["duplicate_signal"] = request_prefers_extract(request_text)
     return positive, negative, risk
 
@@ -3295,7 +3582,7 @@ def dependency_proximity(capability: CapabilityEntry, changed_modules: list[Modu
 
 def capability_score(request_text: str, capability: CapabilityEntry, changed_modules: list[ModuleEntry], changed_paths: list[str], bundle: dict[str, Any]) -> tuple[float, dict[str, float]]:
     intent_match = capability_match_score(request_text, capability)
-    path_proximity = module_path_proximity(capability, changed_paths)
+    path_proximity = capability_path_proximity(capability, changed_paths, bundle)
     dep_proximity = dependency_proximity(capability, changed_modules)
     public_entry_available = 1.0 if capability.public_entries else 0.0
     extension_available = 1.0 if capability.extension_points else 0.0
@@ -3350,7 +3637,7 @@ def overlap_score(best: float, second: float) -> float:
 def sort_route_scores(
     route_scores: list[tuple[CapabilityEntry, float, dict[str, Any]]],
     bundle: dict[str, Any],
-    close_delta: float = 0.08,
+    close_delta: float = 0.05,
 ) -> list[tuple[CapabilityEntry, float, dict[str, Any]]]:
     if len(route_scores) <= 1:
         return sorted(route_scores, key=lambda item: item[1], reverse=True)
@@ -3360,6 +3647,15 @@ def sort_route_scores(
     close = [item for item in sorted_by_score if best_score - item[1] <= close_delta]
     rest = [item for item in sorted_by_score if best_score - item[1] > close_delta]
     close_sorted = sorted(close, key=lambda item: (int(priority.get(item[0].id, 999)), -item[1], item[0].id))
+    score_leader = sorted_by_score[0]
+    priority_leader = close_sorted[0]
+    if (
+        score_leader[0].id != priority_leader[0].id
+        and score_leader[2].get("path_proximity", 0.0) > 0.0
+        and priority_leader[2].get("path_proximity", 0.0) == 0.0
+    ):
+        close_sorted.remove(score_leader)
+        close_sorted.insert(0, score_leader)
     return close_sorted + rest
 
 
@@ -3378,37 +3674,12 @@ def source_of_truth_for(bundle: dict[str, Any], kind: str) -> dict[str, Any]:
 
 
 def required_read_paths(capability: Optional[CapabilityEntry], modules: list[ModuleEntry], changed_paths: list[str]) -> list[str]:
-    paths: list[str] = []
-    if capability:
-        paths.extend(capability.public_entries[:4])
-        for owner in capability.owner_modules:
-            module = next((item for item in modules if item.path == owner), None)
-            if module:
-                if module.public_api:
-                    paths.append(f"{module.path}/{module.public_api}" if module.path != "." else module.public_api)
-                paths.extend(
-                    f"{module.path}/{key}" if module.path != "." else key
-                    for key in module.key_files[:2]
-                )
-    for path in changed_paths[:2]:
-        module = module_for_path(path, modules)
-        if module and module.public_api:
-            paths.append(f"{module.path}/{module.public_api}" if module.path != "." else module.public_api)
-    dedup: list[str] = []
-    for item in paths:
-        normalized = item.replace("\\", "/")
-        if normalized not in dedup:
-            dedup.append(normalized)
-    return dedup[:8]
-
-
-def required_checks_for(capability: Optional[CapabilityEntry], action: str, bundle: dict[str, Any]) -> list[str]:
-    checks = ["check-reuse", "check-deps", "check-public-api", "check-index-freshness"]
-    if capability:
-        for binding in capability.test_bindings:
-            if action in binding.get("when_actions", []):
-                checks.append(binding["id"])
-    return list(dict.fromkeys(checks))
+    return build_required_read_paths(
+        capability,
+        modules,
+        changed_paths,
+        module_for_path=module_for_path,
+    )
 
 
 def forbidden_paths_for(capability: Optional[CapabilityEntry], bundle: dict[str, Any]) -> list[str]:
@@ -3417,16 +3688,27 @@ def forbidden_paths_for(capability: Optional[CapabilityEntry], bundle: dict[str,
     return list(dict.fromkeys(capability.forbidden_patterns))
 
 
-def bundle_stale(bundle_root: Path, bundle: dict[str, Any]) -> bool:
-    if not bundle_root.exists():
-        return True
-    config = bundle.get("config", {})
-    threshold = int(config.get("freshness_windows", {}).get("module_map_days", 30))
-    marker = bundle_root / "references" / "module-map.yaml"
-    if not marker.exists():
-        return True
-    modified = dt.datetime.fromtimestamp(marker.stat().st_mtime, tz=dt.timezone.utc).date()
-    return (dt.datetime.now(dt.timezone.utc).date() - modified).days > threshold
+def _resolution_freshness(
+    bundle_root: Path,
+    bundle: dict[str, Any],
+    changed_paths: list[str],
+    *,
+    context: str,
+) -> dict[str, Any]:
+    if context in {"bootstrap", "evaluation"}:
+        return {
+            "status": "skipped",
+            "context": context,
+            "failure_reasons": [],
+            "changed_paths": list(changed_paths),
+        }
+    if context != "route":
+        raise ValueError(f"unsupported freshness context: {context}")
+    routed_bundle = dict(bundle)
+    routed_bundle["root"] = bundle_root
+    report = freshness_report(bundle_root.parent, routed_bundle, changed_paths)
+    report["context"] = "route"
+    return report
 
 
 def build_route_report(decision: RouteDecision) -> dict[str, Any]:
@@ -3537,15 +3819,53 @@ def build_recommended_next_action(
     return next_action, deduped[:8]
 
 
-def path_index_capabilities_for_path(bundle: dict[str, Any], path: str) -> list[str]:
+def _path_index_capabilities_for_path(
+    bundle: dict[str, Any],
+    path: str,
+    fields: tuple[str, ...],
+) -> list[str]:
     normalized = path.replace("\\", "/").strip("/")
-    matches: list[str] = []
+    matches: list[tuple[int, list[str]]] = []
     for entry in bundle.get("path_to_capability_map", {}).get("path_index", []):
         pattern = str(entry.get("path_pattern", "")).replace("\\", "/").strip("/")
         root = pattern[:-3].rstrip("/") if pattern.endswith("/**") else pattern
         if normalized == root or glob_match([pattern], normalized):
-            matches.extend(str(capability) for capability in entry.get("capabilities", []) if capability)
-    return sorted(set(matches))
+            specificity = len(re.sub(r"[*?\[\]]", "", pattern))
+            capabilities = list(
+                dict.fromkeys(
+                    str(capability)
+                    for field in fields
+                    for capability in entry.get(field, [])
+                    if capability
+                )
+            )
+            matches.append((specificity, capabilities))
+    if not matches:
+        return []
+    most_specific = max(score for score, _ in matches)
+    return sorted(
+        {
+            capability
+            for score, capabilities in matches
+            if score == most_specific
+            for capability in capabilities
+        }
+    )
+
+
+def path_index_capabilities_for_path(bundle: dict[str, Any], path: str) -> list[str]:
+    return _path_index_capabilities_for_path(bundle, path, ("capabilities",))
+
+
+def path_index_evidence_capabilities_for_path(
+    bundle: dict[str, Any],
+    path: str,
+) -> list[str]:
+    return _path_index_capabilities_for_path(
+        bundle,
+        path,
+        ("capabilities", "consumer_capabilities"),
+    )
 
 
 def changed_paths_without_index(bundle: dict[str, Any], changed_paths: list[str]) -> list[str]:
@@ -3567,20 +3887,41 @@ def build_block_reason(
     bundle: dict[str, Any],
     request_text: str,
 ) -> dict[str, Any]:
+    if bundle.get("_runtime", {}).get("stale_bundle", False):
+        return {
+            "code": "stale_bundle",
+            "severity": "P0",
+            "summary": "The routing bundle freshness evidence is missing or stale.",
+        }
+    unindexed_paths = changed_paths_without_index(bundle, changed_paths)
+    if unindexed_paths:
+        return {
+            "code": "path_not_indexed",
+            "severity": "P0",
+            "summary": "At least one changed path is not covered by the path-to-capability map.",
+        }
+    shared_paths = [
+        path for path in changed_paths if len(path_index_capabilities_for_path(bundle, path)) > 1
+    ]
+    if shared_paths:
+        return {
+            "code": "path_not_indexed",
+            "severity": "P0",
+            "summary": "At least one changed path is not uniquely covered by the path-to-capability map.",
+        }
     if action != "review":
         return {"code": "not_blocked", "severity": "none", "summary": "Route does not require manual review."}
     joined = " | ".join(veto_reasons).lower()
     lifecycle_intent = request_lifecycle_intent(request_text)
-    unindexed_paths = changed_paths_without_index(bundle, changed_paths)
     if lifecycle_intent:
         code = "capability_lifecycle_change"
         summary = f"Capability {lifecycle_intent} requires explicit lifecycle review."
     elif "no capability candidates" in joined or (not primary_capability and changed_paths):
         code = "missing_capability_candidate"
         summary = "No capability candidate was discovered for the changed surface."
-    elif unindexed_paths:
-        code = "path_not_indexed"
-        summary = "At least one changed path is not covered by the path-to-capability map."
+    elif "evaluation threshold not met" in joined:
+        code = "evaluation_threshold_not_met"
+        summary = "PCR evaluation evidence is missing, stale, or below the approved thresholds."
     elif "bundle is stale" in joined:
         code = "stale_bundle"
         summary = "The routing bundle is stale or internally inconsistent."
@@ -3593,12 +3934,12 @@ def build_block_reason(
     elif overlap >= 0.82 or "overlap" in joined or "multi-capability" in joined:
         code = "multi_capability_overlap"
         summary = "Multiple capability candidates overlap too strongly."
+    elif negative_signals.get("owner_unclear") or "owner governance" in joined:
+        code = "unclear_owner"
+        summary = "The candidate capability owner is unclear."
     elif negative_signals.get("provisional_stage") or "provisional" in joined:
         code = "provisional_capability_boundary"
         summary = "The candidate capability boundary is still provisional."
-    elif negative_signals.get("owner_unclear"):
-        code = "unclear_owner"
-        summary = "The candidate capability owner is unclear."
     elif negative_signals.get("heuristic_public_entry") or (primary_capability and not primary_capability.public_entries):
         code = "missing_public_entry"
         summary = "The route lacks a confirmed public entry."
@@ -3608,7 +3949,7 @@ def build_block_reason(
     else:
         code = "manual_review_required"
         summary = "Manual review is required before editing."
-    severity = "P0" if code in {"missing_capability_candidate", "path_not_indexed", "stale_bundle", "high_risk_surface", "capability_lifecycle_change"} else "P1"
+    severity = "P0" if code in {"missing_capability_candidate", "path_not_indexed", "stale_bundle", "high_risk_surface", "capability_lifecycle_change", "evaluation_threshold_not_met"} else "P1"
     return {"code": code, "severity": severity, "summary": summary}
 
 
@@ -3886,11 +4227,14 @@ def build_write_constraints(
     primary_capability: Optional[CapabilityEntry],
     changed_paths: list[str],
     forbidden_paths: list[str],
+    required_reads: Optional[list[str]] = None,
 ) -> tuple[list[str], list[str], list[str]]:
     must_read = []
     allowed: list[str] = []
     forbidden = list(forbidden_paths)
-    if primary_capability:
+    if required_reads is not None:
+        must_read.extend(required_reads)
+    elif primary_capability:
         must_read.extend(primary_capability.public_entries)
         must_read.extend(primary_capability.owner_modules[:3])
     if action == "review":
@@ -3901,7 +4245,13 @@ def build_write_constraints(
             forbidden.extend(module_path_pattern(path) for path in primary_capability.owner_modules)
     elif action in {"extend", "extract"}:
         if primary_capability:
-            allowed.extend(module_path_pattern(path) for path in primary_capability.owner_modules)
+            allowed.extend(
+                module_path_pattern(path)
+                for path in scoped_owner_modules(
+                    primary_capability.owner_modules,
+                    changed_paths,
+                )
+            )
         allowed.extend(changed_paths)
     elif action == "new":
         allowed.extend(changed_paths)
@@ -3926,6 +4276,11 @@ def build_post_change_closeout(
             "step": "validate_bundle",
             "command": "python scripts/validate_router_bundle.py --repo <repo-root> --format json",
             "when": "after any routed change",
+        },
+        {
+            "step": "structure_guardrails",
+            "command": "python scripts/check_structure.py --repo <repo-root> --format json",
+            "when": "after any product, structure, owner, or baseline change",
         },
         {
             "step": "governance_audit",
@@ -3971,7 +4326,7 @@ def build_post_change_closeout(
                 "when": "after creating files",
             }
         )
-    return steps[:7]
+    return steps[:8]
 
 
 def build_composite_route(
@@ -3982,8 +4337,20 @@ def build_composite_route(
     composite_required: bool,
 ) -> dict[str, Any]:
     participants = []
-    for candidate in candidate_capabilities[:6]:
-        role = "primary" if primary_capability and candidate["id"] == primary_capability.id else "secondary"
+    candidates = {candidate["id"]: candidate for candidate in candidate_capabilities}
+    participant_ids = list(
+        dict.fromkeys(
+            ([primary_capability.id] if primary_capability else [])
+            + secondary_capabilities
+        )
+    )
+    for capability_id in participant_ids:
+        candidate = candidates.get(capability_id, {"id": capability_id})
+        role = (
+            "primary"
+            if primary_capability and capability_id == primary_capability.id
+            else "secondary"
+        )
         participants.append(
             {
                 "capability": candidate["id"],
@@ -3993,11 +4360,11 @@ def build_composite_route(
             }
         )
     return {
-        "required": bool(composite_required or secondary_capabilities),
+        "required": bool(composite_required),
         "primary": primary_capability.id if primary_capability else None,
         "secondary": secondary_capabilities,
         "participants": participants,
-        "coordination_policy": "review_before_write" if action == "review" and (composite_required or secondary_capabilities) else "single_route_or_not_required",
+        "coordination_policy": "review_before_write" if action == "review" and composite_required else "single_route_or_not_required",
     }
 
 
@@ -4009,10 +4376,11 @@ def build_capability_lifecycle_action(
     intent = request_lifecycle_intent(request_text)
     if not intent:
         return {"intent": "none", "review_required": False, "required_metadata": []}
+    target_capability = request_lifecycle_target(request_text)
     return {
         "intent": intent,
         "review_required": True,
-        "target_capability": primary_capability.id if primary_capability else None,
+        "target_capability": target_capability or (primary_capability.id if primary_capability else None),
         "required_metadata": [
             "superseded_by",
             "deprecation_date",
@@ -4080,21 +4448,55 @@ def determine_action(
     guarded_threshold = float(threshold.get("guarded_route_threshold", 0.58))
     repo_stage = bundle.get("config", {}).get("repo_stage", "emerging")
     duplicate_signal, duplicate_count = request_duplicate_signal(request_text, changed_paths)
-    request_has_change_verb = any(word in request_text.lower() for word in CHANGE_VERBS)
+    request_has_change_verb = request_additive_intent(request_text) or request_prefers_extract(request_text)
     stable_candidates = [
         cap
         for cap, score, _ in sorted_scores
         if score >= guarded_threshold and (cap.stage in {"stable", "governed-capability"} or cap.status == "stable")
     ]
     coordination_required = len(stable_candidates) > 1
-    composite_required = len({module.path for module in changed_modules}) > 1 and coordination_required
-    secondary = [cap.id for cap, score, _ in sorted_scores[1:] if score >= guarded_threshold]
+    non_core_layers = {"interface", "governance", "test", "docs", "tooling"}
+    core_roots: list[str] = []
+    for module in changed_modules:
+        if module.layer in non_core_layers:
+            continue
+        module_path = module.path.replace("\\", "/").rstrip("/")
+        root = str(Path(module_path).parent).replace("\\", "/") if Path(module_path).suffix in CODE_SUFFIXES else module_path
+        if root and root not in core_roots:
+            core_roots.append(root)
+    collapsed_core_roots = [
+        root
+        for root in core_roots
+        if not any(root != other and root.startswith(other.rstrip("/") + "/") for other in core_roots)
+    ]
+    primary_owned_modules = set(best_cap.owner_modules)
+    changed_modules_within_primary = bool(changed_modules) and all(
+        module.path in primary_owned_modules for module in changed_modules
+    )
+    composite_required = len(collapsed_core_roots) > 1 and coordination_required and not changed_modules_within_primary
+    secondary = ordered_secondary_capabilities(
+        primary_capability=best_cap.id,
+        changed_paths=changed_paths,
+        scored_capabilities={
+            capability.id: score for capability, score, _ in sorted_scores
+        },
+        guarded_threshold=guarded_threshold,
+        dependency_priority=bundle.get("change_rules", {}).get(
+            "dependency_priority", {}
+        ),
+        path_capabilities=lambda path: path_index_capabilities_for_path(bundle, path),
+    )
     high_risk_ids = set(bundle.get("change_rules", {}).get("high_risk_capability_ids", []))
     stale_bundle = bundle.get("_runtime", {}).get("stale_bundle", False)
     has_conflict = bundle.get("_runtime", {}).get("has_conflict", False)
     targets_existing = request_targets_existing_capability(request_text)
     extract_intent = request_prefers_extract(request_text)
     explicit_review = request_requires_review(request_text)
+    owner_duplication = request_duplicates_existing_owner(request_text)
+    sensitive_review = request_requires_sensitive_review(
+        request_text,
+        bundle.get("change_rules", {}).get("sensitive_review_phrases", []),
+    )
     lifecycle_intent = request_lifecycle_intent(request_text)
 
     if best_signals["positive_signals"].get("profile_backed"):
@@ -4110,6 +4512,24 @@ def determine_action(
     if best_signals["negative_signals"].get("profile_missing"):
         confidence_reasons.append("no explicit profile mapping supports this route")
 
+    boundary_matches = matching_capability_contract_boundaries(
+        _positive_request_scope(request_text),
+        best_cap.forbidden_patterns,
+        best_cap.anti_patterns,
+    )
+    if boundary_matches:
+        reasoning.append("capability contract boundary matched: " + ", ".join(boundary_matches[:3]))
+        veto_reasons.append("capability contract boundary requires review")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
+
+    if owner_duplication:
+        reasoning.append("request duplicates an existing canonical owner or local substrate")
+        veto_reasons.append("duplicate owner implementation requires boundary review")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
+    if sensitive_review:
+        reasoning.append("sensitive persistence or trace surface requires manual review")
+        veto_reasons.append("sensitive persistence or trace surface requires review")
+        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if high_risk and (best_cap.id in high_risk_ids or ov >= 0.75):
         reasoning.append("high-risk request requires manual review")
         veto_reasons.append("high-risk capability or overlapping high-risk candidates")
@@ -4170,7 +4590,7 @@ def determine_action(
             return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
         reasoning.append("duplicate signal indicates shared extraction work")
         return "extract", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
-    if ov >= 0.82:
+    if ov >= 0.82 and not changed_paths:
         reasoning.append("multiple capability candidates overlap too heavily")
         veto_reasons.append("overlap between top capability candidates is too high")
         return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
@@ -4211,10 +4631,20 @@ def determine_action(
     return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
 
 
-def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[str, Any], bundle_root: Path) -> RouteDecision:
+def resolve_request(
+    request_text: str,
+    changed_paths: list[str],
+    bundle: dict[str, Any],
+    bundle_root: Path,
+    *,
+    enforce_evaluation_policy: bool = True,
+    freshness_context: Optional[str] = None,
+) -> RouteDecision:
     capabilities = capability_entries(bundle)
     modules = module_entries(bundle)
-    normalized_changed_paths = [path.replace("\\", "/") for path in changed_paths]
+    normalized_changed_paths = list(
+        dict.fromkeys(path.replace("\\", "/") for path in changed_paths)
+    )
     changed_modules = [module_for_path(path, modules) for path in normalized_changed_paths]
     changed_modules = [module for module in changed_modules if module is not None]
     high_risk = request_high_risk(request_text, normalized_changed_paths, modules, bundle)
@@ -4223,8 +4653,25 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         score, signals = capability_score(request_text, capability, changed_modules, normalized_changed_paths, bundle)
         if score > 0.0 or capability.status == "stable":
             route_scores.append((capability, score, signals))
+    effective_freshness_context = freshness_context
+    if effective_freshness_context is None:
+        if not enforce_evaluation_policy:
+            effective_freshness_context = "evaluation"
+        elif bundle.get("_resolution_context") == "bootstrap":
+            effective_freshness_context = "bootstrap"
+        elif bundle_root.name == "project-change-router":
+            effective_freshness_context = "route"
+        else:
+            effective_freshness_context = "evaluation"
+    freshness = _resolution_freshness(
+        bundle_root,
+        bundle,
+        normalized_changed_paths,
+        context=effective_freshness_context,
+    )
     bundle["_runtime"] = {
-        "stale_bundle": bundle_stale(bundle_root, bundle),
+        "stale_bundle": freshness["status"] == "fail",
+        "freshness": freshness,
         "has_conflict": bool(capability_conflicts(bundle)),
     }
     action, primary_capability, secondary_capabilities, routing_confidence, routing_confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons = determine_action(
@@ -4235,6 +4682,31 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         high_risk,
         bundle,
     )
+    if freshness["status"] == "fail":
+        action = "review"
+        if "routing bundle freshness evidence failed" not in reasoning:
+            reasoning.append("routing bundle freshness evidence failed")
+        if "bundle is stale or freshness evidence is missing" not in veto_reasons:
+            veto_reasons.append("bundle is stale or freshness evidence is missing")
+    owner_assessment = capabilities_owner_assessment(
+        bundle,
+        ([primary_capability.id] if primary_capability else [])
+        + secondary_capabilities,
+    )
+    if action != "review" and not owner_assessment["trusted"]:
+        action = "review"
+        reasoning.append("capability owner governance blocks automatic write eligibility")
+        veto_reasons.append(
+            "capability owner governance is incomplete: "
+            + ", ".join(owner_assessment["reasons"])
+        )
+    evaluation_decision = policy_for_bundle(bundle)
+    if enforce_evaluation_policy and action != "review" and not evaluation_decision.passed:
+        action = "review"
+        reasoning.append("PCR evaluation policy blocks automatic write eligibility")
+        veto_reasons.append(
+            "evaluation threshold not met: " + ", ".join(evaluation_decision.reasons)
+        )
     sorted_scores = sort_route_scores(route_scores, bundle)
     best_signals = sorted_scores[0][2] if sorted_scores else {}
     candidate_capabilities = [
@@ -4255,11 +4727,18 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
     if not candidate_modules and modules:
         candidate_modules = [{"path": module.path, "id": module.id, "layer": module.layer, "domain": module.domain} for module in modules[:3]]
     required_reads = required_read_paths(primary_capability, modules, normalized_changed_paths)
-    required_checks = required_checks_for(primary_capability, action, bundle)
+    required_checks = required_checks_for(
+        primary_capability,
+        action,
+        bundle,
+        normalized_changed_paths,
+    )
     forbidden_paths = forbidden_paths_for(primary_capability, bundle)
     decision_id = f"route-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}-{hashlib.sha1((request_text + '|' + '|'.join(normalized_changed_paths)).encode('utf-8')).hexdigest()[:8]}"
     positive_signals = best_signals.get("positive_signals", {}) if route_scores else {}
     negative_signals = best_signals.get("negative_signals", {}) if route_scores else {}
+    if not owner_assessment["trusted"]:
+        negative_signals["owner_unclear"] = True
     risk_signals = best_signals.get("risk_signals", {}) if route_scores else {}
     decision_confidence, decision_confidence_level, decision_basis = decision_confidence_for(
         action,
@@ -4305,8 +4784,28 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         bundle,
         request_text,
     )
+    mandatory_review_codes = {
+        "missing_capability_candidate",
+        "path_not_indexed",
+        "stale_bundle",
+        "high_risk_surface",
+        "capability_lifecycle_change",
+        "evaluation_threshold_not_met",
+    }
+    guardrail_review_required = action == "review" or block_reason.get("code") in mandatory_review_codes
+    governance_action = "review" if guardrail_review_required else action
+    if governance_action != action:
+        recommended_next_action, recommended_next_steps = build_recommended_next_action(
+            governance_action,
+            bundle.get("config", {}).get("repo_stage", "emerging"),
+            routing_confidence_level,
+            required_reads,
+            required_checks,
+            negative_signals,
+            veto_reasons,
+        )
     missing_evidence = build_missing_evidence(
-        action,
+        governance_action,
         block_reason,
         primary_capability,
         normalized_changed_paths,
@@ -4315,7 +4814,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         request_text,
     )
     analysis_directions = build_analysis_directions(
-        action,
+        governance_action,
         block_reason,
         primary_capability,
         secondary_capabilities,
@@ -4323,21 +4822,21 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         request_text,
     )
     safe_next_steps = build_safe_next_steps(
-        action,
+        governance_action,
         required_reads,
         required_checks,
         normalized_changed_paths,
         block_reason,
     )
     suggested_questions = build_suggested_questions(
-        action,
+        governance_action,
         block_reason,
         primary_capability,
         normalized_changed_paths,
         secondary_capabilities,
     )
     profile_repair_hints = build_profile_repair_hints(
-        action,
+        governance_action,
         block_reason,
         primary_capability,
         normalized_changed_paths,
@@ -4345,19 +4844,20 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         request_text,
     )
     override_requirements = build_override_requirements(
-        action,
+        governance_action,
         block_reason,
         normalized_changed_paths,
         request_text,
     )
     allowed_write_paths, forbidden_write_paths, must_read_before_edit = build_write_constraints(
-        action,
+        governance_action,
         primary_capability,
         normalized_changed_paths,
         forbidden_paths,
+        required_reads,
     )
     post_change_closeout = build_post_change_closeout(
-        action,
+        governance_action,
         bundle.get("config", {}).get("repo_stage", "emerging"),
         primary_capability,
         normalized_changed_paths,
@@ -4387,6 +4887,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         timestamp=iso_now(),
         request_type=parse_request_type(request_text),
         request_summary=request_text.strip().splitlines()[0][:180] if request_text.strip() else "",
+        changed_paths=normalized_changed_paths,
         repo_stage=bundle.get("config", {}).get("repo_stage", "emerging"),
         action=action,
         decision_basis=decision_basis,
@@ -4405,7 +4906,7 @@ def resolve_request(request_text: str, changed_paths: list[str], bundle: dict[st
         required_reads=required_reads,
         required_checks=required_checks,
         forbidden_paths=forbidden_paths,
-        review_required=action == "review",
+        review_required=guardrail_review_required,
         coordination_required=coordination_required,
         composite_route_required=composite_required,
         recommended_next_action=recommended_next_action,
@@ -4455,53 +4956,143 @@ def similarity(a: Path, b: Path) -> float:
     return difflib.SequenceMatcher(None, a_text, b_text).ratio()
 
 
-def matches_dependency(source: ModuleEntry, target: ModuleEntry) -> bool:
-    allowed_paths = [pattern.replace("\\", "/") for pattern in source.allowed_outbound_to]
-    if target.path in source.depends_on:
+def matches_dependency(
+    source: ModuleEntry,
+    target: ModuleEntry,
+    dependency_path: Optional[str] = None,
+) -> bool:
+    strict_nested_boundary = bool(source.lifecycle.get("nested_module_boundary"))
+    has_declared_paths = "declared_allowed_outbound_to" in source.lifecycle
+    configured_paths = (
+        source.lifecycle.get("declared_allowed_outbound_to", [])
+        if strict_nested_boundary
+        else source.allowed_outbound_to
+    )
+    allowed_paths = [pattern.replace("\\", "/") for pattern in configured_paths]
+    target_paths = [target.path.replace("\\", "/")]
+    if dependency_path:
+        target_paths.append(dependency_path.replace("\\", "/"))
+    if strict_nested_boundary and has_declared_paths:
+        return bool(
+            allowed_paths
+            and any(glob_match(allowed_paths, path) for path in target_paths)
+        )
+    if not strict_nested_boundary and target.path in source.depends_on:
         return True
-    if allowed_paths and glob_match(allowed_paths, target.path):
+    if allowed_paths and any(glob_match(allowed_paths, path) for path in target_paths):
         return True
     allowed_layers = source.lifecycle.get("allowed_outbound_layers", [])
     return target.layer in allowed_layers
 
 
+def _module_for_source_path(path: str, modules: list[ModuleEntry]) -> Optional[ModuleEntry]:
+    normalized = path.replace("\\", "/").strip("/")
+    candidates = []
+    for module in modules:
+        module_path = module.path.replace("\\", "/").strip("/")
+        if any(marker in module_path for marker in "*?["):
+            continue
+        if module_path in {"", "."} or normalized == module_path or normalized.startswith(module_path.rstrip("/") + "/"):
+            candidates.append(module)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: len(item.path.replace("\\", "/").strip("/")))
+
+
+def _guardrail_source_files(
+    repo_root: Path, modules: list[ModuleEntry], ignore_patterns: Iterable[str]
+) -> list[Path]:
+    files: dict[str, Path] = {}
+    for module in modules:
+        module_root = repo_root if module.path == "." else repo_root / module.path
+        if not module_root.exists() or any(marker in module.path for marker in "*?["):
+            continue
+        candidates = [module_root] if module_root.is_file() else iter_source_files(module_root, ignore_patterns)
+        for path in candidates:
+            if path.is_file() and path.suffix.lower() in CODE_SUFFIXES and not should_ignore_path(path, ignore_patterns, repo_root):
+                files[normalize_rel_path(repo_root, path)] = path
+    return [files[key] for key in sorted(files)]
+
+
 def gather_dependency_findings(repo_root: Path, bundle: dict[str, Any]) -> list[dict[str, Any]]:
     modules = module_entries(bundle)
     ignore_patterns = default_ignore_patterns(bundle.get("config", {}))
+    source_files = _guardrail_source_files(repo_root, modules, ignore_patterns)
+    resolution_files = iter_source_files(repo_root, ignore_patterns)
+    snapshot = build_import_graph(repo_root, source_files, resolution_paths=resolution_files)
     findings: list[dict[str, Any]] = []
-    for module in modules:
-        module_root = repo_root / module.path if module.path != "." else repo_root
-        if not module_root.exists():
+    for edge in snapshot.edges:
+        source = _module_for_source_path(edge.source, modules)
+        target = _module_for_source_path(edge.target, modules)
+        if source is None or target is None or source.path == target.path:
             continue
-        for source_file in iter_source_files(module_root, ignore_patterns):
-            if source_file.suffix.lower() not in CODE_SUFFIXES:
-                continue
-            kind = file_suffix_kind(source_file)
-            if kind == "python":
-                imports = parse_python_imports(source_file)
-            elif kind in {"javascript", "typescript"}:
-                imports = parse_js_imports(source_file)
-            elif kind == "java":
-                imports = parse_java_imports(source_file)
-            else:
-                imports = []
-            for imp in imports:
-                target = resolve_import_to_module(imp, module, modules, repo_root, source_file)
-                if not target or target.path == module.path:
-                    continue
-                if not matches_dependency(module, target):
-                    findings.append(
-                        {
-                            "severity": "P1",
-                            "rule": "dependency-direction",
-                            "source_file": normalize_rel_path(repo_root, source_file),
-                            "source_module": module.path,
-                            "target_module": target.path,
-                            "import": imp,
-                            "message": f"{module.path} imports {target.path} outside its allowed dependency surface",
-                        }
-                    )
-    return findings
+        if not matches_dependency(source, target, dependency_path=edge.target):
+            findings.append(
+                {
+                    "severity": "P1",
+                    "rule": "dependency-direction",
+                    "source": edge.source,
+                    "target": edge.target,
+                    "source_file": edge.source,
+                    "source_module": source.path,
+                    "target_module": target.path,
+                    "import": edge.import_name,
+                    "language": edge.language,
+                    "runtime": edge.runtime,
+                    "message": f"{source.path} imports {target.path} outside its allowed dependency surface",
+                }
+            )
+    for cycle in snapshot.cycles:
+        findings.append(
+            {
+                "severity": "P1" if cycle.runtime else "P2",
+                "rule": "runtime-cycle" if cycle.runtime else "type-only-cycle",
+                "language": cycle.language,
+                "members": list(cycle.members),
+                "message": f"{cycle.language} {'runtime' if cycle.runtime else 'type-only'} cycle: {' -> '.join(cycle.members)}",
+            }
+        )
+    for diagnostic in snapshot.diagnostics:
+        findings.append(
+            {
+                "severity": "P1" if diagnostic.blocking else "P2",
+                "rule": "import-graph-diagnostic",
+                "source": diagnostic.path,
+                "language": diagnostic.language,
+                "diagnostic_code": diagnostic.code,
+                "message": diagnostic.message,
+            }
+        )
+    for source_file in source_files:
+        if file_suffix_kind(source_file) != "java":
+            continue
+        source = _module_for_source_path(normalize_rel_path(repo_root, source_file), modules)
+        if source is None:
+            continue
+        for imported in parse_java_imports(source_file):
+            target = resolve_import_to_module(imported, source, modules, repo_root, source_file)
+            if target and target.path != source.path and not matches_dependency(source, target):
+                findings.append(
+                    {
+                        "severity": "P1",
+                        "rule": "dependency-direction",
+                        "source": normalize_rel_path(repo_root, source_file),
+                        "target": target.path,
+                        "source_file": normalize_rel_path(repo_root, source_file),
+                        "source_module": source.path,
+                        "target_module": target.path,
+                        "import": imported,
+                        "language": "java",
+                        "runtime": True,
+                        "message": f"{source.path} imports {target.path} outside its allowed dependency surface",
+                    }
+                )
+    baseline = bundle.get("change_rules", {}).get("architecture_baseline", [])
+    return classify_findings_against_baseline(
+        findings,
+        baseline,
+        governed_rules={"dependency-direction", "runtime-cycle", "type-only-cycle"},
+    )
 
 
 def import_reaches_private_surface(import_name: str, resolved_path: Optional[str]) -> bool:
@@ -4533,380 +5124,112 @@ def import_matches_public_surface(import_name: str, target: ModuleEntry, resolve
 def gather_public_api_findings(repo_root: Path, bundle: dict[str, Any]) -> list[dict[str, Any]]:
     modules = module_entries(bundle)
     ignore_patterns = default_ignore_patterns(bundle.get("config", {}))
+    source_files = _guardrail_source_files(repo_root, modules, ignore_patterns)
+    resolution_files = iter_source_files(repo_root, ignore_patterns)
+    snapshot = build_import_graph(repo_root, source_files, resolution_paths=resolution_files)
     findings: list[dict[str, Any]] = []
     for module in modules:
-        module_root = repo_root / module.path if module.path != "." else repo_root
-        if not module_root.exists():
+        if not module.public_api:
             continue
-        for source_file in iter_source_files(module_root, ignore_patterns):
-            if source_file.suffix.lower() not in CODE_SUFFIXES:
-                continue
-            kind = file_suffix_kind(source_file)
-            if kind == "python":
-                imports = parse_python_imports(source_file)
-            elif kind in {"javascript", "typescript"}:
-                imports = parse_js_imports(source_file)
-            elif kind == "java":
-                imports = parse_java_imports(source_file)
-            else:
-                imports = []
-            for imp in imports:
-                target, resolved_path = infer_import_reference(imp, module, modules, repo_root, source_file)
-                if not target or target.path == module.path:
-                    continue
-                if target.public_api and not import_matches_public_surface(imp, target, resolved_path):
-                    findings.append(
-                        {
-                            "severity": "P1" if import_reaches_private_surface(imp, resolved_path) else "P2",
-                            "rule": "public-api-bypass",
-                            "source_file": normalize_rel_path(repo_root, source_file),
-                            "source_module": module.path,
-                            "target_module": target.path,
-                            "import": imp,
-                            "message": f"{module.path} reaches {target.path} through a non-public import path",
-                        }
-                    )
-    return findings
-
-
-def reuse_scan_budget_from_bundle(bundle: dict[str, Any], overrides: Optional[dict[str, Any]] = None) -> ReuseScanBudget:
-    configured = dict(bundle.get("change_rules", {}).get("reuse_scan_budget", {}))
-    configured.update(overrides or {})
-    if "max_owner_files" in configured and "max_owner_files_per_capability" not in configured:
-        configured["max_owner_files_per_capability"] = configured["max_owner_files"]
-    if "max_file_bytes" in configured and "max_file_bytes_for_full_similarity" not in configured:
-        configured["max_file_bytes_for_full_similarity"] = configured["max_file_bytes"]
-    values: dict[str, Any] = {}
-    float_fields = {
-        "max_length_ratio",
-        "min_token_jaccard",
-        "min_path_token_overlap",
-        "min_fingerprint_advisory_score",
-    }
-    for field_info in dataclasses.fields(ReuseScanBudget):
-        raw = configured.get(field_info.name, field_info.default)
-        try:
-            values[field_info.name] = float(raw) if field_info.name in float_fields else int(raw)
-        except (TypeError, ValueError):
-            values[field_info.name] = field_info.default
-    return ReuseScanBudget(**values)
-
-
-def unique_paths(repo_root: Path, paths: Iterable[Path]) -> list[Path]:
-    seen: set[str] = set()
-    ordered: list[Path] = []
-    for path in paths:
-        rel = normalize_rel_path(repo_root, path)
-        if rel in seen:
+        public_api = module.public_api.replace("\\", "/").strip("/")
+        module_path = module.path.replace("\\", "/").strip("/")
+        public_path = public_api if public_api.startswith(module_path + "/") else f"{module_path}/{public_api}"
+        exports = [item for item in snapshot.exports if item.source == public_path]
+        if exports:
+            findings.append(
+                {
+                    "severity": "P1",
+                    "rule": "public-export-count",
+                    "module": exports[0].module,
+                    "count": len({item.symbol for item in exports}),
+                    "source": public_path,
+                    "owner": module.owner,
+                    "message": f"{public_path} exports {len({item.symbol for item in exports})} public symbols",
+                }
+            )
+    for edge in snapshot.edges:
+        source = _module_for_source_path(edge.source, modules)
+        target = _module_for_source_path(edge.target, modules)
+        if source is None or target is None or source.path == target.path or not target.public_api:
             continue
-        seen.add(rel)
-        ordered.append(path)
-    return ordered
-
-
-def collect_code_files_from_surface(repo_root: Path, target: Path, ignore_patterns: Iterable[str]) -> list[Path]:
-    if not target.exists():
-        return []
-    if should_ignore_path(target, ignore_patterns, repo_root):
-        return []
-    if target.is_file():
-        return [target] if target.suffix.lower() in CODE_SUFFIXES else []
-    files = [
-        file
-        for file in iter_source_files(target, ignore_patterns)
-        if file.suffix.lower() in CODE_SUFFIXES and not should_ignore_path(file, ignore_patterns, repo_root)
-    ]
-    return unique_paths(repo_root, files)
-
-
-def changed_path_candidate_files(repo_root: Path, changed_paths: list[str], ignore_patterns: Iterable[str]) -> list[Path]:
-    candidates: list[Path] = []
-    for item in changed_paths:
-        normalized = item.replace("\\", "/").strip()
-        if not normalized:
+        if not import_matches_public_surface(edge.import_name, target, edge.target):
+            findings.append(
+                {
+                    "severity": "P1",
+                    "rule": "public-api-bypass",
+                    "source": edge.source,
+                    "target": edge.target,
+                    "source_file": edge.source,
+                    "source_module": source.path,
+                    "target_module": target.path,
+                    "import": edge.import_name,
+                    "imported_symbols": list(edge.imported_symbols),
+                    "message": f"{source.path} reaches {target.path} through a non-public import path",
+                }
+            )
+    for source_file in source_files:
+        if file_suffix_kind(source_file) != "java":
             continue
-        if any(char in normalized for char in "*?["):
-            for target in repo_root.glob(normalized.lstrip("/")):
-                candidates.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
+        source = _module_for_source_path(normalize_rel_path(repo_root, source_file), modules)
+        if source is None:
             continue
-        raw_path = Path(item)
-        target = raw_path if raw_path.is_absolute() else repo_root / normalized
-        candidates.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
-    return unique_paths(repo_root, candidates)
-
-
-def capability_owner_files(repo_root: Path, capability: CapabilityEntry, modules: list[ModuleEntry], ignore_patterns: Iterable[str]) -> list[Path]:
-    module_by_path = {module.path: module for module in modules}
-    owner_paths: list[str] = []
-    for owner in capability.owner_modules:
-        if owner == ".":
-            fallback_modules = root_owner_fallback_modules(capability, modules)
-            if fallback_modules:
-                owner_paths.extend(fallback_modules)
-                continue
-        owner_paths.append(owner)
-
-    files: list[Path] = []
-    for owner in owner_paths:
-        if any(char in owner for char in "*?["):
-            for target in repo_root.glob(owner.replace("\\", "/").lstrip("/")):
-                files.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
-            continue
-        module = module_by_path.get(owner)
-        target = repo_root / module.path if module and module.path != "." else repo_root if module else repo_root / owner
-        files.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
-    return unique_paths(repo_root, files)
-
-
-def paths_from_test_bindings(bindings: Iterable[dict[str, Any]]) -> list[str]:
-    path_keys = {
-        "path",
-        "paths",
-        "pattern",
-        "patterns",
-        "test",
-        "tests",
-        "test_path",
-        "test_paths",
-        "source_path",
-        "source_paths",
-    }
-    paths: list[str] = []
-    for binding in bindings:
-        for key, value in binding.items():
-            if key not in path_keys:
-                continue
-            if isinstance(value, str):
-                paths.append(value)
-            elif isinstance(value, list):
-                paths.extend(str(item) for item in value if isinstance(item, (str, Path)))
-    return list(dict.fromkeys(path.replace("\\", "/") for path in paths if path))
-
-
-def path_matches_surface(rel_path: str, surface: str) -> bool:
-    normalized = surface.replace("\\", "/").strip("/")
-    if not normalized:
-        return False
-    if glob_match([normalized], rel_path):
-        return True
-    if not any(char in normalized for char in "*?[") and not looks_like_file_path(normalized):
-        return rel_path == normalized or rel_path.startswith(normalized + "/")
-    return False
-
-
-def capability_surface_paths(capability: CapabilityEntry) -> list[tuple[str, str]]:
-    surfaces: list[tuple[str, str]] = []
-    for value in capability.owner_modules:
-        surfaces.append((value, "owner_modules"))
-    for value in capability.scope.get("paths", []):
-        surfaces.append((str(value), "scope.paths"))
-    for value in capability.public_entries:
-        surfaces.append((value, "public_entries"))
-    for value in capability.related_tests:
-        surfaces.append((value, "related_tests"))
-    for value in paths_from_test_bindings(capability.test_bindings):
-        surfaces.append((value, "test_bindings"))
-    return surfaces
-
-
-def module_surface_paths(module: ModuleEntry) -> list[tuple[str, str]]:
-    values = [(module.path, "module.path")]
-    values.extend((value, "module.key_files") for value in module.key_files)
-    values.extend((value, "module.index_sources") for value in module.index_sources)
-    return values
-
-
-def resolve_reuse_scope(
-    repo_root: Path,
-    bundle: dict[str, Any],
-    capabilities: list[CapabilityEntry],
-    modules: list[ModuleEntry],
-    candidate_files: list[Path],
-    changed_paths: Optional[list[str]],
-) -> dict[str, Any]:
-    if not changed_paths:
-        return {
-            "mode": "full_scan",
-            "status": "resolved",
-            "capability_ids": [capability.id for capability in capabilities],
-            "direct_capability_ids": [capability.id for capability in capabilities],
-            "dependency_capability_ids": [],
-            "unresolved_paths": [],
-            "sources": {capability.id: ["explicit_full_scan"] for capability in capabilities},
-            "ignored_broad_mappings": [],
-        }
-
-    capability_by_id = {capability.id: capability for capability in capabilities}
-    direct_ids: set[str] = set()
-    sources: dict[str, set[str]] = defaultdict(set)
-    resolved_paths: set[str] = set()
-    candidate_rels = [normalize_rel_path(repo_root, path) for path in candidate_files]
-    path_entries = bundle.get("path_to_capability_map", {}).get("path_index", [])
-    ignored_broad_mappings: list[dict[str, Any]] = []
-
-    for rel_path in candidate_rels:
-        matching_entries = [
-            entry
-            for entry in path_entries
-            if entry.get("path_pattern")
-            and path_matches_surface(rel_path, str(entry.get("path_pattern")))
-        ]
-        specific_entries = [
-            entry
-            for entry in matching_entries
-            if str(entry.get("path_pattern", "")).replace("\\", "/").strip("/") not in {"*", "**", "."}
-        ]
-        selected_entries = specific_entries or [
-            entry for entry in matching_entries if not entry.get("capabilities")
-        ]
-        for entry in matching_entries:
-            if entry not in selected_entries and entry.get("capabilities"):
-                ignored_broad_mappings.append(
+        for imported in parse_java_imports(source_file):
+            target, resolved_path = infer_import_reference(imported, source, modules, repo_root, source_file)
+            if target and target.path != source.path and target.public_api and not import_matches_public_surface(imported, target, resolved_path):
+                findings.append(
                     {
-                        "path": rel_path,
-                        "path_pattern": entry.get("path_pattern"),
-                        "capabilities": entry.get("capabilities", []),
+                        "severity": "P1",
+                        "rule": "public-api-bypass",
+                        "source": normalize_rel_path(repo_root, source_file),
+                        "target": resolved_path or target.path,
+                        "source_file": normalize_rel_path(repo_root, source_file),
+                        "source_module": source.path,
+                        "target_module": target.path,
+                        "import": imported,
+                        "message": f"{source.path} reaches {target.path} through a non-public import path",
                     }
                 )
-        for entry in selected_entries:
-            pattern = str(entry.get("path_pattern", ""))
-            for capability_id in entry.get("capabilities", []):
-                if capability_id in capability_by_id:
-                    direct_ids.add(capability_id)
-                    sources[capability_id].add(f"path_map:{pattern}")
-                    resolved_paths.add(rel_path)
-        for capability in capabilities:
-            for surface, source in capability_surface_paths(capability):
-                if path_matches_surface(rel_path, surface):
-                    direct_ids.add(capability.id)
-                    sources[capability.id].add(source)
-                    resolved_paths.add(rel_path)
-        for module in modules:
-            matched_sources = [source for surface, source in module_surface_paths(module) if path_matches_surface(rel_path, surface)]
-            if not matched_sources:
-                continue
-            for capability in capabilities:
-                if module.path in capability.owner_modules or module.path in capability.scope.get("paths", []):
-                    direct_ids.add(capability.id)
-                    sources[capability.id].update(matched_sources)
-                    resolved_paths.add(rel_path)
-
-    dependency_ids: set[str] = set()
-    include_neighbors = bool(
-        bundle.get("change_rules", {}).get("reuse_scan_scope", {}).get("include_dependency_neighbors", True)
-    )
-    if direct_ids and include_neighbors:
-        direct_owner_modules = {
-            owner
-            for capability_id in direct_ids
-            for owner in capability_by_id[capability_id].owner_modules
-        }
-        module_by_path = {module.path: module for module in modules}
-        neighbor_modules = {
-            dependency
-            for owner in direct_owner_modules
-            for dependency in (module_by_path[owner].depends_on if owner in module_by_path else [])
-        }
-        neighbor_modules.update(
-            module.path
-            for module in modules
-            if any(dependency in direct_owner_modules for dependency in module.depends_on)
-        )
-        for capability in capabilities:
-            if capability.id in direct_ids:
-                continue
-            if set(capability.owner_modules) & neighbor_modules:
-                dependency_ids.add(capability.id)
-                sources[capability.id].add("module_dependency_neighbor")
-            elif set(capability.dependent_modules) & direct_owner_modules:
-                dependency_ids.add(capability.id)
-                sources[capability.id].add("capability_dependent_modules")
-
-    selected_ids = direct_ids | dependency_ids
-    unresolved = sorted(set(candidate_rels) - resolved_paths)
-    status = "resolved" if selected_ids and not unresolved else "partial" if selected_ids else "unresolved"
-    return {
-        "mode": "changed_paths",
-        "status": status,
-        "capability_ids": [capability.id for capability in capabilities if capability.id in selected_ids],
-        "direct_capability_ids": [capability.id for capability in capabilities if capability.id in direct_ids],
-        "dependency_capability_ids": [capability.id for capability in capabilities if capability.id in dependency_ids],
-        "unresolved_paths": unresolved,
-        "sources": {key: sorted(value) for key, value in sorted(sources.items())},
-        "ignored_broad_mappings": ignored_broad_mappings,
-    }
-
-
-def collect_surface_files(repo_root: Path, surfaces: Iterable[str], ignore_patterns: Iterable[str]) -> list[Path]:
-    files: list[Path] = []
-    for surface in surfaces:
-        normalized = str(surface).replace("\\", "/").strip()
-        if not normalized:
-            continue
-        if any(char in normalized for char in "*?["):
-            for target in repo_root.glob(normalized.lstrip("/")):
-                files.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
-        else:
-            target = Path(normalized)
-            if not target.is_absolute():
-                target = repo_root / normalized
-            files.extend(collect_code_files_from_surface(repo_root, target, ignore_patterns))
-    return unique_paths(repo_root, files)
-
-
-def is_test_file(path: Path) -> bool:
-    normalized = path.as_posix().lower()
-    name = path.name.lower()
-    return (
-        any(segment in {"test", "tests", "__tests__"} for segment in normalized.split("/"))
-        or name.startswith("test_")
-        or ".test." in name
-        or ".spec." in name
+    baseline = bundle.get("change_rules", {}).get("architecture_baseline", [])
+    return classify_findings_against_baseline(
+        findings,
+        baseline,
+        governed_rules={"public-api-bypass", "public-export-count"},
     )
 
 
-def capability_comparison_files(
+def guardrail_finding_is_blocking(finding: dict[str, Any]) -> bool:
+    if "blocking" in finding:
+        return bool(finding["blocking"])
+    return finding.get("severity") in {"P0", "P1"}
+
+
+def guardrail_status(findings: list[dict[str, Any]]) -> tuple[str, bool]:
+    blocking = any(guardrail_finding_is_blocking(finding) for finding in findings)
+    return ("fail" if blocking else "warn" if findings else "pass"), blocking
+
+
+def _reuse_scan_environment() -> ReuseScanEnvironment:
+    return ReuseScanEnvironment(
+        normalize_rel_path=normalize_rel_path,
+        should_ignore_path=should_ignore_path,
+        iter_source_files=iter_source_files,
+        source_files_for_modules=source_files_for_modules,
+        root_owner_fallback_modules=root_owner_fallback_modules,
+        derive_path_tokens=derive_path_tokens,
+        normalized_code=normalized_code,
+        text_tokens=text_tokens,
+        code_suffixes=frozenset(CODE_SUFFIXES),
+        generic_path_tokens=frozenset(GENERIC_PATH_TOKENS),
+    )
+
+
+def changed_path_candidate_files(
     repo_root: Path,
-    capability: CapabilityEntry,
-    modules: list[ModuleEntry],
+    changed_paths: list[str],
     ignore_patterns: Iterable[str],
-    candidate_files: list[Path],
 ) -> list[Path]:
-    owner_files = capability_owner_files(repo_root, capability, modules, ignore_patterns)
-    if not any(is_test_file(candidate) for candidate in candidate_files):
-        return owner_files
-    module_by_path = {module.path: module for module in modules}
-    test_surfaces = list(capability.related_tests) + paths_from_test_bindings(capability.test_bindings)
-    for owner in capability.owner_modules:
-        module = module_by_path.get(owner)
-        if module:
-            test_surfaces.extend(module.key_files)
-            test_surfaces.extend(module.index_sources)
-    test_files = [path for path in collect_surface_files(repo_root, test_surfaces, ignore_patterns) if is_test_file(path)]
-    return unique_paths(repo_root, [*test_files, *owner_files])
-
-
-def jaccard(left: set[str], right: set[str]) -> float:
-    if not left or not right:
-        return 0.0
-    return len(left & right) / len(left | right)
-
-
-def path_token_set(repo_root: Path, path: Path) -> set[str]:
-    tokens = set(derive_path_tokens(normalize_rel_path(repo_root, path)))
-    return {token for token in tokens if token not in GENERIC_PATH_TOKENS}
-
-
-def prioritize_owner_files(repo_root: Path, owner_files: list[Path], candidate_files: list[Path]) -> list[Path]:
-    candidate_tokens: set[str] = set()
-    for candidate in candidate_files:
-        candidate_tokens.update(path_token_set(repo_root, candidate))
-    return sorted(
-        owner_files,
-        key=lambda path: (
-            -jaccard(path_token_set(repo_root, path), candidate_tokens),
-            normalize_rel_path(repo_root, path),
-        ),
+    return _changed_path_candidate_files(
+        _reuse_scan_environment(), repo_root, changed_paths, ignore_patterns
     )
 
 
@@ -4917,423 +5240,24 @@ def gather_reuse_report(
     budget_overrides: Optional[dict[str, Any]] = None,
     runtime_options: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    started = time.monotonic()
-    modules = module_entries(bundle)
-    capabilities = capability_entries(bundle)
-    capability_by_id = {capability.id: capability for capability in capabilities}
-    ignore_patterns = default_ignore_patterns(bundle.get("config", {}))
-    budget = reuse_scan_budget_from_bundle(bundle, budget_overrides)
-    runtime_options = dict(runtime_options or {})
-    runtime_policy = ReuseRuntimePolicy(
-        soft_timeout_seconds=max(0.0, float(runtime_options.get("soft_timeout_seconds", 0.0))),
-        hard_timeout_seconds=max(0.0, float(runtime_options.get("hard_timeout_seconds", 0.0))),
-        checkpoint_interval_seconds=max(0.1, float(runtime_options.get("checkpoint_interval_seconds", 5.0))),
-        cache_mode=str(runtime_options.get("cache_mode", "off")),
-        diagnostics_mode=str(runtime_options.get("diagnostics_mode", "never")),
-        persist_reports=bool(runtime_options.get("persist_reports", False)),
+    return _gather_reuse_report(
+        _reuse_scan_environment(),
+        repo_root,
+        bundle,
+        module_entries(bundle),
+        capability_entries(bundle),
+        default_ignore_patterns(bundle.get("config", {})),
+        changed_paths,
+        budget_overrides,
+        runtime_options,
     )
-    run_id = str(runtime_options.get("run_id", f"reuse-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}"))
-    deadline = started + runtime_policy.soft_timeout_seconds if runtime_policy.soft_timeout_seconds > 0 else None
-    runtime_root = Path(runtime_options["runtime_root"]).resolve() if runtime_options.get("runtime_root") else None
-    store = ReuseRuntimeStore(runtime_root, runtime_policy.cache_mode) if runtime_root else None
-
-    phase_started = time.monotonic()
-    if changed_paths:
-        candidate_files = changed_path_candidate_files(repo_root, changed_paths, ignore_patterns)
-    else:
-        candidate_files = source_files_for_modules(repo_root, modules, ignore_patterns)
-    scope = resolve_reuse_scope(repo_root, bundle, capabilities, modules, candidate_files, changed_paths)
-    scoped_capabilities = [capability_by_id[item] for item in scope["capability_ids"] if item in capability_by_id]
-    scope_elapsed = int((time.monotonic() - phase_started) * 1000)
-
-    findings: list[dict[str, Any]] = []
-    metrics: dict[str, Any] = {
-        "status": "complete",
-        "completion_status": "complete",
-        "termination_reason": None,
-        "evidence_complete": True,
-        "budget_exceeded": False,
-        "changed_path_count": len(changed_paths or []),
-        "candidate_file_count": len(candidate_files),
-        "candidate_files_scanned": min(len(candidate_files), budget.max_candidate_files),
-        "candidate_files_limited": len(candidate_files) > budget.max_candidate_files,
-        "owner_file_count": 0,
-        "owner_files_scanned": 0,
-        "owner_files_limited_capabilities": [],
-        "capabilities_total": len(capabilities),
-        "capabilities_scanned": len(scoped_capabilities),
-        "capabilities_skipped_by_scope": max(0, len(capabilities) - len(scoped_capabilities)),
-        "raw_pair_count": 0,
-        "unique_pair_count": 0,
-        "comparisons_planned": 0,
-        "comparisons_run": 0,
-        "comparisons_skipped_by_prefilter": 0,
-        "comparisons_skipped_by_size": 0,
-        "comparisons_skipped_by_budget": 0,
-        "comparisons_skipped_by_top_k": 0,
-        "comparisons_skipped_by_pair_dedup": 0,
-        "source_files_read": 0,
-        "fingerprint_cache_hits": 0,
-        "fingerprint_cache_misses": 0,
-        "fingerprints_written": 0,
-        "fingerprint_advisories_reported": 0,
-        "size_limited_examples": [],
-        "candidate_examples": [normalize_rel_path(repo_root, path) for path in candidate_files[:20]],
-        "scope": scope,
-        "elapsed_ms_by_phase": {"candidate_and_scope": scope_elapsed},
-        "budget": dataclasses.asdict(budget),
-        "runtime": dataclasses.asdict(runtime_policy),
-        "runtime_recovery": store.recovery_event if store else None,
-        "fingerprint_version": FINGERPRINT_VERSION,
-    }
-    if metrics["candidate_files_limited"]:
-        candidate_files = candidate_files[: budget.max_candidate_files]
-
-    normalized_cache: dict[Path, str] = {}
-    fingerprint_cache: dict[Path, dict[str, Any]] = {}
-    owner_file_cache: dict[str, list[Path]] = {}
-    pair_prefilter_cache: dict[tuple[str, str], Optional[float]] = {}
-    exact_score_cache: dict[tuple[str, str], float] = {}
-    duplicate_findings: dict[tuple[str, str], dict[str, Any]] = {}
-    fingerprint_advisories: dict[tuple[str, str], dict[str, Any]] = {}
-    last_checkpoint = started
-    stop_reason: Optional[str] = None
-
-    def rel(path: Path) -> str:
-        return normalize_rel_path(repo_root, path)
-
-    def should_stop() -> bool:
-        nonlocal stop_reason
-        if stop_reason:
-            return True
-        if deadline is not None and time.monotonic() >= deadline:
-            stop_reason = "soft_timeout"
-            return True
-        return False
-
-    def write_checkpoint(force: bool = False) -> None:
-        nonlocal last_checkpoint
-        if store is None:
-            return
-        now = time.monotonic()
-        if not force and now - last_checkpoint < runtime_policy.checkpoint_interval_seconds:
-            return
-        payload = {
-            "report_schema_version": 2,
-            "report_class": "checkpoint",
-            "run_id": run_id,
-            "timestamp": runtime_iso_now(),
-            "completion_status": "running" if not stop_reason else stop_reason,
-            "scan": metrics,
-            "findings": [*findings, *duplicate_findings.values()],
-        }
-        store.write_checkpoint(run_id, payload)
-        last_checkpoint = now
-
-    def normalized_text(path: Path) -> str:
-        if path not in normalized_cache:
-            metrics["source_files_read"] += 1
-            normalized_cache[path] = normalized_code(path.read_text(encoding="utf-8", errors="ignore"))
-        return normalized_cache[path]
-
-    def fingerprint(path: Path) -> dict[str, Any]:
-        if path in fingerprint_cache:
-            return fingerprint_cache[path]
-        path_rel = rel(path)
-        stat_key = file_stat_key(path)
-        cached = store.get_fingerprint(path_rel, stat_key) if store else None
-        if cached is not None:
-            metrics["fingerprint_cache_hits"] += 1
-            fingerprint_cache[path] = cached
-            return cached
-        metrics["fingerprint_cache_misses"] += 1
-        text = normalized_text(path)
-        tokens = text_tokens(text)
-        value = {
-            "suffix": path.suffix.lower(),
-            "file_size": path.stat().st_size,
-            "normalized_length": len(text),
-            "token_count": len(tokens),
-            "token_sketch": token_sketch(tokens),
-            "content_digest": hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest(),
-        }
-        if store:
-            store.put_fingerprint(path_rel, stat_key, value)
-            if runtime_policy.cache_mode not in {"off", "read-only"}:
-                metrics["fingerprints_written"] += 1
-        fingerprint_cache[path] = value
-        return value
-
-    def pair_key(left: Path, right: Path) -> tuple[str, str]:
-        return tuple(sorted((rel(left), rel(right))))
-
-    def remember_size_limited(
-        owner_file: Path,
-        candidate: Path,
-        owner_fp: dict[str, Any],
-        candidate_fp: dict[str, Any],
-    ) -> None:
-        if len(metrics["size_limited_examples"]) < 20:
-            metrics["size_limited_examples"].append(
-                {
-                    "owner_file": rel(owner_file),
-                    "candidate_file": rel(candidate),
-                    "owner_bytes": owner_fp["file_size"],
-                    "candidate_bytes": candidate_fp["file_size"],
-                }
-            )
-
-    def prefilter_pair(owner_file: Path, candidate: Path, capability_id: str) -> Optional[float]:
-        key = pair_key(owner_file, candidate)
-        if key in pair_prefilter_cache:
-            metrics["comparisons_skipped_by_pair_dedup"] += 1
-            if key in fingerprint_advisories and capability_id not in fingerprint_advisories[key]["capabilities"]:
-                fingerprint_advisories[key]["capabilities"].append(capability_id)
-                fingerprint_advisories[key]["capabilities"].sort()
-            return pair_prefilter_cache[key]
-        if candidate == owner_file or candidate.suffix.lower() != owner_file.suffix.lower():
-            metrics["comparisons_skipped_by_prefilter"] += 1
-            pair_prefilter_cache[key] = None
-            return None
-        owner_fp = fingerprint(owner_file)
-        candidate_fp = fingerprint(candidate)
-        shorter = max(1, min(owner_fp["normalized_length"], candidate_fp["normalized_length"]))
-        length_ratio = max(owner_fp["normalized_length"], candidate_fp["normalized_length"]) / shorter
-        if length_ratio > budget.max_length_ratio:
-            metrics["comparisons_skipped_by_prefilter"] += 1
-            pair_prefilter_cache[key] = None
-            return None
-        token_score = jaccard(set(owner_fp["token_sketch"]), set(candidate_fp["token_sketch"]))
-        path_score = jaccard(path_token_set(repo_root, owner_file), path_token_set(repo_root, candidate))
-        if token_score < budget.min_token_jaccard and path_score < budget.min_path_token_overlap:
-            metrics["comparisons_skipped_by_prefilter"] += 1
-            pair_prefilter_cache[key] = None
-            return None
-        score = (token_score * 0.8) + (path_score * 0.2)
-        size_limited = bool(
-            owner_fp["file_size"] > budget.max_file_bytes_for_full_similarity
-            or candidate_fp["file_size"] > budget.max_file_bytes_for_full_similarity
-            or owner_fp["normalized_length"] > budget.max_normalized_chars_for_full_similarity
-            or candidate_fp["normalized_length"] > budget.max_normalized_chars_for_full_similarity
-            or owner_fp["normalized_length"] * candidate_fp["normalized_length"] > budget.max_similarity_char_product
-        )
-        if size_limited:
-            metrics["comparisons_skipped_by_size"] += 1
-            remember_size_limited(owner_file, candidate, owner_fp, candidate_fp)
-            if score >= budget.min_fingerprint_advisory_score:
-                fingerprint_advisories[key] = {
-                    "severity": "P2",
-                    "rule": "duplicate-fingerprint-candidate",
-                    "path": rel(candidate),
-                    "owner_path": rel(owner_file),
-                    "capability": capability_id,
-                    "capabilities": [capability_id],
-                    "fingerprint_score": round(score, 4),
-                    "message": "fingerprint similarity requires targeted source analysis; this is not exact duplicate proof",
-                }
-            pair_prefilter_cache[key] = None
-            return None
-        pair_prefilter_cache[key] = score
-        return score
-
-    scan_phase_started = time.monotonic()
-    for capability in capabilities:
-        for pattern in capability.forbidden_patterns:
-            for candidate in candidate_files:
-                candidate_rel = rel(candidate)
-                if fnmatch.fnmatchcase(candidate_rel, pattern.replace("\\", "/")):
-                    findings.append(
-                        {
-                            "severity": "P0",
-                            "rule": "forbidden-pattern",
-                            "path": candidate_rel,
-                            "capability": capability.id,
-                            "message": f"{candidate_rel} matches a forbidden path pattern for {capability.id}",
-                        }
-                    )
-
-    if changed_paths and not candidate_files:
-        scope["status"] = "unresolved"
-        scope["unresolved_paths"] = sorted(
-            {str(path).replace("\\", "/") for path in changed_paths if str(path).strip()}
-        )
-    if scope["status"] in {"unresolved", "partial"}:
-        findings.append(
-            {
-                "severity": "P2",
-                "rule": "reuse-scan-scope-unresolved",
-                "message": "Changed paths were not fully resolved to capability ownership; the scan did not expand to unrelated capabilities.",
-                "details": {
-                    "scope_status": scope["status"],
-                    "unresolved_paths": scope["unresolved_paths"],
-                    "scoped_capabilities": scope["capability_ids"],
-                },
-            }
-        )
-
-    budget_exhausted = False
-    for capability in scoped_capabilities:
-        if should_stop() or not candidate_files:
-            break
-        if capability.id not in owner_file_cache:
-            owner_files = capability_comparison_files(
-                repo_root, capability, modules, ignore_patterns, candidate_files
-            )
-            metrics["owner_file_count"] += len(owner_files)
-            if len(owner_files) > budget.max_owner_files_per_capability:
-                metrics["owner_files_limited_capabilities"].append(
-                    {
-                        "capability": capability.id,
-                        "owner_file_count": len(owner_files),
-                        "scanned": budget.max_owner_files_per_capability,
-                    }
-                )
-                owner_files = prioritize_owner_files(repo_root, owner_files, candidate_files)[
-                    : budget.max_owner_files_per_capability
-                ]
-            owner_file_cache[capability.id] = owner_files
-        owner_files = owner_file_cache[capability.id]
-        metrics["owner_files_scanned"] += len(owner_files)
-        metrics["raw_pair_count"] += sum(
-            1 for owner_file in owner_files for candidate in candidate_files if owner_file != candidate
-        )
-
-        for candidate in candidate_files:
-            if should_stop():
-                break
-            preliminary: list[tuple[float, Path]] = []
-            for owner_file in owner_files:
-                if should_stop():
-                    break
-                rough_score = prefilter_pair(owner_file, candidate, capability.id)
-                if rough_score is not None:
-                    preliminary.append((rough_score, owner_file))
-                write_checkpoint()
-            metrics["comparisons_planned"] += len(preliminary)
-            selected = sorted(preliminary, key=lambda item: item[0], reverse=True)[
-                : budget.top_k_owner_files_per_candidate
-            ]
-            metrics["comparisons_skipped_by_top_k"] += max(0, len(preliminary) - len(selected))
-            for _, owner_file in selected:
-                if should_stop():
-                    break
-                key = pair_key(owner_file, candidate)
-                if key in exact_score_cache:
-                    metrics["comparisons_skipped_by_pair_dedup"] += 1
-                    score = exact_score_cache[key]
-                else:
-                    if metrics["comparisons_run"] >= budget.max_comparisons:
-                        metrics["budget_exceeded"] = True
-                        metrics["comparisons_skipped_by_budget"] += len(selected)
-                        budget_exhausted = True
-                        break
-                    owner_text = normalized_text(owner_file)
-                    candidate_text = normalized_text(candidate)
-                    matcher = difflib.SequenceMatcher(None, owner_text, candidate_text)
-                    if matcher.quick_ratio() < 0.85:
-                        metrics["comparisons_skipped_by_prefilter"] += 1
-                        exact_score_cache[key] = 0.0
-                        continue
-                    metrics["comparisons_run"] += 1
-                    score = matcher.ratio()
-                    exact_score_cache[key] = score
-                if score < 0.85:
-                    continue
-                existing = duplicate_findings.get(key)
-                if existing is None:
-                    duplicate_findings[key] = {
-                        "severity": "P1" if score >= 0.92 else "P2",
-                        "rule": "duplicate-implementation",
-                        "path": rel(candidate),
-                        "owner_path": rel(owner_file),
-                        "capability": capability.id,
-                        "capabilities": [capability.id],
-                        "score": round(score, 4),
-                        "message": f"duplicate implementation signal for {capability.id}",
-                    }
-                elif capability.id not in existing["capabilities"]:
-                    existing["capabilities"].append(capability.id)
-                    existing["capabilities"].sort()
-                    if score >= 0.92:
-                        existing["severity"] = "P1"
-                    existing["score"] = max(existing["score"], round(score, 4))
-                write_checkpoint()
-            if budget_exhausted or should_stop():
-                break
-        if budget_exhausted or should_stop():
-            break
-
-    findings.extend(duplicate_findings.values())
-    advisory_findings = [
-        finding
-        for key, finding in sorted(
-            fingerprint_advisories.items(),
-            key=lambda item: (-item[1]["fingerprint_score"], item[0]),
-        )
-        if key not in duplicate_findings
-    ][:20]
-    findings.extend(advisory_findings)
-    metrics["fingerprint_advisories_reported"] = len(advisory_findings)
-    metrics["unique_pair_count"] = sum(1 for left, right in pair_prefilter_cache if left != right)
-    metrics["elapsed_ms_by_phase"]["fingerprint_and_compare"] = int(
-        (time.monotonic() - scan_phase_started) * 1000
-    )
-    metrics["elapsed_ms"] = int((time.monotonic() - started) * 1000)
-    size_limit_prevented_scan = bool(
-        metrics["raw_pair_count"] > 0
-        and metrics["comparisons_skipped_by_size"] > 0
-        and metrics["comparisons_planned"] == 0
-        and metrics["comparisons_run"] == 0
-    )
-    metrics["size_limit_prevented_scan"] = size_limit_prevented_scan
-
-    if stop_reason:
-        completion_status = "timeout"
-        termination_reason = stop_reason
-    elif scope["status"] in {"unresolved", "partial"}:
-        completion_status = "incomplete"
-        termination_reason = "scope_unresolved"
-    elif (
-        metrics["budget_exceeded"]
-        or metrics["candidate_files_limited"]
-        or metrics["owner_files_limited_capabilities"]
-        or size_limit_prevented_scan
-    ):
-        completion_status = "bounded"
-        termination_reason = "configured_budget"
-    else:
-        completion_status = "complete"
-        termination_reason = None
-    metrics["completion_status"] = completion_status
-    metrics["termination_reason"] = termination_reason
-    metrics["evidence_complete"] = completion_status == "complete"
-    metrics["status"] = "complete" if completion_status == "complete" else "warn"
-
-    if completion_status != "complete" and not any(
-        finding["rule"] == "reuse-scan-scope-unresolved" for finding in findings
-    ):
-        findings.append(
-            {
-                "severity": "P2",
-                "rule": "reuse-scan-incomplete",
-                "message": "Reuse scan produced bounded or interrupted evidence; do not treat it as proof that no duplicate implementation exists.",
-                "details": {
-                    "completion_status": completion_status,
-                    "termination_reason": termination_reason,
-                    "scope": scope,
-                },
-            }
-        )
-
-    write_checkpoint(force=True)
-    if store:
-        if completion_status == "complete":
-            store.delete_checkpoint(run_id)
-        store.close()
-    return {"findings": findings, "scan": metrics}
 
 
-def gather_reuse_findings(repo_root: Path, bundle: dict[str, Any], changed_paths: Optional[list[str]] = None) -> list[dict[str, Any]]:
+def gather_reuse_findings(
+    repo_root: Path,
+    bundle: dict[str, Any],
+    changed_paths: Optional[list[str]] = None,
+) -> list[dict[str, Any]]:
     return gather_reuse_report(repo_root, bundle, changed_paths)["findings"]
 
 
@@ -5384,7 +5308,11 @@ def copy_skill_schemas_to_bundle(bundle_root: Path) -> None:
     target = bundle_root / "schemas"
     target.mkdir(parents=True, exist_ok=True)
     for schema_file in schema_dir().glob("*.json"):
-        shutil.copy2(schema_file, target / schema_file.name)
+        target_file = target / schema_file.name
+        content = schema_file.read_text(encoding="utf-8")
+        if target_file.exists() and target_file.read_text(encoding="utf-8") == content:
+            continue
+        write_text_in_chunks(target_file, content)
 
 
 def clear_core_reference_files(bundle_root: Path) -> None:
@@ -5422,6 +5350,7 @@ def bootstrap_bundle(repo_root: Path, write: bool = True) -> dict[str, Any]:
     bundle = build_router_bundle(repo_root)
     bundle_root = resolve_bundle_root(repo_root)
     bundle["root"] = bundle_root
+    bundle["_resolution_context"] = "bootstrap"
     if write:
         create_bundle_directory(repo_root)
         clear_core_reference_files(bundle_root)
@@ -5443,27 +5372,33 @@ def locate_bundle_or_raise(repo_root: Path) -> Path:
 
 
 def evaluate_bundle(bundle: dict[str, Any], repo_root: Path) -> dict[str, Any]:
-    evaluations = bundle.get("evaluation_set", {}).get("cases", [])
+    evaluation_set = bundle.get("evaluation_set", {})
+    evaluations = evaluation_set.get("cases", [])
     capabilities = capability_entries(bundle)
     capability_ids = {capability.id for capability in capabilities}
-    covered_capability_ids = {
-        capability
-        for case in evaluations
-        for capability in case.get("expected_capabilities", [])
-    }
+    coverage_capability_ids = {
+        capability.id
+        for capability in capabilities
+        if capability.status == "stable"
+        or capability.stage in {"stable", "governed-capability"}
+    } or capability_ids
     results = []
-    action_matches = 0
-    primary_matches = 0
-    review_expected = 0
-    review_predicted = 0
     for case in evaluations:
-        decision = resolve_request(case["request"], case.get("changed_paths", []), bundle, bundle.get("root", resolve_bundle_root(repo_root)))
+        decision = resolve_request(
+            case["request"],
+            case.get("changed_paths", []),
+            bundle,
+            bundle.get("root", resolve_bundle_root(repo_root)),
+            enforce_evaluation_policy=False,
+            freshness_context="evaluation",
+        )
         action_ok = decision.action == case["expected_action"]
-        primary_ok = not case.get("expected_capabilities") or decision.primary_capability in case["expected_capabilities"]
-        action_matches += 1 if action_ok else 0
-        primary_matches += 1 if primary_ok else 0
-        review_expected += 1 if case["expected_action"] == "review" else 0
-        review_predicted += 1 if decision.action == "review" else 0
+        capability_contract = compare_capability_contract(
+            case,
+            predicted_primary=decision.primary_capability,
+            predicted_secondary=decision.secondary_capabilities,
+        )
+        primary_ok = capability_contract["primary_ok"]
         results.append(
             {
                 "id": case["id"],
@@ -5473,39 +5408,83 @@ def evaluate_bundle(bundle: dict[str, Any], repo_root: Path) -> dict[str, Any]:
                 "predicted_capability": decision.primary_capability,
                 "action_ok": action_ok,
                 "primary_ok": primary_ok,
+                **capability_contract,
             }
         )
-    total = max(1, len(evaluations))
-    review_hits = sum(1 for result in results if result["expected_action"] == "review" and result["predicted_action"] == "review")
+    raw_curated_ids = evaluation_set.get("curated_case_ids", [])
+    curated_ids = {
+        case_id for case_id in raw_curated_ids if isinstance(case_id, str)
+    } if isinstance(raw_curated_ids, list) else set()
+    metric_results = (
+        [result for result in results if result["id"] in curated_ids]
+        if evaluation_set.get("mode") in {"curated", "hybrid"} and curated_ids
+        else results
+    )
+    total = max(1, len(metric_results))
+    action_matches = sum(int(result["action_ok"]) for result in metric_results)
+    primary_matches = sum(int(result["primary_ok"]) for result in metric_results)
+    review_expected = sum(result["expected_action"] == "review" for result in metric_results)
+    review_predicted = sum(result["predicted_action"] == "review" for result in metric_results)
+    review_hits = sum(result["expected_action"] == "review" and result["predicted_action"] == "review" for result in metric_results)
+    strict_secondary = [result for result in metric_results if result["strict_secondary"]]
+    strict_secondary_cases = len(strict_secondary)
+    strict_secondary_matches = sum(int(result["secondary_ok"]) for result in strict_secondary)
+    covered_capability_ids = {
+        capability
+        for result in metric_results
+        for capability in (
+            [result["expected_primary_capability"]]
+            + result["expected_secondary_capabilities"]
+        )
+        if capability
+    }
     evaluation_config = bundle.get("config", {}).get("evaluation", {})
     action_accuracy = action_matches / total
-    coverage_ratio = len(capability_ids & covered_capability_ids) / max(1, len(capability_ids))
-    minimum_case_count = int(evaluation_config.get("minimum_case_count", 12))
-    minimum_coverage_ratio = float(evaluation_config.get("minimum_capability_coverage_ratio", 0.80))
-    top1_threshold = float(evaluation_config.get("top1_accuracy_threshold", 0.80))
-    status = "pass" if action_accuracy >= top1_threshold and len(evaluations) >= minimum_case_count and coverage_ratio >= minimum_coverage_ratio else "fail"
+    coverage_ratio = len(coverage_capability_ids & covered_capability_ids) / max(1, len(coverage_capability_ids))
+    review_precision = review_hits / max(1, review_predicted)
+    review_recall = review_hits / max(1, review_expected)
+    secondary_contract_accuracy = (
+        strict_secondary_matches / strict_secondary_cases
+        if strict_secondary_cases
+        else 1.0
+    )
+    policy_decision = evaluate_configured_policy(
+        {
+            "top1_action_accuracy": action_accuracy,
+            "top1_capability_accuracy": primary_matches / total,
+            "review_precision": review_precision,
+            "review_recall": review_recall,
+            "capability_coverage_ratio": coverage_ratio,
+            "secondary_contract_accuracy": secondary_contract_accuracy,
+            "case_count": len(metric_results),
+            "strict_secondary_case_count": strict_secondary_cases,
+        },
+        evaluation_config,
+        evaluation_set,
+        requires_secondary_evidence=len(coverage_capability_ids) > 1,
+        valid_capability_ids=capability_ids,
+    )
     report = {
         "run_id": f"eval-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
         "timestamp": iso_now(),
-        "case_count": len(evaluations),
+        "case_count": len(metric_results),
         "top1_action_accuracy": round(action_accuracy, 4),
         "top1_capability_accuracy": round(primary_matches / total, 4),
-        "review_precision": round(review_hits / max(1, review_predicted), 4),
-        "review_recall": round(review_hits / max(1, review_expected), 4),
-        "false_positive_count": sum(1 for result in results if result["expected_action"] != "review" and result["predicted_action"] == "review"),
-        "false_negative_count": sum(1 for result in results if result["expected_action"] == "review" and result["predicted_action"] != "review"),
-        "capability_count": len(capability_ids),
-        "covered_capability_count": len(capability_ids & covered_capability_ids),
+        "review_precision": round(review_precision, 4),
+        "review_recall": round(review_recall, 4),
+        "false_positive_count": sum(1 for result in metric_results if result["expected_action"] != "review" and result["predicted_action"] == "review"),
+        "false_negative_count": sum(1 for result in metric_results if result["expected_action"] == "review" and result["predicted_action"] != "review"),
+        "capability_count": len(coverage_capability_ids),
+        "covered_capability_count": len(coverage_capability_ids & covered_capability_ids),
         "capability_coverage_ratio": round(coverage_ratio, 4),
-        "uncovered_capabilities": sorted(capability_ids - covered_capability_ids),
+        "secondary_contract_accuracy": round(secondary_contract_accuracy, 4),
+        "strict_secondary_case_count": strict_secondary_cases,
+        "uncovered_capabilities": sorted(coverage_capability_ids - covered_capability_ids),
         "per_case_results": results,
         "evaluation_mode": bundle.get("evaluation_set", {}).get("mode", evaluation_config.get("mode", "generated_only")),
-        "status": status,
-        "status_reasons": [
-            *([] if action_accuracy >= top1_threshold else [f"top1_action_accuracy below {top1_threshold}"]),
-            *([] if len(evaluations) >= minimum_case_count else [f"case_count below {minimum_case_count}"]),
-            *([] if coverage_ratio >= minimum_coverage_ratio else [f"capability_coverage_ratio below {minimum_coverage_ratio}"]),
-        ],
+        "enforcement_mode": policy_decision.enforcement_mode,
+        "status": "pass" if policy_decision.passed else "fail",
+        "status_reasons": list(policy_decision.reasons),
     }
     return report
 
@@ -5518,73 +5497,69 @@ def rebuild_index(repo_root: Path, write_back: bool = False) -> dict[str, Any]:
     existing_modules = {item["path"] for item in existing.get("module_map", {}).get("modules", [])}
     new_modules = {item["path"] for item in rebuilt["module_map"]["modules"]}
     stale_entries = [{"path": path, "kind": "module"} for path in sorted(existing_modules - new_modules)]
-    missing_paths = [item["path"] for item in rebuilt["module_map"]["modules"] if not (repo_root / item["path"]).exists() and item["path"] != "."]
-    report = {
-        "report_id": f"rebuild-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-        "timestamp": iso_now(),
-        "source_commit": current_git_commit(repo_root),
-        "generated_modules_count": len(rebuilt["module_map"]["modules"]),
-        "curated_entries_count": len(rebuilt["capability_catalog"]["capabilities"]),
-        "conflicts": capability_conflicts(rebuilt),
-        "stale_entries": stale_entries,
-        "missing_paths": missing_paths,
-        "status": "pass" if not missing_paths and not capability_conflicts(rebuilt) else "fail",
-    }
+    missing_paths = [
+        item["path"]
+        for item in rebuilt["module_map"]["modules"]
+        if item.get("status", "active") != "planned"
+        and not (repo_root / item["path"]).exists()
+        and item["path"] != "."
+    ]
     if write_back:
+        evaluation_summary = evaluate_bundle(rebuilt, repo_root)
+        evaluation_config = rebuilt.get("config", {}).get("evaluation", {})
+        if evaluation_summary.get("status") == "pass":
+            evaluation_config["attestation"] = make_evaluation_attestation(rebuilt, evaluation_summary)
+        else:
+            evaluation_config.pop("attestation", None)
         create_bundle_directory(repo_root)
         write_bundle(bundle_root, rebuilt)
         copy_skill_schemas_to_bundle(bundle_root)
+    snapshot = build_structure_snapshot(repo_root, default_ignore_patterns(rebuilt.get("config", {})))
+    mapped_path_patterns = sorted(
+        str(item.get("path_pattern"))
+        for item in rebuilt.get("path_to_capability_map", {}).get("path_index", [])
+        if item.get("path_pattern")
+    )
+    conflicts = capability_conflicts(rebuilt)
+    report = {
+        "report_id": f"rebuild-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+        "timestamp": iso_now(),
+        "source_commit": snapshot.source_commit,
+        "structure_digest": snapshot.digest,
+        "indexed_paths": list(snapshot.paths),
+        "mapped_path_patterns": mapped_path_patterns,
+        "diagnostics": list(snapshot.diagnostics),
+        "generated_modules_count": len(rebuilt["module_map"]["modules"]),
+        "curated_entries_count": len(rebuilt["capability_catalog"]["capabilities"]),
+        "conflicts": conflicts,
+        "stale_entries": stale_entries,
+        "missing_paths": missing_paths,
+        "status": "pass" if not missing_paths and not conflicts and not stale_entries and not snapshot.diagnostics else "fail",
+    }
+    if write_back:
         write_report(bundle_root / "reports" / "index-rebuild" / "latest.json", report)
     return report
 
 
-def freshness_report(repo_root: Path, bundle: dict[str, Any]) -> dict[str, Any]:
+def freshness_report(
+    repo_root: Path,
+    bundle: dict[str, Any],
+    changed_paths: Optional[list[str]] = None,
+) -> dict[str, Any]:
     bundle_root = bundle.get("root", resolve_bundle_root(repo_root))
-    if not bundle_root.exists():
-        return {
-            "report_id": f"freshness-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-            "timestamp": iso_now(),
-            "status": "fail",
-            "checks": [],
-            "missing_references": ["project-change-router/router-config.yaml"],
-        }
-    freshness = bundle.get("config", {}).get("freshness_windows", {})
-    checks = []
-    for key, rel in [
-        ("capability_catalog_days", "references/capability-catalog.yaml"),
-        ("module_map_days", "references/module-map.yaml"),
-        ("exception_registry_days", "references/exception-registry.yaml"),
-        ("evaluation_set_days", "references/evaluation-set.yaml"),
-    ]:
-        path = bundle_root / rel
-        if not path.exists():
-            checks.append({"item": rel, "fresh": False, "reason": "missing file"})
-            continue
-        age_days = (dt.datetime.now(dt.timezone.utc).date() - dt.datetime.fromtimestamp(path.stat().st_mtime, tz=dt.timezone.utc).date()).days
-        checks.append({"item": rel, "fresh": age_days <= int(freshness.get(key, 30)), "age_days": age_days, "threshold_days": int(freshness.get(key, 30))})
-    missing_references = []
-    for capability in bundle.get("capability_catalog", {}).get("capabilities", []):
-        for path in capability.get("owner_modules", []):
-            if path != "." and not (repo_root / path).exists():
-                missing_references.append(path)
-        owner_roots = capability.get("owner_modules", [])
-        for public_entry in capability.get("public_entries", []):
-            normalized = public_entry.replace("\\", "/")
-            candidate_paths: list[Path] = [repo_root / normalized]
-            for owner_root in owner_roots:
-                owner_normalized = owner_root.replace("\\", "/")
-                if owner_normalized == ".":
-                    candidate_paths.append(repo_root / normalized)
-                elif not normalized.startswith(owner_normalized.rstrip("/") + "/"):
-                    candidate_paths.append(repo_root / owner_normalized / normalized)
-            if not any(candidate.exists() for candidate in candidate_paths):
-                missing_references.append(public_entry)
+    latest_path = bundle_root / "reports" / "index-rebuild" / "latest.json"
+    try:
+        indexed = load_json_file(latest_path) if latest_path.exists() else {}
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        indexed = {"diagnostics": [f"latest-report-error:{exc}"]}
+    snapshot = build_structure_snapshot(repo_root, default_ignore_patterns(bundle.get("config", {})))
+    effective_changes = list(changed_paths) if changed_paths is not None else list(collect_git_changed_paths(repo_root))
+    assessment = assess_index_freshness(snapshot, indexed, effective_changes)
     return {
         "report_id": f"freshness-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
         "timestamp": iso_now(),
-        "status": "pass" if all(item.get("fresh", False) for item in checks) and not missing_references else "fail",
-        "checks": checks,
-        "missing_references": sorted(set(missing_references)),
+        **assessment,
+        "missing_references": [] if latest_path.exists() else [str(latest_path.relative_to(repo_root))],
     }
 
 
@@ -5627,6 +5602,11 @@ def record_manual_feedback(bundle_root: Path, feedback: dict[str, Any]) -> dict[
     feedback_dir = bundle_root / "reports" / "manual-feedback"
     feedback_dir.mkdir(parents=True, exist_ok=True)
     feedback_id = feedback.get("feedback_id") or f"feedback-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    authorization_fields = authorization_audit_fields(
+        bundle_root,
+        feedback,
+        load_json_file,
+    )
     payload = {
         "feedback_id": feedback_id,
         "timestamp": iso_now(),
@@ -5637,6 +5617,7 @@ def record_manual_feedback(bundle_root: Path, feedback: dict[str, Any]) -> dict[
         "confirmed_public_entry": feedback.get("confirmed_public_entry"),
         "confirmed_owner": feedback.get("confirmed_owner"),
         "profile_update_recommended": bool(feedback.get("profile_update_recommended")),
+        **authorization_fields,
     }
     dump_json_file(feedback_dir / f"{feedback_id}.json", payload)
     return payload

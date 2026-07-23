@@ -8,8 +8,39 @@
     "generated_by": { "type": "string" },
     "source_repository": { "type": "string" },
     "source_commit": { "type": ["string", "null"] },
-    "mode": { "type": "string" },
-    "cases": { "type": "array", "items": { "type": "object" } }
+    "mode": { "type": "string", "enum": ["generated_only", "curated", "hybrid"] },
+    "curated_case_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "expected_primary_capability": { "type": "string", "minLength": 1 },
+          "expected_secondary_capabilities": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "secondary_match": { "type": "string", "enum": ["exact", "contains"] },
+          "calibration_category": {
+            "type": "string",
+            "enum": [
+              "positive_reuse",
+              "positive_extend",
+              "extract_boundary",
+              "review_veto",
+              "false_positive_regression",
+              "false_negative_regression"
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    }
   },
   "additionalProperties": true
 }

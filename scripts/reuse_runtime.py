@@ -105,7 +105,14 @@ def runtime_root_for_repo(repo_root: Path, bundle: dict[str, Any], override: Opt
     configured = override or bundle.get("change_rules", {}).get("reuse_scan_runtime", {}).get("runtime_dir")
     if configured:
         path = Path(str(configured)).expanduser()
-        return (repo_root / path).resolve() if not path.is_absolute() else path.resolve()
+        if not path.is_absolute():
+            raise ValueError("reuse runtime_dir must be absolute and outside the target repository")
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(repo_root.resolve())
+        except ValueError:
+            return resolved
+        raise ValueError("reuse runtime_dir must be outside the target repository")
     if os.name == "nt":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
     else:

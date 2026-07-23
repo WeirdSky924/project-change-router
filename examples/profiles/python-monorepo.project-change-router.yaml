@@ -18,6 +18,7 @@ capabilities:
       - "Scope: owns billing invoice calculation, payment intent preparation, and billing-facing orchestration under services/billing."
       - "Boundary: does not own provider SDK adapters, webhook transport, or account identity policy."
       - "Risk: changes to public billing exports, invoice schema, or money movement behavior require review."
+      - "Cross-capability: provider and account domains consume billing only through declared public entries."
     test_bindings:
       - id: billing-core-tests
         label: Billing core tests
@@ -36,6 +37,13 @@ ownership_rules:
   - path_patterns:
       - "services/billing/**"
     owner: billing-team
+
+capability_ownership:
+  - target: billing-core
+    primary: billing-team
+    reviewers:
+      - billing-architecture-reviewers
+    escalation_group: architecture-council
 
 module_overrides:
   - path_patterns:

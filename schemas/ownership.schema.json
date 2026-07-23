@@ -8,7 +8,25 @@
     "generated_by": { "type": "string" },
     "source_repository": { "type": "string" },
     "source_commit": { "type": ["string", "null"] },
-    "owners": { "type": "array", "items": { "type": "object" } }
+    "owners": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["scope", "target", "primary", "reviewers", "provisional"],
+        "properties": {
+          "scope": { "type": "string", "enum": ["capability", "module"] },
+          "target": { "type": "string", "minLength": 1 },
+          "primary": { "type": "string", "minLength": 1 },
+          "reviewers": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "escalation_group": { "type": "string", "minLength": 1 },
+          "provisional": { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    }
   },
   "additionalProperties": true
 }
