@@ -138,6 +138,7 @@ import run_evaluation
 from router_support import evaluation_policy
 from router_support import import_graph
 from router_support import profile_loader
+from router_support import repository_surfaces
 from router_support import route_authorization
 from router_support import structure_guardrails
 assert callable(router_core.gather_reuse_report)
@@ -152,6 +153,7 @@ assert callable(import_graph.validate_architecture_baseline)
 assert callable(structure_guardrails.gather_structure_findings)
 assert callable(evaluation_policy.policy_for_bundle)
 assert callable(profile_loader.load_active_profile)
+assert callable(repository_surfaces.discover_standard_repository_surfaces)
 assert callable(route_authorization.authorization_audit_fields)
 assert callable(check_deps.main)
 assert callable(check_public_api.main)

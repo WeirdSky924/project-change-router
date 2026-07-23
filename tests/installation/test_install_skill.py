@@ -89,6 +89,7 @@ def test_atomic_install_manifest_hashes_the_complete_payload(tmp_path: Path) -> 
     assert manifest["architecture_governance_api_version"] == 1
     assert set(manifest["files"]) == _payload_files(installed)
     assert "scripts/router_support/import_graph.py" in manifest["files"]
+    assert "scripts/router_support/repository_surfaces.py" in manifest["files"]
     assert "scripts/router_support/structure_guardrails.py" in manifest["files"]
     assert "schemas/router-config.schema.json" in manifest["files"]
 
@@ -104,6 +105,32 @@ def test_verify_only_detects_nested_support_module_tampering(tmp_path: Path) -> 
 
     assert verify.returncode != 0
     assert "hash mismatch" in verify.stderr
+
+
+def test_installed_repository_surface_helper_is_importable(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    install = _run_installer(SKILL_ROOT, codex_home)
+    assert install.returncode == 0, install.stderr
+    installed = codex_home / "skills" / "project-change-router"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                f"sys.path.insert(0, {str(installed / 'scripts')!r}); "
+                "from router_support import repository_surfaces; "
+                "assert callable("
+                "repository_surfaces.discover_standard_repository_surfaces)"
+            ),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_verify_only_rejects_legacy_install_without_manifest(tmp_path: Path) -> None:
@@ -447,3 +474,4 @@ def test_ci_smoke_runs_all_architecture_guardrail_clis() -> None:
     assert '"--strict-completeness",' in workflow
     assert 'assert report["completion_status"] == "complete"' in workflow
     assert 'assert report["evidence_complete"] is True' in workflow
+    assert '"scripts/router_support/owner_identity.py",' in workflow

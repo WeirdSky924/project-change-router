@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import fnmatch
 from collections import defaultdict
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
+
+from router_support.repository_surfaces import (
+    files_for_standard_repository_surface,
+    standard_repository_surface_kind,
+)
 
 
 def _iso_now() -> str:
@@ -40,6 +47,73 @@ def _owner_is_provisional(primary: str, explicit: dict[str, Any]) -> bool:
         normalized in {"", "unknown", "unassigned", "none"}
         or normalized.startswith("provisional:")
     )
+
+
+def codeowners_candidates(repo_root: Path) -> tuple[Path, ...]:
+    return (
+        repo_root / ".github" / "CODEOWNERS",
+        repo_root / ".gitlab" / "CODEOWNERS",
+        repo_root / "CODEOWNERS",
+    )
+
+
+def load_codeowners(repo_root: Path) -> list[tuple[str, list[str]]]:
+    for path in codeowners_candidates(repo_root):
+        if not path.exists():
+            continue
+        rules: list[tuple[str, list[str]]] = []
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = stripped.split()
+            if len(parts) >= 2:
+                rules.append((parts[0], parts[1:]))
+        return rules
+    return []
+
+
+def codeowner_for_path(
+    rel_path: str,
+    rules: list[tuple[str, list[str]]],
+) -> str | None:
+    winner: str | None = None
+    normalized = rel_path.replace("\\", "/")
+    for pattern, owners in rules:
+        normalized_pattern = pattern.lstrip("/").replace("\\", "/")
+        if normalized_pattern.endswith("/"):
+            normalized_pattern += "*"
+        if fnmatch.fnmatchcase(
+            normalized,
+            normalized_pattern,
+        ) or fnmatch.fnmatchcase("/" + normalized, pattern.replace("\\", "/")):
+            if owners:
+                winner = ",".join(owners)
+    return winner
+
+
+def codeowner_for_module(
+    repo_root: Path,
+    module: Any,
+    rules: list[tuple[str, list[str]]],
+    is_ignored: Callable[[Path], bool],
+) -> str | None:
+    if standard_repository_surface_kind(module.path) == "directory":
+        surface_files = files_for_standard_repository_surface(
+            repo_root,
+            module.path,
+            is_ignored,
+        )
+        if not surface_files:
+            return None
+        owners = [
+            codeowner_for_path(path.relative_to(repo_root).as_posix(), rules)
+            for path in surface_files
+        ]
+        if all(owners) and len(set(owners)) == 1:
+            return owners[0]
+        return None
+    return codeowner_for_path(module.path if module.path != "." else "", rules)
 
 
 def build_ownership(

@@ -4,7 +4,6 @@ import ast
 import dataclasses
 import datetime as dt
 import difflib
-import fnmatch
 import hashlib
 import json
 import os
@@ -43,7 +42,15 @@ from router_support.profile_loader import (
     profile_source_lifecycle_findings,
     retired_profile_path_routes,
 )
-from router_support.ownership_governance import build_ownership, capability_conflicts
+from router_support.repository_surfaces import (
+    discover_standard_repository_surfaces,
+    has_standard_repository_surface,
+    overlay_standard_repository_surface_records,
+    standard_repository_surface_kind,
+)
+from router_support.ownership_governance import (
+    build_ownership, capability_conflicts, codeowner_for_module, load_codeowners,
+)
 from router_support.route_capability_contracts import (
     compare_capability_contract,
     ordered_secondary_capabilities,
@@ -697,44 +704,6 @@ def detect_repo_manifest_kind(repo_root: Path) -> str:
     return "generic"
 
 
-def codeowners_candidates(repo_root: Path) -> list[Path]:
-    return [
-        repo_root / ".github" / "CODEOWNERS",
-        repo_root / ".gitlab" / "CODEOWNERS",
-        repo_root / "CODEOWNERS",
-    ]
-
-
-def load_codeowners(repo_root: Path) -> list[tuple[str, list[str]]]:
-    for path in codeowners_candidates(repo_root):
-        if not path.exists():
-            continue
-        rules: list[tuple[str, list[str]]] = []
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            parts = stripped.split()
-            if len(parts) < 2:
-                continue
-            rules.append((parts[0], parts[1:]))
-        return rules
-    return []
-
-
-def codeowner_for_path(rel_path: str, rules: list[tuple[str, list[str]]]) -> Optional[str]:
-    winner: Optional[str] = None
-    normalized = rel_path.replace("\\", "/")
-    for pattern, owners in rules:
-        normalized_pattern = pattern.lstrip("/").replace("\\", "/")
-        if normalized_pattern.endswith("/"):
-            normalized_pattern += "*"
-        if fnmatch.fnmatchcase(normalized, normalized_pattern) or fnmatch.fnmatchcase("/" + normalized, pattern.replace("\\", "/")):
-            if owners:
-                winner = ",".join(owners)
-    return winner
-
-
 def derive_path_tokens(path: str) -> list[str]:
     return [token for token in re.split(r"[^0-9A-Za-z]+", path.lower().replace("\\", "/")) if token]
 
@@ -1119,18 +1088,6 @@ def profile_stage(profile: dict[str, Any]) -> str:
     return str(profile.get("profile_stage") or "provisional").lower()
 
 
-def detect_ci(repo_root: Path) -> bool:
-    return any(
-        path.exists()
-        for path in [
-            repo_root / ".github" / "workflows",
-            repo_root / ".gitlab-ci.yml",
-            repo_root / "azure-pipelines.yml",
-            repo_root / ".circleci" / "config.yml",
-        ]
-    )
-
-
 def heuristic_public_entry_ratio(modules: list[ModuleEntry]) -> float:
     considered = [module for module in modules if module.public_api]
     if not considered:
@@ -1213,7 +1170,7 @@ def classify_repo_stage(modules: list[ModuleEntry], capabilities: list[Capabilit
     has_profile = bool(profile)
     explicit_profile_stage = profile_stage(profile)
     has_codeowners = bool(load_codeowners(repo_root))
-    has_ci = detect_ci(repo_root)
+    has_ci = has_standard_repository_surface(repo_root)
     boundary_evidence = detect_boundary_evidence(repo_root)
     module_count = len(modules)
     meaningful_count = meaningful_module_count(modules)
@@ -1551,10 +1508,20 @@ def discover_modules(repo_root: Path, config: Optional[dict[str, Any]] = None, p
     discovered.extend(python_modules(repo_root, ignore_patterns))
     discovered.extend(generic_modules(repo_root, ignore_patterns))
     modules = dedupe_modules(discovered, repo_root)
+    surfaces = discover_standard_repository_surfaces(
+        repo_root,
+        lambda path: should_ignore_path(path, ignore_patterns, repo_root),
+    )
+    records = overlay_standard_repository_surface_records(
+        (module.to_dict() for module in modules),
+        surfaces,
+        infer_allowed_layers("infra"),
+    )
+    modules = [ModuleEntry(**record) for record in records]
     apply_profile_module_overrides(repo_root, modules, profile)
     prune_nested_module_key_files(repo_root, modules)
     infer_module_dependencies(repo_root, modules, merged_config)
-    assign_module_ownership(repo_root, modules, profile)
+    assign_module_ownership(repo_root, modules, profile, ignore_patterns)
     for module in modules:
         if (
             not module.allowed_outbound_to
@@ -1651,6 +1618,13 @@ def apply_profile_module_overrides(
             patterns = rule.get("path_patterns", [])
             if patterns and not glob_match(patterns, module.path):
                 continue
+            if declared_path and module.path == declared_path:
+                if "id" in rule:
+                    module.id = str(rule["id"])
+                module.source_of_truth = "profile"
+                module.generated = False
+                module.index_sources = ["profile.module_overrides"]
+                module.lifecycle["definition_source"] = "profile.module_overrides"
             if "layer" in rule:
                 module.layer = rule["layer"]
             if "domain" in rule:
@@ -1752,13 +1726,36 @@ def default_owner_name(module: ModuleEntry) -> str:
     return "unassigned"
 
 
-def assign_module_ownership(repo_root: Path, modules: list[ModuleEntry], profile: dict[str, Any]) -> None:
+def assign_module_ownership(
+    repo_root: Path,
+    modules: list[ModuleEntry],
+    profile: dict[str, Any],
+    ignore_patterns: Iterable[str] = (),
+) -> None:
     rules = load_codeowners(repo_root)
     for module in modules:
-        rel = module.path if module.path != "." else ""
-        owner = codeowner_for_path(rel, rules) if rules else None
+        owner = (
+            codeowner_for_module(
+                repo_root,
+                module,
+                rules,
+                lambda path: should_ignore_path(
+                    path,
+                    ignore_patterns,
+                    repo_root,
+                ),
+            )
+            if rules
+            else None
+        )
         if not owner:
             owner = profile_ownership_for_path(module.path, profile)
+        if (
+            not owner
+            and module.source_of_truth == "profile"
+            and module.owner not in {"", "unassigned"}
+        ):
+            owner = module.owner
         if not owner:
             owner = default_owner_name(module)
         module.owner = owner
@@ -2126,6 +2123,9 @@ def looks_like_file_path(path: str) -> bool:
     normalized = path.replace("\\", "/").strip("/")
     if not normalized or normalized == ".":
         return False
+    repository_surface_kind = standard_repository_surface_kind(normalized)
+    if repository_surface_kind:
+        return repository_surface_kind == "file"
     name = normalized.rsplit("/", 1)[-1]
     if Path(name).suffix:
         return True

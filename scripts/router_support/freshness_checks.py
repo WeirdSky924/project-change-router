@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from router_support.repository_surfaces import is_within_standard_repository_surface
 from router_support.structure_growth import _is_governed_code_bearing_path
 
 
@@ -120,6 +121,7 @@ def _structure_relevant(repo_root: Path, path: str) -> bool:
         source.suffix.lower() in STRUCTURE_SUFFIXES
         or governed_code_bearing
         or source.name in DISCOVERY_MANIFEST_NAMES
+        or is_within_standard_repository_surface(normalized)
     )
 
 

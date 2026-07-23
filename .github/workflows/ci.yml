@@ -94,7 +94,7 @@ jobs:
                   "--repo",
                   ".",
                   "--changed-path",
-                  "scripts/check_reuse.py",
+                  "scripts/router_support/owner_identity.py",
                   "--timeout-seconds",
                   "20",
                   "--hard-timeout-seconds",
