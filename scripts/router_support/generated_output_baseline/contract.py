@@ -14,6 +14,43 @@ GENERATOR_CLOCK_EVENTS = frozenset({
 })
 
 
+def _normalize_path_map_file_counts(
+    expected: dict[str, Any],
+    actual: Mapping[str, Any],
+) -> None:
+    expected_index = expected.get("path_index", [])
+    actual_index = actual.get("path_index", [])
+    if not isinstance(expected_index, list) or not isinstance(actual_index, list):
+        return
+    actual_by_pattern: dict[str, Mapping[str, Any]] = {}
+    for item in actual_index:
+        if not isinstance(item, Mapping) or not isinstance(item.get("path_pattern"), str):
+            continue
+        pattern = str(item["path_pattern"])
+        if pattern in actual_by_pattern:
+            return
+        actual_by_pattern[pattern] = item
+    for item in expected_index:
+        if not isinstance(item, dict) or not isinstance(item.get("path_pattern"), str):
+            continue
+        actual_item = actual_by_pattern.get(str(item["path_pattern"]))
+        expected_count = item.get("code_file_count")
+        actual_count = (
+            actual_item.get("code_file_count")
+            if isinstance(actual_item, Mapping)
+            else None
+        )
+        if (
+            isinstance(expected_count, int)
+            and not isinstance(expected_count, bool)
+            and expected_count >= 0
+            and isinstance(actual_count, int)
+            and not isinstance(actual_count, bool)
+            and actual_count >= 0
+        ):
+            item["code_file_count"] = actual_count
+
+
 def expected_artifact_source_commit(
     payload: Mapping[str, Any],
 ) -> str | None:
@@ -35,6 +72,9 @@ def normalize_rebuild_volatiles(
 ) -> None:
     if "generated_at" in expected and "generated_at" in actual:
         expected["generated_at"] = actual["generated_at"]
+    if bundle_key == "path_to_capability_map":
+        _normalize_path_map_file_counts(expected, actual)
+        return
     if bundle_key != "capability_catalog":
         return
     actual_capabilities = {

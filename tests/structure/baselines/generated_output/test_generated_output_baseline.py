@@ -280,6 +280,44 @@ def test_generated_at_only_change_keeps_the_pin_valid(tmp_path: Path) -> None:
     assert result.verified_paths == frozenset(PCR_BUNDLE_ARTIFACTS.values())
 
 
+def test_path_map_code_file_count_comparison_contract(tmp_path: Path) -> None:
+    cases = (
+        ("changed", 3, 4, None),
+        ("missing", 3, None, "generated_output_artifact_not_idempotent"),
+        ("tampered", 4, 4, "generated_output_artifact_digest_mismatch"),
+    )
+    for name, actual_count, rebuilt_count, expected_code in cases:
+        repo = tmp_path / name
+        bundle = _bundle()
+        entry = {
+            "path_pattern": "frontend/src/**",
+            "capabilities": ["frontend-transport-hooks"],
+            "code_file_count": 3,
+        }
+        bundle["path_to_capability_map"]["path_index"] = [entry]
+        _write_bundle(repo, bundle)
+        rule = _rule(repo, bundle)
+        if actual_count != 3:
+            entry["code_file_count"] = actual_count
+            target = repo / PCR_BUNDLE_ARTIFACTS["path_to_capability_map"]
+            target.write_text(canonical_yaml_text(bundle["path_to_capability_map"]), encoding="utf-8")
+        rebuilt = copy.deepcopy(bundle)
+        if rebuilt_count is None:
+            del rebuilt["path_to_capability_map"]["path_index"][0]["code_file_count"]
+        else:
+            rebuilt["path_to_capability_map"]["path_index"][0]["code_file_count"] = rebuilt_count
+
+        result = verify_generated_output_baseline(
+            repo, _profile(rule), rebuilt, enforce_provenance=False
+        )
+        if expected_code is None:
+            assert result.findings == ()
+            assert result.verified_paths == frozenset(PCR_BUNDLE_ARTIFACTS.values())
+        else:
+            assert result.verified_paths == frozenset()
+            assert any(item.get("diagnostic_code") == expected_code for item in result.findings)
+
+
 def test_crlf_generated_artifact_is_not_accepted_as_canonical(
     tmp_path: Path,
 ) -> None:
