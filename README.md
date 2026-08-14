@@ -2,7 +2,7 @@
 
 中文默认版。英文版见 [README.en.md](./README.en.md)。
 
-`project-change-router` 是一个面向大型仓库的 AI coding skill，可用于 Codex 和 Claude Code。它的目标不是让 agent 更大胆地猜架构，而是让 agent 更少乱猜：在真正修改代码之前，先用仓库本地的路由 bundle 获取能力归属、canonical root、owner、读写边界、复用风险和处理倾向。
+`project-change-router` 是一个面向大型仓库的 AI coding skill，可用于 Codex、Claude Code 和 DeepSeek Harness。它的目标不是让 agent 更大胆地猜架构，而是让 agent 更少乱猜：在真正修改代码之前，先用仓库本地的路由 bundle 获取能力归属、canonical root、owner、读写边界、复用风险和处理倾向。
 
 它解决的核心问题是大型项目开发中常见的结构漂移：
 
@@ -60,7 +60,7 @@ PCR 的输出分为两层，使用时不要混在一起理解。
 - 用 schema 校验 bundle 与报告。
 - 用 evaluation set 检查路由质量是否退化。
 - 用 governance audit 检查 profile/catalog 同步、ownership 颗粒度、contract 质量、forbidden density、evaluation 覆盖和 capability 生命周期。
-- 在 Codex / Claude Code 安装时追加提示块，让 agent 更容易在功能级 create / modify / delete 前主动触发该 skill。
+- 在 Codex / Claude Code 安装时追加提示块，并通过 DeepSeek Harness skill catalog 暴露触发描述，让 agent 更容易在功能级 create / modify / delete 前主动触发该 skill。
 
 它不应该：
 
@@ -138,6 +138,8 @@ route report 不是只给一个 action。它是一个完整路由契约，核心
 - `positive_signals`
 - `negative_signals`
 - `risk_signals`
+- `authorization_context`
+- `route_fingerprint`
 
 七类治理输出也是同一个 route report 的一等字段，不是外挂能力：
 
@@ -158,6 +160,7 @@ route report 不是只给一个 action。它是一个完整路由契约，核心
 Python 要求：
 
 - Python `>= 3.10`
+- DeepSeek Harness 插件验证遵循 Harness 当前 Node 要求：`^22.19.0 || >=24.0.0`；仅安装 filesystem skill 不额外启动 Node 进程
 
 安装依赖：
 
@@ -171,33 +174,63 @@ pip install -r requirements.txt
 pip install -e .[dev]
 ```
 
-安装到 Codex 和 Claude Code：
+同时安装到 Codex、Claude Code 和 DeepSeek Harness：
 
 ```powershell
-python scripts/install_skill.py --target both --inject-hints
+python scripts/install_skill.py --target all --inject-hints
 ```
 
 安装路径：
 
 - Codex：`%USERPROFILE%\.codex\skills\project-change-router`
 - Claude Code：`%USERPROFILE%\.claude\skills\project-change-router`
+- DeepSeek Harness：`$DSH_HOME/skills/project-change-router`；没有设置 `DSH_HOME` 时默认 `~/.dsh/skills/project-change-router`
 
-`--inject-hints` 会追加标记块，不会重写整个文件：
+`--inject-hints` 只为需要规则入口提示的 Codex 和 Claude Code 追加标记块，不会重写整个文件：
 
 - Codex：追加到 `~/.codex/AGENTS.md`
 - Claude Code：追加到 `~/.claude/CLAUDE.md`
 
 这是一种“伪强制”提醒，用于让 agent 在功能级 create / modify / delete 前主动触发 skill。它不是后台守护进程，也不会绕过对话触发机制。
 
-安装器使用 staging、完整载荷递归哈希、递归 Python 编译、治理 API probe 和原子替换。只有新副本完整通过校验后才替换旧 skill；失败时会恢复旧安装，避免顶层脚本、`router_support`、schemas 或文档出现跨版本混装。
+DeepSeek Harness 通过 skill catalog 的 `name` 和 `description` 自动向模型暴露 PCR，并支持在用户消息中用 `/project-change-router` 显式触发，因此不需要修改 Harness 的全局提示文档。
 
-源码 checkout 和安装目标必须是不同路径。如果当前 Git checkout 已位于 `~/.codex/skills/project-change-router`，不要用安装器覆盖它；需要同时安装两个目标时使用独立 checkout，或只安装另一个目标。`--verify-only` 必须读取 0.3 原子安装建立的可信 manifest；没有该 manifest 的旧副本需要先原子重装一次，之后哈希验证才有来源完整性意义。
+兼容说明：`--target both` 继续保持旧语义，只安装 Codex 和 Claude Code；`--target deepseek` 只安装 Harness；`--target all` 安装三端。项目级 Harness 安装可以把 `.dsh` 目录作为 home：
+
+```powershell
+python scripts/install_skill.py --target deepseek --dsh-home <repo-root>/.dsh
+```
+
+Harness 原生 filesystem provider 会发现 `<repo-root>/.dsh/skills/project-change-router/SKILL.md`。它也兼容 `<repo-root>/.agents/skills`、`~/.agents/skills` 和自定义 skill roots，但本安装器默认写入官方 `DSH_HOME` 路径。
+
+### 作为 DeepSeek Harness GitHub 插件安装
+
+仓库根 `package.json` 声明了 `dsh.bundle`，其 Cordis provider 从根 `SKILL.md` 读取同一份 skill 内容和资源目录，不维护第二套提示词。建议固定提交 SHA 安装：
+
+```powershell
+dsh plugin --profile <profile-name> add github:WeirdSky924/project-change-router-skill#<commit-sha>
+dsh --profile <profile-name> --dump-config
+```
+
+这个 bundle 使用原生 ESM，没有 TypeScript 构建、`prepare` 脚本或安装期代码执行许可。项目级 `.dsh/skills` 和用户级 filesystem skill 的 rank 高于 bundled provider，因此可按 Harness 官方优先级覆盖插件版本。
+
+卸载 profile 插件：
+
+```powershell
+dsh plugin --profile <profile-name> remove project-change-router-skill
+```
+
+Harness 官方社区发现以公开 GitHub 仓库的 `dsh-plugin` topic 为入口；发布前应为仓库设置 `dsh-plugin`、`deepseek-harness`、`agent-skills` 和 `coding-agent` 等检索 topic。DeepSeek Harness 当前仍是 developer preview，升级 Harness preview 版本后应重新运行本仓库的 provider smoke 和安装验证。
+
+安装器使用 staging、完整载荷递归哈希、递归 Python 编译、治理 API probe 和原子替换。只有新副本完整通过校验后才替换旧 skill；失败时会恢复旧安装，避免顶层脚本、`router_support`、schemas、文档或 DSH provider 出现跨版本混装。
+
+源码 checkout 和安装目标必须是不同路径。如果当前 Git checkout 已位于任一目标的 `skills/project-change-router`，不要用安装器覆盖它；需要同时安装多个目标时使用独立 checkout，或只安装其他目标。`--verify-only` 必须读取 0.3 原子安装建立的可信 manifest；没有该 manifest 的旧副本需要先原子重装一次，之后哈希验证才有来源完整性意义。
 
 ## 从旧版安全升级
 
 全局 skill 和项目 bundle 是两个独立层次：
 
-- 全局 skill 位于 `~/.codex/skills/project-change-router` 或 `~/.claude/skills/project-change-router`，保存脚本和工作流。
+- 全局 skill 位于 `~/.codex/skills/project-change-router`、`~/.claude/skills/project-change-router` 或 `~/.dsh/skills/project-change-router`，保存脚本和工作流。
 - 项目 bundle 位于 `<repo-root>/project-change-router/`，保存该项目长期校准的 capability、owner、path map、feedback 和 evaluation 数据。
 
 更新全局 skill 不需要、也不应该自动重建项目 bundle。安全升级步骤如下：
@@ -206,13 +239,13 @@ python scripts/install_skill.py --target both --inject-hints
 2. 运行原子安装命令：
 
 ```powershell
-python scripts/install_skill.py --target both --inject-hints
+python scripts/install_skill.py --target all --inject-hints
 ```
 
-3. 验证 Codex 和 Claude Code 安装副本的文件哈希及复用扫描 API：
+3. 验证 Codex、Claude Code 和 DeepSeek Harness 安装副本的文件哈希及复用扫描 API：
 
 ```powershell
-python scripts/install_skill.py --target both --verify-only
+python scripts/install_skill.py --target all --verify-only
 ```
 
 4. 对一个已经长期使用 PCR 的项目，只做只读兼容检查：
@@ -359,6 +392,12 @@ Claude Code 中可以显式触发：
 /project-change-router resolve the correct capability entry for this change
 ```
 
+DeepSeek Harness 中也使用 whitespace-bounded slash invocation；或者让模型根据 skill catalog 的描述主动加载：
+
+```text
+/project-change-router resolve the correct capability entry for this change
+```
+
 命令行解析一次变更：
 
 ```powershell
@@ -379,7 +418,7 @@ python scripts/resolve_entry.py --repo <repo-root> --request-file request.md --c
 - 如果 `action=extract`：把它当成抽取倾向；先确认重复面、调用方和测试，再抽共享能力。
 - 如果 `action=new`：把它当成新边界倾向；先命名隔离边界，不要在已有 capability 旁边生成第二套平行中心。
 
-## Codex / Claude Code 提示词
+## Codex / Claude Code / DeepSeek Harness 提示词
 
 建议在无人值守计划或长期任务中加入：
 
@@ -435,7 +474,8 @@ PCR 0.3 把原先容易依赖人工审查的结构约束变成可回归的通用
 - `exclusive_source_owners` 阻止 profile 明确声明的受保护实现 token 出现在 canonical owner 之外；不同标识符的 raw transport、cache/store 或 DTO 重复仍需项目级 import、identifier 或 AST 门。
 - `generated_output_baseline` 仅用于 canonical profile 迁移期的七个固定 PCR reference 产物，并绑定仓库唯一启用的 `.project-change-router.yaml` 或 `.project-change-router.yml`。规则源和每个非空 artifact provenance 都必须是该仓库对象格式的完整不可变 SHA；artifact 可以早于规则源，但必须是规则源与当前 rebuild source 的祖先，`null` 模式必须保持 `null`。固定摘要只投影掉顶层 `generated_at`、`source_commit` 和 capability catalog 中明确列出的 generator clock。`path_to_capability_map.path_index[*].code_file_count` 不从固定摘要中移除；它只在相同 `path_pattern` 且新旧值均为合法非负整数时作为 comparison-only rebuild volatile，以免仓库代码文件数量的正常变化造成假阳性。实际 pinned count 仍受摘要、canonical UTF-8 字节和行数约束，缺失、类型漂移或产物篡改仍会失败。普通 `rebuild_index.py` 验证成功后保留七个 tracked refs，只刷新 `router-config.yaml`、schemas 和 `latest.json`；失败时不写任何 bundle/report。evaluation attestation 会针对实际持久化的“新 config + pinned refs”重算。首次建立 pin 必须向 `check_structure.py` 或 `rebuild_index.py` 传入 `--initialize-generated-output-baseline <fingerprint>`；profile 文字不能自行授权。pin 启用、格式错误或尚未提交移除时，`bootstrap_router.py` 禁止清空正式 refs。
 - stable capability 必须有唯一 `capability_ownership` 记录、真实 primary owner、不同 reviewer、lifecycle、contract/test binding 和 evaluation 覆盖；自动生成的 owner 标签、`UNKNOWN`、unassigned、缺失、重复或 provisional owner 都不提供自动写入授权。
-- freshness 同时校验 commit、内容结构摘要、stale entries、索引路径、报告字段形状和 changed-path coverage。canonical config、七个 refs 与 schemas 即使被 bundle `ignore_paths` 命中也必须进入摘要，只有自引用的 `latest.json` 例外；显式 `--changed-path` 始终与真实 staged、unstaged、untracked、deleted 路径取并集；历史 source 只在其为当前 HEAD 祖先且快照、状态与诊断全部精确一致时通过。
+- freshness 同时校验 commit、内容结构摘要、stale entries、索引路径、报告字段形状和 changed-path coverage。全局报告继续暴露所有债务；route gate 再按当前 capability 的正反向依赖闭包把 delta 分为 `task_local_new`、`baseline_unchanged`、`unknown`。相关变化和无法证明无关的变化继续阻塞，已证明属于其他 capability 的不变旧债不会把局部安全变更改成全仓 `forbidden=["**"]`。canonical config、七个 refs 与 schemas 即使被 bundle `ignore_paths` 命中也必须进入摘要，只有自引用的 `latest.json` 例外；显式 `--changed-path` 始终与从索引 source 到 HEAD、staged、unstaged、untracked、deleted 的真实路径取并集。
+- 每个 route report 都带 `authorization_context` 和 `route_fingerprint`，绑定源提交、结构摘要、路由真值、changed paths、capability、action、override 条件与读写 envelope。人工反馈必须回传原始 fingerprint；输入或报告改变后授权自动失效，manifest 不能自行恢复已消费授权。
 - evaluation attestation 或阈值不满足时保持 `review_only`，不能因为 capability 命中正确就假定 action 和写入授权也可靠。
 
 现有债务应先建立精确 baseline 来阻止新增，再由后续治理包持续降低 baseline；不能通过扩大 ignore、弱化规则或伪造 evaluation case 获得通过。字段、退出条件和 CI 组合见 [references/architecture-governance.md](./references/architecture-governance.md)。
@@ -522,6 +562,8 @@ evidence_complete  = true | false
 | 取消前已经发现 P1 | `fail` | `cancelled` |
 
 只有 `completion_status=complete` 且 `evidence_complete=true` 才能说明“已完成目标 capability scope 的重复检查”。这仍不代表扫描了无关 capability，也不替代 agent 对候选文件的源码分析。
+
+changed-path 报告身份只使用路由真值、目标内容和实际参与扫描的 owner/candidate `source_fingerprint_digest`。无关 worktree 文件不会破坏 canonical report 去重，但任何参与判断的源文件变化都会使摘要失效。
 
 ### 自动保留与清理
 
@@ -681,12 +723,20 @@ Bundle 样例：
 - `scripts/sync_feedback.py`
 - `scripts/validate_router_bundle.py`
 
+DeepSeek Harness 接入文件：
+
+- `package.json`
+- `integrations/deepseek-harness/index.js`
+- `integrations/deepseek-harness/cordis.patch.yml`
+
 ## CI
 
 GitHub Actions workflow 位于 [.github/workflows/ci.yml](./.github/workflows/ci.yml)，会执行：
 
 - 安装依赖。
 - 校验 skill 结构。
+- 校验 DeepSeek Harness provider 语法和注册/加载 smoke。
+- 用 `npm pack --dry-run` 校验 DSH 发布包不包含 `__pycache__`、`.pyc` 或其他本地运行时产物。
 - 运行单元测试。
 - bootstrap 自仓库 bundle。
 - validate bundle。

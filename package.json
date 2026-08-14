@@ -1,0 +1,37 @@
+{
+  "name": "project-change-router-skill",
+  "version": "0.3.0",
+  "description": "Project-level direction, boundary, and reuse governance for AI coding agents.",
+  "type": "module",
+  "main": "./integrations/deepseek-harness/index.js",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "files": [
+    "SKILL.md",
+    "skill-version.json",
+    "assets",
+    "examples",
+    "integrations/deepseek-harness",
+    "references",
+    "schemas",
+    "scripts"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WeirdSky924/project-change-router-skill.git"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "agent-skills",
+    "coding-agent",
+    "code-governance"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./integrations/deepseek-harness/cordis.patch.yml"
+    }
+  }
+}

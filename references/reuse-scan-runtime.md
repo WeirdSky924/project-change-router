@@ -40,6 +40,8 @@ The cache uses Python's standard-library `sqlite3` and `hashlib`. It stores deri
 
 It does not persist normalized source text. Exact similarity reads full text only for Top-K pairs selected by the fingerprints.
 
+Each completed scan also emits `source_fingerprint_digest` and `source_fingerprint_file_count` for the owner and candidate files that actually participated. Changed-path canonical identity combines that digest with the target content, `HEAD`, routing truth, scope, and budget. It does not include unrelated worktree status. Full scans retain the complete structure snapshot.
+
 If SQLite integrity prevents opening the cache, PCR preserves the corrupt database as a managed diagnostic artifact, rebuilds a fresh runtime database, and exposes `runtime_recovery` in scan metrics. The preserved artifact then follows diagnostic retention instead of being silently discarded.
 
 Cache modes:
@@ -126,6 +128,8 @@ The runtime deduplicates at three levels:
 - comparison pairs: `A <-> B` is computed once even when multiple capabilities reference the pair
 - findings: one file pair merges all implicated capability IDs and retains the strongest severity
 - canonical artifacts: semantically identical input, scope, evidence, budget, and findings reuse one managed report artifact
+
+An unrelated dirty file therefore does not create a new canonical occurrence. A changed owner or candidate file does, even when it was not one of the user-supplied changed paths.
 
 Large pairs that pass fingerprint ranking but exceed exact-comparison limits are reported as `duplicate-fingerprint-candidate` P2 advisories. They require targeted source analysis and are not exact duplicate findings.
 

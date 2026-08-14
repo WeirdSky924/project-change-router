@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["decision_id", "timestamp", "request_type", "request_summary", "changed_paths", "repo_stage", "action", "decision_basis", "routing_confidence", "routing_confidence_level", "decision_confidence", "decision_confidence_level", "confidence", "confidence_level", "overlap_score", "primary_capability", "primary_capability_stage", "secondary_capabilities", "candidate_capabilities", "candidate_modules", "required_reads", "required_checks", "forbidden_paths", "review_required", "coordination_required", "composite_route_required", "recommended_next_action", "recommended_next_steps", "why_not_actions", "block_reason", "missing_evidence", "analysis_directions", "safe_next_steps", "suggested_questions", "profile_repair_hints", "override_requirements", "allowed_write_paths", "forbidden_write_paths", "must_read_before_edit", "post_change_closeout", "composite_route", "capability_lifecycle_action", "evaluation_regression_hints", "confidence_reasons", "veto_reasons", "positive_signals", "negative_signals", "risk_signals", "reasoning", "source_of_truths"],
+  "required": ["decision_id", "timestamp", "request_type", "request_summary", "changed_paths", "repo_stage", "action", "decision_basis", "routing_confidence", "routing_confidence_level", "decision_confidence", "decision_confidence_level", "confidence", "confidence_level", "overlap_score", "primary_capability", "primary_capability_stage", "secondary_capabilities", "candidate_capabilities", "candidate_modules", "required_reads", "required_checks", "forbidden_paths", "review_required", "coordination_required", "composite_route_required", "recommended_next_action", "recommended_next_steps", "why_not_actions", "block_reason", "missing_evidence", "analysis_directions", "safe_next_steps", "suggested_questions", "profile_repair_hints", "override_requirements", "allowed_write_paths", "forbidden_write_paths", "must_read_before_edit", "post_change_closeout", "composite_route", "capability_lifecycle_action", "evaluation_regression_hints", "confidence_reasons", "veto_reasons", "positive_signals", "negative_signals", "risk_signals", "reasoning", "authorization_context", "route_fingerprint", "source_of_truths"],
   "properties": {
     "decision_id": { "type": "string" },
     "timestamp": { "type": "string" },
@@ -52,6 +52,18 @@
     "negative_signals": { "type": "object" },
     "risk_signals": { "type": "object" },
     "reasoning": { "type": "array", "items": { "type": "string" } },
+    "authorization_context": {
+      "type": "object",
+      "required": ["source_commit", "structure_digest", "routing_truth_digest", "freshness_classification"],
+      "properties": {
+        "source_commit": { "type": ["string", "null"] },
+        "structure_digest": { "type": ["string", "null"] },
+        "routing_truth_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "freshness_classification": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "route_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "source_of_truths": { "type": "object" }
   },
   "additionalProperties": true

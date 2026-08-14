@@ -49,6 +49,8 @@ Expected agent behavior:
 - Use `analysis_directions` to decide what code, imports, callers, public entries, tests, and profile entries to inspect.
 - Ask only the relevant `suggested_questions`.
 - Continue with writes only when the user gives an override matching `override_requirements`.
+- Persist and return the original `route_fingerprint`; changed paths, routing truth, action, capability, or write envelope invalidate the authorization.
+- Treat `authorization_context` as task-bound evidence. It records authority but never creates, renews, or expands user authority.
 - Keep unattended product writes stopped when evaluation is missing, stale, or below threshold even if top-1 capability selection appears correct.
 
 Do not:

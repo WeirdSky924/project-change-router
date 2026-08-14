@@ -39,7 +39,7 @@ def _write_bundle(repo: Path, bundle: dict[str, dict[str, object]]) -> None:
     for key, relative_path in PCR_BUNDLE_ARTIFACTS.items():
         path = repo / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(canonical_yaml_text(bundle[key]), encoding="utf-8")
+        path.write_bytes(canonical_yaml_text(bundle[key]).encode("utf-8"))
 
 
 def _rule(
@@ -243,7 +243,7 @@ def test_non_json_artifact_scalar_returns_structured_noncanonical_finding(
     changed["payload"]["reviewed_on"] = yaml.safe_load(
         "value: 2026-07-23\n"
     )["value"]
-    target.write_text(canonical_yaml_text(changed), encoding="utf-8")
+    target.write_bytes(canonical_yaml_text(changed).encode("utf-8"))
 
     result = verify_generated_output_baseline(
         repo,
@@ -267,7 +267,7 @@ def test_generated_at_only_change_keeps_the_pin_valid(tmp_path: Path) -> None:
     target = repo / PCR_BUNDLE_ARTIFACTS["module_map"]
     changed = copy.deepcopy(bundle["module_map"])
     changed["generated_at"] = "2026-07-24T00:00:00Z"
-    target.write_text(canonical_yaml_text(changed), encoding="utf-8")
+    target.write_bytes(canonical_yaml_text(changed).encode("utf-8"))
 
     result = verify_generated_output_baseline(
         repo,
@@ -282,11 +282,14 @@ def test_generated_at_only_change_keeps_the_pin_valid(tmp_path: Path) -> None:
 
 def test_path_map_code_file_count_comparison_contract(tmp_path: Path) -> None:
     cases = (
-        ("changed", 3, 4, None),
-        ("missing", 3, None, "generated_output_artifact_not_idempotent"),
-        ("tampered", 4, 4, "generated_output_artifact_digest_mismatch"),
+        ("changed", 3, 4, False, None),
+        ("missing", 3, None, False, "generated_output_artifact_not_idempotent"),
+        ("negative", 3, -1, False, "generated_output_artifact_not_idempotent"),
+        ("boolean", 3, True, False, "generated_output_artifact_not_idempotent"),
+        ("duplicate", 3, 4, True, "generated_output_artifact_not_idempotent"),
+        ("tampered", 4, 4, False, "generated_output_artifact_digest_mismatch"),
     )
-    for name, actual_count, rebuilt_count, expected_code in cases:
+    for name, actual_count, rebuilt_count, duplicate, expected_code in cases:
         repo = tmp_path / name
         bundle = _bundle()
         entry = {
@@ -294,18 +297,22 @@ def test_path_map_code_file_count_comparison_contract(tmp_path: Path) -> None:
             "capabilities": ["frontend-transport-hooks"],
             "code_file_count": 3,
         }
-        bundle["path_to_capability_map"]["path_index"] = [entry]
+        path_map = bundle["path_to_capability_map"]
+        path_map["path_index"] = [entry, copy.deepcopy(entry)] if duplicate else [entry]
         _write_bundle(repo, bundle)
         rule = _rule(repo, bundle)
         if actual_count != 3:
             entry["code_file_count"] = actual_count
             target = repo / PCR_BUNDLE_ARTIFACTS["path_to_capability_map"]
-            target.write_text(canonical_yaml_text(bundle["path_to_capability_map"]), encoding="utf-8")
+            target.write_bytes(
+                canonical_yaml_text(bundle["path_to_capability_map"]).encode("utf-8")
+            )
         rebuilt = copy.deepcopy(bundle)
-        if rebuilt_count is None:
-            del rebuilt["path_to_capability_map"]["path_index"][0]["code_file_count"]
-        else:
-            rebuilt["path_to_capability_map"]["path_index"][0]["code_file_count"] = rebuilt_count
+        for rebuilt_entry in rebuilt["path_to_capability_map"]["path_index"]:
+            if rebuilt_count is None:
+                del rebuilt_entry["code_file_count"]
+            else:
+                rebuilt_entry["code_file_count"] = rebuilt_count
 
         result = verify_generated_output_baseline(
             repo, _profile(rule), rebuilt, enforce_provenance=False
@@ -315,7 +322,8 @@ def test_path_map_code_file_count_comparison_contract(tmp_path: Path) -> None:
             assert result.verified_paths == frozenset(PCR_BUNDLE_ARTIFACTS.values())
         else:
             assert result.verified_paths == frozenset()
-            assert any(item.get("diagnostic_code") == expected_code for item in result.findings)
+            codes = {item.get("diagnostic_code") for item in result.findings}
+            assert expected_code in codes
 
 
 def test_crlf_generated_artifact_is_not_accepted_as_canonical(

@@ -236,14 +236,16 @@ def test_non_code_report_state_document_and_media_paths_are_excluded(
 def test_executable_without_suffix_is_governed(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     path = "scripts/rebuild-check"
-    executable = _write(repo / path, _python_lines(800))
+    executable = _write(repo / path, "#!/usr/bin/env python\n" + _python_lines(799))
     executable.chmod(0o755)
 
     findings = gather_structure_findings(
         repo,
         {"config": {"source_commit": "baseline-commit"}, "change_rules": {}},
         changed_path_loader=lambda _repo: (path,),
-        file_baseline_loader=lambda _repo, _commit, _path: _python_lines(799),
+        file_baseline_loader=lambda _repo, _commit, _path: (
+            "#!/usr/bin/env python\n" + _python_lines(798)
+        ),
     )
 
     crossing = next(

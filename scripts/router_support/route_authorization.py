@@ -1,12 +1,70 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 
 JsonLoader = Callable[[Path], dict[str, Any]]
+
+ROUTE_AUTHORIZATION_FIELDS = (
+    "decision_id",
+    "request_type",
+    "request_summary",
+    "changed_paths",
+    "repo_stage",
+    "action",
+    "primary_capability",
+    "secondary_capabilities",
+    "review_required",
+    "block_reason",
+    "override_requirements",
+    "allowed_write_paths",
+    "forbidden_write_paths",
+    "must_read_before_edit",
+    "source_of_truths",
+    "authorization_context",
+)
+
+
+def route_authorization_fingerprint(report: dict[str, Any]) -> str:
+    payload = {
+        field: report.get(field)
+        for field in ROUTE_AUTHORIZATION_FIELDS
+    }
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def routing_truth_digest(bundle: dict[str, Any]) -> str:
+    payload = {
+        key: bundle.get(key, {})
+        for key in (
+            "config",
+            "module_map",
+            "capability_catalog",
+            "ownership",
+            "path_to_capability_map",
+            "change_rules",
+        )
+    }
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _route_report_for_decision(
@@ -64,6 +122,7 @@ def authorization_audit_fields(
             "allowed_paths",
             "override_reason",
             "expires_after",
+            "route_fingerprint",
         )
     )
     authorization_status = "not_authorization_evidence"
@@ -89,6 +148,23 @@ def authorization_audit_fields(
             for path in routed_paths
         ):
             raise ValueError("referenced route contains an unsafe changed path")
+        report_fingerprint = route_report.get("route_fingerprint")
+        if not isinstance(report_fingerprint, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", report_fingerprint
+        ):
+            raise ValueError("referenced route is missing a valid route fingerprint")
+        if route_authorization_fingerprint(route_report) != report_fingerprint:
+            raise ValueError("referenced route fingerprint does not match its contents")
+        provided_fingerprint = feedback.get("route_fingerprint")
+        if provided_fingerprint != report_fingerprint:
+            raise ValueError("authorization route fingerprint does not match the referenced route")
+        authorization_context = route_report.get("authorization_context")
+        if not isinstance(authorization_context, dict) or not all(
+            isinstance(authorization_context.get(field), str)
+            and authorization_context.get(field)
+            for field in ("routing_truth_digest", "structure_digest")
+        ):
+            raise ValueError("referenced route lacks a complete authorization context")
         outside_paths = sorted(set(allowed_paths) - set(routed_paths))
         if outside_paths:
             raise ValueError(
@@ -128,6 +204,7 @@ def authorization_audit_fields(
         "allowed_paths": allowed_paths,
         "override_reason": override_reason,
         "expires_after": expires_after,
+        "route_fingerprint": feedback.get("route_fingerprint"),
         "authorization_status": authorization_status,
         "override_consumed": override_consumed,
     }

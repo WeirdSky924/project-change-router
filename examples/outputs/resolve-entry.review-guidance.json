@@ -298,6 +298,13 @@
   "reasoning": [
     "seed-stage repository does not auto-route into existing capability boundaries"
   ],
+  "authorization_context": {
+    "source_commit": null,
+    "structure_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "routing_truth_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "freshness_classification": "unknown"
+  },
+  "route_fingerprint": "3254c4aae54f9766f743b8c3b14773d558352668ebb08de286f559fc51d25eb7",
   "source_of_truths": {
     "capability_catalog": {
       "generated_by": "bootstrap_router",

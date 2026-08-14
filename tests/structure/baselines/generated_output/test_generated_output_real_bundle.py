@@ -82,8 +82,8 @@ def test_pin_records_each_artifacts_own_ancestor_source_commit(
     bundle = build_and_write_bundle(repo)
     bundle["exception_registry"]["source_commit"] = historical_commit
     exception_path = repo / PCR_BUNDLE_ARTIFACTS["exception_registry"]
-    exception_path.write_text(
-        canonical_yaml_text(bundle["exception_registry"]), encoding="utf-8"
+    exception_path.write_bytes(
+        canonical_yaml_text(bundle["exception_registry"]).encode("utf-8")
     )
 
     rule = make_real_rule(repo, bundle)
@@ -182,7 +182,7 @@ def test_actual_null_commit_artifact_cannot_adopt_the_rule_commit(
     ownership_path = repo / PCR_BUNDLE_ARTIFACTS["ownership"]
     ownership = yaml.safe_load(ownership_path.read_text(encoding="utf-8"))
     ownership["source_commit"] = git(repo, "rev-parse", "HEAD")
-    ownership_path.write_text(canonical_yaml_text(ownership), encoding="utf-8")
+    ownership_path.write_bytes(canonical_yaml_text(ownership).encode("utf-8"))
 
     result = verify_generated_output_baseline(
         repo,
@@ -209,7 +209,7 @@ def test_actual_commit_bearing_artifact_rejects_source_mismatch(
     catalog_path = repo / PCR_BUNDLE_ARTIFACTS["capability_catalog"]
     catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
     catalog["source_commit"] = "f" * 40
-    catalog_path.write_text(canonical_yaml_text(catalog), encoding="utf-8")
+    catalog_path.write_bytes(canonical_yaml_text(catalog).encode("utf-8"))
 
     result = verify_generated_output_baseline(
         repo,

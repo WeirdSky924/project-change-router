@@ -539,6 +539,10 @@ def semantic_report_value(report: dict[str, Any]) -> dict[str, Any]:
         "evidence_complete": report.get("evidence_complete"),
         "scope": scan.get("scope"),
         "fingerprint_version": scan.get("fingerprint_version"),
+        "source_fingerprint_digest": scan.get("source_fingerprint_digest"),
+        "source_fingerprint_file_count": scan.get(
+            "source_fingerprint_file_count"
+        ),
         "candidate_file_count": scan.get("candidate_file_count"),
         "owner_file_count": scan.get("owner_file_count"),
         "unique_pair_count": scan.get("unique_pair_count"),

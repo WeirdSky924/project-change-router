@@ -157,6 +157,14 @@ Caller-supplied `--changed-path` values are unioned with real staged, unstaged, 
 
 An unmapped changed path fails freshness. Do not remove the path, enlarge ignore patterns, or rewrite evidence to make the check pass. Add or repair the correct owner/path mapping after source review.
 
+Route resolution does not erase a failing global freshness report. It derives one task-local gate from the complete delta between the indexed source, `HEAD`, the index, the worktree, and untracked files. Paths are compared with the routed capability's forward and reverse dependency closure:
+
+- `task_local_new`: a changed path intersects that closure and remains blocking;
+- `baseline_unchanged`: all failing delta paths are mapped and proven outside that closure, so the global debt stays visible without blocking this route;
+- `unknown`: an unmapped path, incomplete snapshot, stale entry, parser diagnostic, or other unlocalizable evidence remains blocking.
+
+The route report binds authorization to `authorization_context` and `route_fingerprint`. The fingerprint covers source and structure identity, routing truth, paths, capabilities, action, override requirements, and the mutation envelope. Feedback must carry the original fingerprint, so changed input or a rewritten route report invalidates the authorization record.
+
 ## Stable Capability Governance
 
 Every stable capability must have:

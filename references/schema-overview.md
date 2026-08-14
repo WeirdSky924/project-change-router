@@ -30,6 +30,7 @@ PCR 0.3 exposes architecture governance API v1 and keeps reuse engine API v2. Re
 - capability and module identifiers must be stable and machine-readable
 - generated reports must be serializable to JSON and schema-valid
 - stale or missing referenced paths must be surfaced as freshness failures
+- route decisions expose `authorization_context` and a SHA-256 `route_fingerprint` for task-bound authorization invalidation
 - semantic governance drift is reported separately from schema validity through `check_bundle_governance.py`
 - route decision reports must include review guidance, write constraints, closeout steps, composite route metadata, lifecycle action metadata, and regression capture hints
 - dependency findings distinguish runtime edges and cycles from Python `TYPE_CHECKING` and TypeScript type-only edges

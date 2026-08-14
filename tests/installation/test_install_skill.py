@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +17,7 @@ IGNORED_PAYLOAD_NAMES = {
     ".git",
     "__pycache__",
     ".pytest_cache",
+    "node_modules",
     "project-change-router",
     INSTALL_MANIFEST,
 }
@@ -30,6 +32,7 @@ def _run_installer(
     *extra: str,
     target: str = "codex",
     claude_home: Path | None = None,
+    dsh_home: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -41,6 +44,8 @@ def _run_installer(
     ]
     if claude_home is not None:
         command.extend(("--claude-home", str(claude_home)))
+    if dsh_home is not None:
+        command.extend(("--dsh-home", str(dsh_home)))
     command.extend(extra)
     return subprocess.run(
         command,
@@ -499,3 +504,128 @@ def test_upgrade_docs_use_trusted_comparison_boundary(
         "--changed-path scripts/router_support/owner_identity.py "
         "--strict-completeness"
     ) in readme
+
+
+def test_atomic_install_supports_all_agent_homes(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    claude_home = tmp_path / "claude-home"
+    dsh_home = tmp_path / "dsh-home"
+
+    install = _run_installer(
+        SKILL_ROOT,
+        codex_home,
+        "--inject-hints",
+        target="all",
+        claude_home=claude_home,
+        dsh_home=dsh_home,
+    )
+    verify = _run_installer(
+        SKILL_ROOT,
+        codex_home,
+        "--verify-only",
+        target="all",
+        claude_home=claude_home,
+        dsh_home=dsh_home,
+    )
+
+    assert install.returncode == 0, install.stderr
+    assert verify.returncode == 0, verify.stderr
+    for home in (codex_home, claude_home, dsh_home):
+        installed = home / "skills" / "project-change-router"
+        assert (installed / "SKILL.md").exists()
+        assert (installed / INSTALL_MANIFEST).exists()
+    assert "project-change-router-codex-hint:begin" in (
+        codex_home / "AGENTS.md"
+    ).read_text(encoding="utf-8")
+    assert "project-change-router-claude-hint:begin" in (
+        claude_home / "CLAUDE.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_deepseek_harness_provider_loads_root_skill() -> None:
+    package = json.loads((SKILL_ROOT / "package.json").read_text(encoding="utf-8"))
+    patch = yaml.safe_load(
+        (SKILL_ROOT / "integrations" / "deepseek-harness" / "cordis.patch.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert package["version"] == "0.3.0"
+    assert package["main"] == "./integrations/deepseek-harness/index.js"
+    assert package["engines"]["node"] == "^22.19.0 || >=24.0.0"
+    assert package["dsh"]["bundle"]["patch"] == (
+        "./integrations/deepseek-harness/cordis.patch.yml"
+    )
+    assert patch == [
+        {
+            "insert": [
+                {
+                    "id": "project-change-router-skill",
+                    "name": "project-change-router-skill",
+                }
+            ]
+        }
+    ]
+
+    probe = r"""
+import assert from 'node:assert/strict'
+import { pathToFileURL } from 'node:url'
+
+const entry = pathToFileURL(process.argv[1]).href
+const plugin = await import(entry)
+let provider
+const ctx = {
+  skills: {
+    registerProvider(create) {
+      provider = create({ signal: new AbortController().signal, invalidate() {} })
+    },
+  },
+}
+plugin.apply(ctx)
+assert.equal(plugin.name, 'project-change-router-skill')
+assert.deepEqual(plugin.inject, ['skills'])
+const candidates = await provider.list({})
+assert.equal(candidates.length, 1)
+assert.equal(candidates[0].name, 'project-change-router')
+assert.equal(candidates[0].rank, 600)
+const definition = await provider.get(candidates[0], {})
+assert.equal(definition.name, 'project-change-router')
+assert.match(definition.description, /DeepSeek Harness/)
+assert.match(definition.content, /# Project Change Router/)
+assert.equal(definition.resourceBase.kind, 'directory')
+"""
+    result = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "--eval",
+            probe,
+            str(SKILL_ROOT / "integrations" / "deepseek-harness" / "index.js"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_deepseek_harness_package_excludes_runtime_artifacts() -> None:
+    npm = shutil.which("npm")
+    if npm is None:
+        pytest.skip("npm is not installed")
+
+    result = subprocess.run(
+        [npm, "pack", "--dry-run", "--json"],
+        cwd=SKILL_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    package = json.loads(result.stdout)[0]
+    packaged_paths = [entry["path"].replace("\\", "/") for entry in package["files"]]
+    assert not any("__pycache__/" in path for path in packaged_paths)
+    assert not any(path.endswith((".pyc", ".pyo", ".pyd")) for path in packaged_paths)
+    assert "integrations/deepseek-harness/index.js" in packaged_paths
+    assert "SKILL.md" in packaged_paths

@@ -33,6 +33,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -50,6 +55,9 @@ jobs:
           assert re.search(r"^description:\s*.+$", skill, re.M), "skill description missing"
           print("Skill structure looks valid")
           PY
+
+      - name: Validate DeepSeek Harness Plugin
+        run: node --check integrations/deepseek-harness/index.js
 
       - name: Run Unit Tests
         run: pytest -q

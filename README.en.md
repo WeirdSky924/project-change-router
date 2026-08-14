@@ -2,7 +2,7 @@
 
 English version. The default Chinese README is [README.md](./README.md).
 
-`project-change-router` is an AI coding skill for large repositories, usable from both Codex and Claude Code. Its goal is not to make agents guess architecture more aggressively. Its goal is to make agents guess less: before editing code, the agent should use a repository-local router bundle to get capability ownership, canonical-root signals, owners, read/write boundaries, reuse risks, and action guidance.
+`project-change-router` is an AI coding skill for large repositories, usable from Codex, Claude Code, and DeepSeek Harness. Its goal is not to make agents guess architecture more aggressively. Its goal is to make agents guess less: before editing code, the agent should use a repository-local router bundle to get capability ownership, canonical-root signals, owners, read/write boundaries, reuse risks, and action guidance.
 
 It addresses common structural drift in large projects:
 
@@ -60,7 +60,7 @@ This skill can:
 - Validate bundles and reports with schemas.
 - Run evaluation cases to detect route quality regressions.
 - Run governance audits for profile/catalog sync, ownership granularity, contract quality, forbidden density, evaluation coverage, and capability lifecycle metadata.
-- Append marked hint blocks during Codex / Claude Code installation so agents are more likely to invoke the skill before feature-level create / modify / delete work.
+- Append marked hint blocks during Codex / Claude Code installation and publish the trigger description through the DeepSeek Harness skill catalog so agents are more likely to invoke the skill before feature-level create / modify / delete work.
 
 It should not:
 
@@ -138,6 +138,8 @@ A route report is not just an action. It is a complete route contract. Core fiel
 - `positive_signals`
 - `negative_signals`
 - `risk_signals`
+- `authorization_context`
+- `route_fingerprint`
 
 The seven governance output groups are first-class fields in the same route report, not an external add-on:
 
@@ -158,6 +160,7 @@ See [references/governance-outputs.md](./references/governance-outputs.md) for t
 Python requirement:
 
 - Python `>= 3.10`
+- DeepSeek Harness plugin validation follows Harness's current Node requirement: `^22.19.0 || >=24.0.0`; filesystem-only installation does not start an additional Node process
 
 Install dependencies:
 
@@ -171,33 +174,63 @@ Or install in development mode:
 pip install -e .[dev]
 ```
 
-Install for Codex and Claude Code:
+Install for Codex, Claude Code, and DeepSeek Harness:
 
 ```powershell
-python scripts/install_skill.py --target both --inject-hints
+python scripts/install_skill.py --target all --inject-hints
 ```
 
 Install paths:
 
 - Codex: `%USERPROFILE%\.codex\skills\project-change-router`
 - Claude Code: `%USERPROFILE%\.claude\skills\project-change-router`
+- DeepSeek Harness: `$DSH_HOME/skills/project-change-router`, defaulting to `~/.dsh/skills/project-change-router` when `DSH_HOME` is unset
 
-`--inject-hints` appends marked blocks instead of rewriting whole files:
+`--inject-hints` appends marked blocks only for Codex and Claude Code, which need persistent rule-entry reminders. It never rewrites whole files:
 
 - Codex: appends to `~/.codex/AGENTS.md`
 - Claude Code: appends to `~/.claude/CLAUDE.md`
 
 This is soft enforcement that reminds the agent to invoke the skill before feature-level create / modify / delete work. It is not a background daemon and it does not bypass the conversation trigger model.
 
-The installer uses staging, a recursive payload hash, recursive Python compilation, governance API probes, and atomic replacement. It replaces the old skill only after the new copy passes all checks, and restores the old copy on failure. This prevents top-level scripts, `router_support`, schemas, or documentation from being installed as a mixed version.
+DeepSeek Harness publishes PCR's `name` and `description` through its skill catalog and supports explicit `/project-change-router` tokens in user messages, so no Harness-wide prompt document needs to be rewritten.
 
-The source checkout and destination must be different paths. If this Git checkout already lives at `~/.codex/skills/project-change-router`, do not install Codex over itself; use a separate checkout to install both targets, or install only the other target. `--verify-only` requires the trusted manifest created by an atomic 0.3 installation. A legacy copy without that manifest must be reinstalled once before hash verification is meaningful.
+Compatibility: `--target both` retains its existing meaning and installs only Codex plus Claude Code; `--target deepseek` installs only Harness; `--target all` installs all three. For a project-local Harness installation, use the repository `.dsh` directory as the home:
+
+```powershell
+python scripts/install_skill.py --target deepseek --dsh-home <repo-root>/.dsh
+```
+
+Harness's native filesystem provider then discovers `<repo-root>/.dsh/skills/project-change-router/SKILL.md`. Harness also supports `<repo-root>/.agents/skills`, `~/.agents/skills`, and custom skill roots, while this installer intentionally defaults to the official `DSH_HOME` location.
+
+### Install as a DeepSeek Harness GitHub Plugin
+
+The root `package.json` declares a `dsh.bundle`. Its Cordis provider reads the root `SKILL.md` and exposes the same resource directory, so there is no second prompt source. Pin a commit SHA when installing:
+
+```powershell
+dsh plugin --profile <profile-name> add github:WeirdSky924/project-change-router-skill#<commit-sha>
+dsh --profile <profile-name> --dump-config
+```
+
+The bundle is native ESM with no TypeScript build, `prepare` script, or install-time code execution allowance. Project `.dsh/skills` and user filesystem skills have a higher Harness rank than the bundled provider, preserving the official local-override behavior.
+
+Remove the profile plugin with:
+
+```powershell
+dsh plugin --profile <profile-name> remove project-change-router-skill
+```
+
+Harness community discovery uses the `dsh-plugin` topic on public GitHub repositories. Before release, configure searchable topics such as `dsh-plugin`, `deepseek-harness`, `agent-skills`, and `coding-agent`. DeepSeek Harness remains a developer preview, so rerun the provider smoke and installation validation after upgrading between Harness preview releases.
+
+The installer uses staging, a recursive payload hash, recursive Python compilation, governance API probes, and atomic replacement. It replaces the old skill only after the new copy passes all checks, and restores the old copy on failure. This prevents top-level scripts, `router_support`, schemas, documentation, or the DSH provider from being installed as a mixed version.
+
+The source checkout and destination must be different paths. If this Git checkout already lives at any target's `skills/project-change-router` path, do not install over itself; use a separate checkout to install multiple targets, or install only the other targets. `--verify-only` requires the trusted manifest created by an atomic 0.3 installation. A legacy copy without that manifest must be reinstalled once before hash verification is meaningful.
 
 ## Safely Upgrade an Existing PCR Installation
 
 The global skill and a repository bundle are separate layers:
 
-- The global skill lives under `~/.codex/skills/project-change-router` or `~/.claude/skills/project-change-router` and contains scripts and workflow instructions.
+- The global skill lives under `~/.codex/skills/project-change-router`, `~/.claude/skills/project-change-router`, or `~/.dsh/skills/project-change-router` and contains scripts and workflow instructions.
 - The repository bundle lives under `<repo-root>/project-change-router/` and contains that project's long-lived capability, owner, path-map, feedback, and evaluation data.
 
 Updating the global skill neither requires nor authorizes rebuilding repository bundles. Use this upgrade sequence:
@@ -206,13 +239,13 @@ Updating the global skill neither requires nor authorizes rebuilding repository 
 2. Run the atomic installer:
 
 ```powershell
-python scripts/install_skill.py --target both --inject-hints
+python scripts/install_skill.py --target all --inject-hints
 ```
 
-3. Verify the installed Codex and Claude Code copies, including file hashes and reuse-engine API compatibility:
+3. Verify the installed Codex, Claude Code, and DeepSeek Harness copies, including file hashes and reuse-engine API compatibility:
 
 ```powershell
-python scripts/install_skill.py --target both --verify-only
+python scripts/install_skill.py --target all --verify-only
 ```
 
 4. For a repository that has used PCR for a long time, run read-only compatibility checks only:
@@ -359,6 +392,12 @@ Explicit invocation in Claude Code:
 /project-change-router resolve the correct capability entry for this change
 ```
 
+DeepSeek Harness uses the same whitespace-bounded slash invocation, or the model can load PCR from the published skill catalog when the task matches its description:
+
+```text
+/project-change-router resolve the correct capability entry for this change
+```
+
 Resolve one change from the command line:
 
 ```powershell
@@ -379,7 +418,7 @@ Execution rules after resolution:
 - If `action=extract`: treat it as an extraction tendency; confirm repeated surfaces, callers, and tests before extracting a shared capability.
 - If `action=new`: treat it as a new-boundary tendency; name an isolated boundary first and do not create a second parallel center next to an existing capability.
 
-## Codex / Claude Code Prompt
+## Codex / Claude Code / DeepSeek Harness Prompt
 
 Recommended text for unattended plans or long-running tasks:
 
@@ -435,7 +474,8 @@ PCR 0.3 turns structure constraints that previously depended on manual review in
 - `exclusive_source_owners` prevents profile-declared protected implementation tokens outside their canonical owner. Raw transports, caches/stores, or DTO duplicates that use unrelated identifiers still require repository-specific import, identifier, or AST gates.
 - `generated_output_baseline` is limited to the seven fixed PCR reference artifacts during canonical-profile migration and binds the repository's unique active `.project-change-router.yaml` or `.project-change-router.yml`. The rule source and every non-null artifact provenance value must be a full immutable SHA for that repository's object format. An artifact may predate the rule source, but it must be an ancestor of both the rule source and the current rebuild source; null mode must remain null. Pinned digests project out only top-level `generated_at`, `source_commit`, and explicitly listed capability-catalog generator clocks. `path_to_capability_map.path_index[*].code_file_count` remains in the pinned digest; it is treated as comparison-only rebuild volatile only for the same `path_pattern` when both old and new values are valid non-negative integers, preventing ordinary repository file-count changes from producing false positives. The actual pinned count remains protected by its digest, canonical UTF-8 bytes, and line count, so a missing value, type drift, or tracked-artifact tamper still fails. After verification, ordinary `rebuild_index.py` preserves all seven tracked refs and refreshes only `router-config.yaml`, schemas, and `latest.json`; failure writes no bundle or report. The evaluation attestation is rebound to the effective persisted combination of new config plus pinned refs. Initial pinning requires `--initialize-generated-output-baseline <fingerprint>` on either `check_structure.py` or `rebuild_index.py`; profile prose cannot authorize itself. While a pin is active, malformed, or removed only in the worktree, `bootstrap_router.py` cannot clear the protected refs.
 - Every stable capability needs one explicit `capability_ownership` record with a real primary owner and distinct reviewer, lifecycle metadata, contracts/test bindings, and positive plus boundary evaluation coverage. Generated owner labels, `UNKNOWN`, unassigned, missing, duplicate, and provisional owners cannot authorize unattended writes.
-- Freshness checks the current commit, content-derived structure digest, stale entries, indexed paths, report field shapes, and changed-path coverage. Canonical config, the seven references, and schemas remain digest inputs even when bundle `ignore_paths` match them; only self-referential `latest.json` is exempt. Explicit `--changed-path` values are always unioned with real staged, unstaged, untracked, and deleted paths. A historical source passes only when it is an ancestor of current `HEAD` and the snapshot, status, and diagnostics are all exact.
+- Freshness checks the current commit, content-derived structure digest, stale entries, indexed paths, report field shapes, and changed-path coverage. The global report continues to expose all debt; the route gate then classifies the delta against the current capability's forward and reverse dependency closure as `task_local_new`, `baseline_unchanged`, or `unknown`. Relevant and unresolved changes still block, while proven debt in another capability no longer turns a local safe change into repository-wide `forbidden=["**"]`. Canonical config, the seven references, and schemas remain digest inputs even when bundle `ignore_paths` match them; only self-referential `latest.json` is exempt. Explicit `--changed-path` values are unioned with real paths from the indexed source through `HEAD`, staged, unstaged, untracked, and deleted state.
+- Every route report carries an `authorization_context` and `route_fingerprint` bound to the source commit, structure digest, routing truth, changed paths, capabilities, action, override requirements, and write envelope. Manual feedback must return the original fingerprint. Changed input or report content invalidates authorization, and the manifest cannot recreate consumed authority.
 - Missing, stale, or below-threshold evaluation attestation keeps PCR in `review_only`; a correct capability match alone does not prove that the action or write authority is reliable.
 
 Baseline existing debt exactly, stop new growth first, and reduce the baseline in later governance work. Do not gain a pass by enlarging ignore patterns, weakening rules, or fabricating evaluation cases. See [references/architecture-governance.md](./references/architecture-governance.md) for field contracts, exit metadata, and the recommended CI sequence.
@@ -522,6 +562,8 @@ Typical meanings:
 | A P1 was found before cancellation | `fail` | `cancelled` |
 
 Only `completion_status=complete` with `evidence_complete=true` supports the statement that the target capability scope was fully checked. It still says nothing about unrelated capabilities and does not replace source analysis.
+
+A changed-path report identity uses routing truth, target content, and the `source_fingerprint_digest` of owner/candidate files that actually participated in the scan. Unrelated worktree files no longer churn canonical-report deduplication, while any source used by the decision still invalidates the digest when it changes.
 
 ### Automatic Retention and Cleanup
 
@@ -681,12 +723,20 @@ Reference documents:
 - `scripts/sync_feedback.py`
 - `scripts/validate_router_bundle.py`
 
+DeepSeek Harness integration files:
+
+- `package.json`
+- `integrations/deepseek-harness/index.js`
+- `integrations/deepseek-harness/cordis.patch.yml`
+
 ## CI
 
 The GitHub Actions workflow is in [.github/workflows/ci.yml](./.github/workflows/ci.yml). It runs:
 
 - dependency installation.
 - skill structure validation.
+- DeepSeek Harness provider syntax and registration/loading smoke validation.
+- `npm pack --dry-run` validation that excludes `__pycache__`, `.pyc`, and other local runtime artifacts from the DSH package.
 - unit tests.
 - bootstrap against this repository.
 - bundle validation.

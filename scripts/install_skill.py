@@ -24,6 +24,7 @@ INSTALL_IGNORED_NAMES = (
     ".git",
     "__pycache__",
     ".pytest_cache",
+    "node_modules",
     "project-change-router",
     INSTALL_MANIFEST,
 )
@@ -363,10 +364,18 @@ For `check_reuse`, inspect both `result_status` and `completion_status`. `bounde
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Install the project-change-router skill for Codex and/or Claude Code.")
-    parser.add_argument("--target", choices=["codex", "claude", "both"], default="both")
+    parser = argparse.ArgumentParser(
+        description="Install the project-change-router skill for Codex, Claude Code, and/or DeepSeek Harness."
+    )
+    parser.add_argument(
+        "--target",
+        choices=["codex", "claude", "deepseek", "both", "all"],
+        default="both",
+        help="Install one runtime, legacy both=Codex+Claude, or all three runtimes.",
+    )
     parser.add_argument("--codex-home", help="Override Codex home directory. Defaults to ~/.codex")
     parser.add_argument("--claude-home", help="Override Claude home directory. Defaults to ~/.claude")
+    parser.add_argument("--dsh-home", help="Override DeepSeek Harness home directory. Defaults to $DSH_HOME or ~/.dsh")
     parser.add_argument("--inject-claude-hint", action="store_true", help="Append a guidance block to CLAUDE.md in the Claude home directory.")
     parser.add_argument("--inject-codex-hint", action="store_true", help="Append a guidance block to AGENTS.md in the Codex home directory.")
     parser.add_argument("--inject-hints", action="store_true", help="Append guidance blocks to both Codex and Claude homes when those targets are installed.")
@@ -376,12 +385,22 @@ def main() -> int:
     skill_root = Path(__file__).resolve().parent.parent
     codex_home = Path(args.codex_home).expanduser() if args.codex_home else (Path.home() / ".codex")
     claude_home = Path(args.claude_home).expanduser() if args.claude_home else (Path.home() / ".claude")
+    dsh_home_env = os.environ.get("DSH_HOME")
+    dsh_home = (
+        Path(args.dsh_home).expanduser()
+        if args.dsh_home
+        else Path(dsh_home_env).expanduser()
+        if dsh_home_env
+        else Path.home() / ".dsh"
+    )
 
     destinations: list[Path] = []
-    if args.target in {"codex", "both"}:
+    if args.target in {"codex", "both", "all"}:
         destinations.append(codex_home / "skills" / SKILL_NAME)
-    if args.target in {"claude", "both"}:
+    if args.target in {"claude", "both", "all"}:
         destinations.append(claude_home / "skills" / SKILL_NAME)
+    if args.target in {"deepseek", "all"}:
+        destinations.append(dsh_home / "skills" / SKILL_NAME)
 
     if args.verify_only:
         installed_paths = [
@@ -391,7 +410,7 @@ def main() -> int:
     else:
         installed_paths = atomic_install_targets(skill_root, destinations)
 
-    if not args.verify_only and args.target in {"claude", "both"} and (
+    if not args.verify_only and args.target in {"claude", "both", "all"} and (
         args.inject_claude_hint or args.inject_hints
     ):
         ensure_marked_block(
@@ -399,8 +418,7 @@ def main() -> int:
             f"{SKILL_NAME}-claude-hint",
             claude_hint_block(),
         )
-
-    if not args.verify_only and args.target in {"codex", "both"} and (args.inject_codex_hint or args.inject_hints):
+    if not args.verify_only and args.target in {"codex", "both", "all"} and (args.inject_codex_hint or args.inject_hints):
         ensure_marked_block(codex_home / "AGENTS.md", f"{SKILL_NAME}-codex-hint", codex_hint_block())
 
     for path, manifest in installed_paths:

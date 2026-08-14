@@ -5,6 +5,7 @@ import datetime as dt
 import difflib
 import fnmatch
 import hashlib
+import json
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -183,6 +184,8 @@ def gather_reuse_report(
         "runtime": dataclasses.asdict(runtime_policy),
         "runtime_recovery": store.recovery_event if store else None,
         "fingerprint_version": FINGERPRINT_VERSION,
+        "source_fingerprint_digest": None,
+        "source_fingerprint_file_count": 0,
     }
     if budget_configuration_errors:
         metrics.update(
@@ -543,6 +546,27 @@ def gather_reuse_report(
     ][:20]
     findings.extend(advisory_findings)
     metrics["fingerprint_advisories_reported"] = len(advisory_findings)
+    source_fingerprint_records = [
+        {
+            "path": rel(path),
+            "content_digest": value.get("content_digest"),
+            "file_size": value.get("file_size"),
+            "normalized_length": value.get("normalized_length"),
+        }
+        for path, value in sorted(
+            fingerprint_cache.items(), key=lambda item: rel(item[0])
+        )
+    ]
+    metrics["source_fingerprint_file_count"] = len(source_fingerprint_records)
+    metrics["source_fingerprint_digest"] = hashlib.sha256(
+        json.dumps(
+            source_fingerprint_records,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     metrics["unique_pair_count"] = sum(
         1 for left, right in pair_prefilter_cache if left != right
     )

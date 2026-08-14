@@ -246,6 +246,203 @@ def test_resolve_explicit_route_paths_cannot_hide_other_git_changes(
     assert freshness["unmapped_changed_paths"] == ["outside/unmapped.py"]
 
 
+def test_resolve_allows_proven_unrelated_freshness_debt(
+    tmp_path: Path,
+) -> None:
+    repo, bundle, latest = _persisted_route_bundle(tmp_path)
+    (repo / ".gitignore").write_text(
+        "project-change-router/\n", encoding="utf-8"
+    )
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore generated router bundle")
+
+    bundle["module_map"]["modules"].append(
+        {
+            "id": "module-reports",
+            "path": "src/reports",
+            "layer": "domain-service",
+            "domain": "reports",
+            "purpose": "Build reports",
+            "public_api": "service.py",
+            "source_of_truth": "curated",
+            "generated": False,
+            "owner": "reports-team",
+        }
+    )
+    bundle["capability_catalog"]["capabilities"].append(
+        {
+            "id": "reports",
+            "name": "Reports",
+            "status": "stable",
+            "maturity": "curated",
+            "stage": "stable",
+            "source_of_truth": "profile",
+            "intent_keywords": ["report"],
+            "owner_modules": ["src/reports"],
+            "public_entries": ["src/reports/service.py"],
+            "extension_points": ["src/reports/service.py"],
+            "contracts": ["Keep report generation isolated"],
+        }
+    )
+    bundle["ownership"]["owners"].append(
+        {
+            "scope": "capability",
+            "target": "reports",
+            "primary": "reports-team",
+            "reviewers": ["reports-reviewers"],
+            "provisional": False,
+        }
+    )
+    bundle["path_to_capability_map"]["path_index"].append(
+        {
+            "path_pattern": "src/reports/**",
+            "capabilities": ["reports"],
+            "relationship": "unique",
+        }
+    )
+    bundle["config"]["source_commit"] = _git(repo, "rev-parse", "HEAD")
+    bundle["config"]["evaluation"]["attestation"] = (
+        router_core.make_evaluation_attestation(
+            bundle,
+            bundle["config"]["evaluation"]["attestation"]["metrics"],
+        )
+    )
+    snapshot = router_core.build_structure_snapshot(
+        repo,
+        router_core.default_ignore_patterns(bundle["config"]),
+        required_patterns=canonical_bundle_snapshot_paths(
+            repo, repo / "project-change-router"
+        ),
+    )
+    router_core.dump_json_file(
+        latest,
+        {
+            "source_commit": snapshot.source_commit,
+            "structure_digest": snapshot.digest,
+            "indexed_paths": list(snapshot.paths),
+            "mapped_path_patterns": ["src/formatter/**", "src/reports/**"],
+            "stale_entries": [],
+            "diagnostics": [],
+            "status": "pass",
+        },
+    )
+    unrelated = repo / "src/reports/new_report.py"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("def render():\n    return 'ok'\n", encoding="utf-8")
+
+    decision = router_core.resolve_request(
+        "Extend formatter output compatibility.",
+        ["src/formatter/service.py"],
+        bundle,
+        repo / "project-change-router",
+        enforce_evaluation_policy=False,
+        freshness_context="route",
+    )
+
+    freshness = bundle["_runtime"]["freshness"]
+    assert freshness["status"] == "fail"
+    assert freshness["route_status"] == "pass"
+    assert freshness["route_assessment"]["classification"] == "baseline_unchanged"
+    assert freshness["route_assessment"]["unrelated_changed_paths"] == [
+        "src/reports/new_report.py"
+    ]
+    assert decision.action == "extend", decision.to_dict()
+    assert decision.review_required is False
+    assert "**" not in decision.forbidden_write_paths
+
+
+def test_route_freshness_blocks_reverse_dependency_closure_delta() -> None:
+    bundle = {
+        "module_map": {
+            "modules": [
+                {
+                    "id": "module-api",
+                    "path": "src/api",
+                    "layer": "interface",
+                    "domain": "api",
+                    "purpose": "Expose API handlers",
+                    "depends_on": ["src/core"],
+                },
+                {
+                    "id": "module-core",
+                    "path": "src/core",
+                    "layer": "domain-service",
+                    "domain": "core",
+                    "purpose": "Own core behavior",
+                    "depends_on": [],
+                },
+            ]
+        },
+        "capability_catalog": {
+            "capabilities": [
+                {
+                    "id": "api",
+                    "name": "API",
+                    "status": "stable",
+                    "maturity": "curated",
+                    "owner_modules": ["src/api"],
+                },
+                {
+                    "id": "core",
+                    "name": "Core",
+                    "status": "stable",
+                    "maturity": "curated",
+                    "owner_modules": ["src/core"],
+                },
+            ]
+        },
+        "path_to_capability_map": {
+            "path_index": [
+                {"path_pattern": "src/api/**", "capabilities": ["api"]},
+                {"path_pattern": "src/core/**", "capabilities": ["core"]},
+            ]
+        },
+    }
+    report = {
+        "status": "fail",
+        "failure_reasons": ["structure_digest"],
+        "repository_changed_paths": ["src/core/service.py"],
+        "checks": [],
+    }
+
+    assessment = router_core._route_freshness_assessment(
+        bundle, report, ["src/api/handler.py"]
+    )
+
+    assert assessment["status"] == "fail"
+    assert assessment["classification"] == "task_local_new"
+    assert assessment["relevant_capabilities"] == ["api", "core"]
+    assert assessment["relevant_changed_paths"] == ["src/core/service.py"]
+
+
+def test_route_freshness_does_not_localize_untrusted_source_commit() -> None:
+    bundle = {
+        "module_map": {"modules": []},
+        "capability_catalog": {"capabilities": []},
+        "path_to_capability_map": {
+            "path_index": [
+                {"path_pattern": "src/api/**", "capabilities": ["api"]},
+                {"path_pattern": "src/reports/**", "capabilities": ["reports"]},
+            ]
+        },
+    }
+    report = {
+        "status": "fail",
+        "failure_reasons": ["source_commit", "structure_digest"],
+        "repository_changed_paths": ["src/reports/service.py"],
+        "comparison_delta_complete": False,
+        "checks": [],
+    }
+
+    assessment = router_core._route_freshness_assessment(
+        bundle, report, ["src/api/handler.py"]
+    )
+
+    assert assessment["status"] == "fail"
+    assert assessment["classification"] == "unknown"
+    assert assessment["unrelated_changed_paths"] == ["src/reports/service.py"]
+
+
 def test_evaluation_self_check_does_not_require_a_persisted_freshness_snapshot(
     tmp_path: Path,
 ) -> None:

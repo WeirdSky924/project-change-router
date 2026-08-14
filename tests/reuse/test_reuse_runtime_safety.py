@@ -63,6 +63,34 @@ def test_canonical_input_fingerprint_ignores_mtime_but_tracks_content(tmp_path: 
     assert after_content != before
 
 
+def test_changed_path_input_fingerprint_ignores_unrelated_worktree_changes(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    before = build_input_fingerprint(repo, _bundle(), ["service.py"], {})
+
+    (repo / "unrelated.txt").write_text("outside scan scope\n", encoding="utf-8")
+
+    assert build_input_fingerprint(
+        repo, _bundle(), ["service.py"], {}
+    ) == before
+
+
+def test_changed_path_input_fingerprint_tracks_actual_scan_sources(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    before = build_input_fingerprint(
+        repo, _bundle(), ["service.py"], {}, "a" * 64
+    )
+
+    after = build_input_fingerprint(
+        repo, _bundle(), ["service.py"], {}, "b" * 64
+    )
+
+    assert after != before
+
+
 def test_canonical_input_fingerprint_tracks_delete_rename_and_bundle_truth(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     bundle = _bundle()

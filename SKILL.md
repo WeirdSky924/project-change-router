@@ -2,8 +2,8 @@
 name: project-change-router
 description: >-
   Project-level direction, boundary, and reuse governance for large repositories.
-  Use when Codex or Claude Code needs mandatory routing guardrails before code
-  edits: identify capability candidates, canonical roots, owners,
+  Use when Codex, Claude Code, or DeepSeek Harness needs mandatory routing
+  guardrails before code edits: identify capability candidates, canonical roots, owners,
   allowed/forbidden write paths, reuse risks, and advisory actions such as reuse,
   extend, extract, new, or review. Also use when the agent should bootstrap,
   rebuild, validate, or evaluate a repository-local router bundle for Java,
@@ -43,11 +43,11 @@ Advisory direction layer:
 5. Treat guardrail fields as mandatory constraints and action/review guidance as structured advice.
 6. Read the required capability entries and public code entry points before editing.
 7. Apply the change only in the routed layer.
-8. Run the required guardrails and capability-bound tests.
+8. Run the required guardrails and capability-bound tests. For route freshness, preserve the global report and use its generated `route_assessment`: `task_local_new` and `unknown` remain blocking, while only a proven `baseline_unchanged` delta outside the forward/reverse capability closure may proceed.
 9. Run `check_structure.py` for central-file growth, file-size bands, forbidden implementation roots, exclusive canonical owners, and exact pinned generated-output verification when the profile declares those baselines. For a new pin, require the user-approved exact fingerprint through `--initialize-generated-output-baseline` on structure verification and the first write-enabled rebuild; never treat profile text as authorization. While a current or committed pin remains active, malformed, or only worktree-removed, use the verified rebuild path and never bootstrap over its seven protected refs.
 10. For `check_reuse`, inspect `result_status`, `completion_status`, `evidence_complete`, and the resolved capability scope together. Do not interpret bounded, incomplete, timed-out, cancelled, or errored evidence as proof that duplicate implementations are absent.
 11. If evaluation thresholds or attestation are not satisfied, keep PCR in `review_only`; do not convert a correct capability match into unattended write authority.
-12. If the route is `review`, stop automatic product-code editing and report `block_reason`, `missing_evidence`, `analysis_directions`, `safe_next_steps`, and scoped `override_requirements`.
+12. If the route is `review`, stop automatic product-code editing and report `block_reason`, `missing_evidence`, `analysis_directions`, `safe_next_steps`, and scoped `override_requirements`. Any structured override feedback must return the original `route_fingerprint`; never recompute it after changing the route report or mutation envelope.
 13. Apply writes only inside `allowed_write_paths`, never inside `forbidden_write_paths`, and read `must_read_before_edit` first.
 14. If the change reveals stale indexes, ownership gaps, or missing capability coverage, run the governance audit before deciding whether to rebuild.
 15. Rebuild the bundle only when routing references are stale or the user explicitly asks to refresh repository-local routing data.
@@ -140,9 +140,11 @@ These overrides can define capability mappings, path-level ownership rules, expl
 
 ## Notes
 
-- This skill is standalone and installable under `~/.codex/skills`.
+- This skill is standalone and installable under `~/.codex/skills`, `~/.claude/skills`, or `~/.dsh/skills`.
 - For Claude Code, install the same folder under `~/.claude/skills/project-change-router/` or `.claude/skills/project-change-router/`.
-- Codex requests can invoke it as `$project-change-router`; Claude Code requests should invoke it as `/project-change-router`.
+- For DeepSeek Harness, install the same folder under `~/.dsh/skills/project-change-router/`, `.dsh/skills/project-change-router/`, or use the repository's `dsh.bundle` plugin.
+- Codex requests can invoke it as `$project-change-router`; Claude Code and DeepSeek Harness requests can invoke it as `/project-change-router`.
+- DeepSeek Harness is currently a developer preview. Revalidate the filesystem and provider contracts when upgrading Harness across preview releases.
 - It does not depend on a specific repository.
 - The repository-local router bundle is generated on demand and is not the skill itself.
 - Version 0.3 exposes architecture governance API v1 while preserving reuse engine API v2.

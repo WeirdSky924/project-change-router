@@ -176,7 +176,15 @@ def _is_governed_code_bearing_path(source_path: str, path: Path | None = None) -
         return True
     if source.name in BUILD_FILE_NAMES or source.name.startswith("Dockerfile."):
         return True
-    return bool(path and path.is_file() and path.stat().st_mode & 0o111)
+    if not path or not path.is_file():
+        return False
+    try:
+        if path.stat().st_mode & 0o111:
+            return True
+        with path.open("rb") as handle:
+            return handle.read(2) == b"#!"
+    except OSError:
+        return False
 
 
 def _git_nul_output(repo_root: Path, *args: str) -> list[str]:
@@ -370,9 +378,21 @@ def _baseline_code_paths(repo_root: Path, comparison_commit: str) -> set[str]:
             raise RuntimeError(f"malformed git tree record {record!r}")
         normalized = _normalize_repo_path(raw_path)
         mode = metadata.split(" ", 1)[0]
-        if normalized and (
-            _is_governed_code_bearing_path(normalized) or mode == "100755"
-        ):
+        is_code_bearing = bool(
+            normalized
+            and (
+                _is_governed_code_bearing_path(normalized)
+                or mode == "100755"
+            )
+        )
+        if normalized and not is_code_bearing and not Path(normalized).suffix:
+            baseline_source = load_optional_git_source(
+                repo_root, comparison_commit, normalized
+            )
+            is_code_bearing = bool(
+                baseline_source and baseline_source.startswith("#!")
+            )
+        if normalized and is_code_bearing:
             paths.add(normalized)
     return paths
 

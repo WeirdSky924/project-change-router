@@ -138,6 +138,13 @@
   "reasoning": [
     "no capability candidates were discovered"
   ],
+  "authorization_context": {
+    "source_commit": null,
+    "structure_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "routing_truth_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "freshness_classification": "baseline_unchanged"
+  },
+  "route_fingerprint": "3c43792967237023645212a9918a8f0cb1945bb5e6cfd4023d69d6b4bb8c77e2",
   "source_of_truths": {
     "capability_catalog": {
       "generated_by": "bootstrap_router",

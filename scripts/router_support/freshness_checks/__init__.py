@@ -493,11 +493,18 @@ def repository_freshness_report(
             bundle_root,
         ),
     )
-    effective_changes = set(collect_git_changed_paths(repo_root))
-    effective_changes.update(changed_paths or ())
+    requested_changes = {
+        _normalized(path) for path in (changed_paths or ()) if _normalized(path)
+    }
+    repository_changes = set(collect_git_changed_paths(repo_root))
     indexed_source = str(indexed.get("source_commit") or "")
     current_source = str(snapshot.source_commit or "")
     source_is_ancestor = False
+    comparison_delta_complete = bool(
+        indexed_source
+        and current_source
+        and indexed_source == current_source
+    )
     if indexed_source and current_source and indexed_source != current_source:
         try:
             if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", indexed_source):
@@ -509,8 +516,14 @@ def repository_freshness_report(
             source_is_ancestor = git_commit_is_ancestor(
                 repo_root, resolved_indexed, resolved_current
             )
+            if source_is_ancestor:
+                repository_changes.update(
+                    collect_git_changed_paths(repo_root, resolved_indexed)
+                )
+                comparison_delta_complete = True
         except (OSError, RuntimeError, subprocess.SubprocessError, ValueError):
             source_is_ancestor = False
+    effective_changes = repository_changes | requested_changes
     assessment = assess_index_freshness(
         snapshot,
         indexed,
@@ -532,6 +545,9 @@ def repository_freshness_report(
         "report_id": f"freshness-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}",
         "timestamp": timestamp,
         **assessment,
+        "requested_changed_paths": sorted(requested_changes),
+        "repository_changed_paths": sorted(repository_changes),
+        "comparison_delta_complete": comparison_delta_complete,
         "missing_references": [] if latest_path.exists() else [
             str(latest_path.relative_to(repo_root))
         ],

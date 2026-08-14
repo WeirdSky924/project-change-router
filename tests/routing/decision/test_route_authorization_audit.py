@@ -10,6 +10,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 import router_core
+from router_support.route_authorization import route_authorization_fingerprint
 
 
 CURRENT_TASK_AUTHORIZATION = (
@@ -61,6 +62,7 @@ def _lifecycle_route(tmp_path: Path) -> tuple[Path, router_core.RouteDecision]:
         bundle,
         bundle_root,
         enforce_evaluation_policy=False,
+        freshness_context="route",
     )
     report_path = bundle_root / "reports" / "route-payment-core.json"
     router_core.dump_json_file(report_path, decision.to_dict())
@@ -81,6 +83,7 @@ def _authorization_feedback(decision: router_core.RouteDecision) -> dict[str, ob
         "allowed_paths": ["services/payments/service.py"],
         "override_reason": "Named caller migration requires this lifecycle change.",
         "expires_after": "current_task",
+        "route_fingerprint": decision.route_fingerprint,
     }
 
 
@@ -98,6 +101,8 @@ def test_route_schema_requires_changed_paths() -> None:
     changed_paths = schema["properties"]["changed_paths"]
     assert changed_paths["type"] == "array"
     assert changed_paths["items"]["type"] == "string"
+    assert "authorization_context" in schema["required"]
+    assert "route_fingerprint" in schema["required"]
 
 
 def test_feedback_marks_only_verified_route_authorization_consumed(
@@ -126,6 +131,7 @@ def test_feedback_marks_only_verified_route_authorization_consumed(
         "Named caller migration requires this lifecycle change."
     )
     assert payload["expires_after"] == "current_task"
+    assert payload["route_fingerprint"] == decision.route_fingerprint
     persisted = json.loads(
         (
             bundle_root
@@ -168,23 +174,23 @@ def test_feedback_rejects_route_without_changed_paths(tmp_path: Path) -> None:
         )
 
 
-def test_clean_route_does_not_consume_override_evidence(tmp_path: Path) -> None:
+def test_feedback_rejects_route_changed_after_authorization(tmp_path: Path) -> None:
     bundle_root, decision = _lifecycle_route(tmp_path)
     report = decision.to_dict()
     report["action"] = "extend"
     report["review_required"] = False
     report["override_requirements"] = []
+    report["route_fingerprint"] = route_authorization_fingerprint(report)
     router_core.dump_json_file(
         bundle_root / "reports" / "route-payment-core.json",
         report,
     )
 
-    payload = router_core.record_manual_feedback(
-        bundle_root,
-        _authorization_feedback(decision),
-    )
-    assert payload["authorization_status"] == "matched_route_no_override_required"
-    assert payload["override_consumed"] is False
+    with pytest.raises(ValueError, match="authorization route fingerprint"):
+        router_core.record_manual_feedback(
+            bundle_root,
+            _authorization_feedback(decision),
+        )
 
 
 def test_feedback_rejects_path_outside_route(tmp_path: Path) -> None:

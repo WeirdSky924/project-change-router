@@ -327,6 +327,13 @@
   "reasoning": [
     "high-risk request requires manual review"
   ],
+  "authorization_context": {
+    "source_commit": null,
+    "structure_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "routing_truth_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "freshness_classification": "unknown"
+  },
+  "route_fingerprint": "6b1f9b5bb56a80b23025b3699aedfa3d931a1743aaf52c913fa78bad2db25dce",
   "source_of_truths": {
     "capability_catalog": {
       "generated_by": "bootstrap_router",

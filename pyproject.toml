@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "project-change-router-skill"
 version = "0.3.0"
-description = "A repository change-routing skill for Codex and Claude Code."
+description = "A repository change-routing skill for Codex, Claude Code, and DeepSeek Harness."
 readme = "README.en.md"
 requires-python = ">=3.10"
 dependencies = [

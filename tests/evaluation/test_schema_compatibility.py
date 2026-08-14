@@ -17,6 +17,9 @@ from router_support.evaluation_policy import (  # noqa: E402
     EVALUATION_ENGINE_VERSION,
     policy_for_bundle,
 )
+from router_support.route_authorization import (  # noqa: E402
+    route_authorization_fingerprint,
+)
 
 
 def _schema(name: str) -> dict:
@@ -74,6 +77,16 @@ def test_current_output_examples_validate_against_current_report_schemas() -> No
             failures[output_name] = messages
 
     assert failures == {}
+
+
+def test_route_output_examples_have_self_consistent_authorization_fingerprints() -> None:
+    for path in sorted(
+        (SKILL_ROOT / "examples" / "outputs").glob("resolve-entry*.json")
+    ):
+        report = json.loads(path.read_text(encoding="utf-8"))
+        assert report["route_fingerprint"] == route_authorization_fingerprint(
+            report
+        ), path.name
 
 
 def test_ownership_schema_rejects_non_string_identities() -> None:

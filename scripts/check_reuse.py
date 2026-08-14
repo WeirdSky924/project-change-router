@@ -201,6 +201,7 @@ def build_input_fingerprint(
     bundle: dict[str, Any],
     changed_paths: list[str],
     budget_overrides: dict[str, Any],
+    source_fingerprint_digest: str | None = None,
 ) -> str:
     identity_files = changed_path_candidate_files(
         repo_root,
@@ -215,13 +216,6 @@ def build_input_fingerprint(
         normalized = changed_path.replace("\\", "/")
         if not any(path == normalized or path.startswith(normalized.rstrip("/") + "/") for path in changed_identities):
             changed_identities[normalized] = "missing-or-ignored"
-    git_state = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
     head_state = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=str(repo_root),
@@ -262,7 +256,7 @@ def build_input_fingerprint(
                 head_state.stdout.strip() if head_state.returncode == 0 else None
             ),
             "full_scan_snapshot": full_scan_snapshot,
-            "worktree_state": git_state.stdout if git_state.returncode == 0 else None,
+            "source_fingerprint_digest": source_fingerprint_digest,
         }
     )
 
@@ -391,7 +385,13 @@ def main() -> int:
 
     report = build_canonical_report(
         run_id,
-        build_input_fingerprint(repo_root, bundle, args.changed_path, budget_overrides),
+        build_input_fingerprint(
+            repo_root,
+            bundle,
+            args.changed_path,
+            budget_overrides,
+            reuse_report["scan"].get("source_fingerprint_digest"),
+        ),
         reuse_report,
     )
     with ReuseRuntimeStore(runtime_root, policy.cache_mode) as store:

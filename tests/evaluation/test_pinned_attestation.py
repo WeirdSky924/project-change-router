@@ -17,7 +17,7 @@ from router_support.evaluation_policy import (
     make_evaluation_attestation,
     policy_for_bundle,
 )
-from tests.evaluation.test_evaluation_policy import _bundle, _metrics
+from .test_evaluation_policy import _bundle, _metrics
 import router_core
 
 
