@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["run_id", "timestamp", "case_count", "top1_action_accuracy", "top1_capability_accuracy", "review_precision", "review_recall", "false_positive_count", "false_negative_count", "capability_count", "covered_capability_count", "capability_coverage_ratio", "secondary_contract_accuracy", "strict_secondary_case_count", "uncovered_capabilities", "per_case_results", "evaluation_mode", "enforcement_mode", "status", "status_reasons"],
+  "required": ["run_id", "timestamp", "case_count", "top1_action_accuracy", "top1_capability_accuracy", "review_precision", "review_recall", "false_positive_count", "false_negative_count", "capability_count", "covered_capability_count", "capability_coverage_ratio", "secondary_contract_accuracy", "strict_secondary_case_count", "uncovered_capabilities", "per_case_results", "evaluation_mode", "enforcement_mode", "status", "status_reasons", "runtime_identity"],
   "properties": {
     "run_id": { "type": "string" },
     "timestamp": { "type": "string" },
@@ -22,7 +22,8 @@
     "evaluation_mode": { "type": "string" },
     "enforcement_mode": { "type": "string", "enum": ["normal", "review_only"] },
     "status": { "type": "string" },
-    "status_reasons": { "type": "array", "items": { "type": "string" } }
+    "status_reasons": { "type": "array", "items": { "type": "string" } },
+    "runtime_identity": { "$ref": "https://project-change-router.dev/schemas/runtime-identity.schema.json" }
   },
   "additionalProperties": true
 }

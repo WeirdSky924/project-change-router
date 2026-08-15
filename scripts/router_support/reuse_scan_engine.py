@@ -25,6 +25,11 @@ from router_support.reuse_scan import (
     changed_path_candidate_files,
     reuse_scan_budget_from_bundle,
 )
+from router_support.reuse_channels import (
+    comparison_channels,
+    plan_reuse_channels,
+    summarize_channel_coverage,
+)
 
 
 def _jaccard(left: set[str], right: set[str]) -> float:
@@ -132,9 +137,21 @@ def gather_reuse_report(
         changed_paths,
         ignore_patterns,
     )
+    channel_plan = plan_reuse_channels(
+        scope=scope,
+        capabilities=capabilities,
+        action=str(runtime_options.get("route_action", "review")),
+        lifecycle_intent=bool(runtime_options.get("lifecycle_intent", False)),
+    )
+    planned_capability_ids = {
+        capability_id
+        for channel in channel_plan.values()
+        if channel.get("required")
+        for capability_id in channel.get("capability_ids", [])
+    }
     scoped_capabilities = [
         capability_by_id[item]
-        for item in scope["capability_ids"]
+        for item in sorted(planned_capability_ids)
         if item in capability_by_id
     ]
     scope_elapsed = int((time.monotonic() - phase_started) * 1000)
@@ -179,6 +196,11 @@ def gather_reuse_report(
             for path in candidate_files[:20]
         ],
         "scope": scope,
+        "channels": channel_plan,
+        "channel_summary": {
+            "evidence_complete": False,
+            "duplicate_conclusion": "not_proven",
+        },
         "elapsed_ms_by_phase": {"candidate_and_scope": scope_elapsed},
         "budget": dataclasses.asdict(budget),
         "runtime": dataclasses.asdict(runtime_policy),
@@ -213,6 +235,7 @@ def gather_reuse_report(
     owner_file_cache: dict[str, list[Path]] = {}
     pair_prefilter_cache: dict[tuple[str, str], Optional[float]] = {}
     exact_score_cache: dict[tuple[str, str], float] = {}
+    processed_capability_ids: set[str] = set()
     duplicate_findings: dict[tuple[str, str], dict[str, Any]] = {}
     fingerprint_advisories: dict[tuple[str, str], dict[str, Any]] = {}
     last_checkpoint = started
@@ -241,13 +264,14 @@ def gather_reuse_report(
         ):
             return
         payload = {
-            "report_schema_version": 2,
+            "report_schema_version": 3,
             "report_class": "checkpoint",
             "run_id": run_id,
             "timestamp": runtime_iso_now(),
             "completion_status": "running" if not stop_reason else stop_reason,
             "scan": metrics,
             "findings": [*findings, *duplicate_findings.values()],
+            "runtime_identity": runtime_options.get("runtime_identity", {}),
         }
         store.write_checkpoint(run_id, payload)
         last_checkpoint = now
@@ -293,6 +317,50 @@ def gather_reuse_report(
     def pair_key(left: Path, right: Path) -> tuple[str, str]:
         return tuple(sorted((rel(left), rel(right))))
 
+    direct_capability_ids = set(scope.get("direct_capability_ids", []))
+
+    def candidate_capability_ids(candidate: Path) -> set[str]:
+        candidate_rel = rel(candidate)
+        ranked_matches: list[tuple[tuple[int, int], set[str]]] = []
+        for entry in bundle.get("path_to_capability_map", {}).get("path_index", []):
+            pattern = str(entry.get("path_pattern", "")).replace("\\", "/")
+            if not pattern or not fnmatch.fnmatchcase(candidate_rel, pattern):
+                continue
+            literal = "".join(char for char in pattern if char not in "*?[]")
+            rank = (len(literal), pattern.count("/"))
+            ranked_matches.append(
+                (
+                    rank,
+                    {
+                        str(value)
+                        for value in entry.get("capabilities", [])
+                        if value
+                    },
+                )
+            )
+        if ranked_matches:
+            best_rank = max(rank for rank, _ in ranked_matches)
+            matched = {
+                capability_id
+                for rank, capability_ids in ranked_matches
+                if rank == best_rank
+                for capability_id in capability_ids
+            }
+            if matched:
+                return matched
+        owner_matches: set[str] = set()
+        for capability in capabilities:
+            for owner in capability.owner_modules:
+                normalized_owner = str(owner).replace("\\", "/").strip("/")
+                if not normalized_owner:
+                    continue
+                if candidate_rel == normalized_owner or candidate_rel.startswith(
+                    f"{normalized_owner.rstrip('/')}/"
+                ):
+                    owner_matches.add(capability.id)
+                    break
+        return owner_matches or set(direct_capability_ids)
+
     def remember_size_limited(
         owner_file: Path,
         candidate: Path,
@@ -310,7 +378,10 @@ def gather_reuse_report(
             )
 
     def prefilter_pair(
-        owner_file: Path, candidate: Path, capability_id: str
+        owner_file: Path,
+        candidate: Path,
+        capability_id: str,
+        pair_channels: list[str],
     ) -> Optional[float]:
         key = pair_key(owner_file, candidate)
         if key in pair_prefilter_cache:
@@ -321,6 +392,10 @@ def gather_reuse_report(
             ):
                 fingerprint_advisories[key]["capabilities"].append(capability_id)
                 fingerprint_advisories[key]["capabilities"].sort()
+                fingerprint_advisories[key]["channels"] = sorted(
+                    set(fingerprint_advisories[key].get("channels", []))
+                    | set(pair_channels)
+                )
             return pair_prefilter_cache[key]
         if candidate == owner_file or candidate.suffix.lower() != owner_file.suffix.lower():
             metrics["comparisons_skipped_by_prefilter"] += 1
@@ -375,6 +450,7 @@ def gather_reuse_report(
                     "owner_path": rel(owner_file),
                     "capability": capability_id,
                     "capabilities": [capability_id],
+                    "channels": pair_channels,
                     "fingerprint_score": round(score, 4),
                     "message": (
                         "fingerprint similarity requires targeted source analysis; "
@@ -427,6 +503,12 @@ def gather_reuse_report(
     for capability in scoped_capabilities:
         if should_stop() or not candidate_files:
             break
+        capability_channels = sorted(
+            name
+            for name, channel in channel_plan.items()
+            if capability.id in channel.get("capability_ids", [])
+        )
+        processed_capability_ids.add(capability.id)
         if capability.id not in owner_file_cache:
             owner_files = capability_comparison_files(
                 environment,
@@ -457,6 +539,7 @@ def gather_reuse_report(
                     "severity": "P1",
                     "rule": "reuse-owner-surface-missing",
                     "capability": capability.id,
+                    "channels": capability_channels,
                     "message": "Scoped capability has no readable canonical owner files.",
                 }
             )
@@ -472,10 +555,20 @@ def gather_reuse_report(
             if should_stop():
                 break
             preliminary: list[tuple[float, Path]] = []
+            pair_channels = comparison_channels(
+                owner_capability_id=capability.id,
+                candidate_capability_ids=candidate_capability_ids(candidate),
+                channels=channel_plan,
+            )
             for owner_file in owner_files:
                 if should_stop():
                     break
-                rough_score = prefilter_pair(owner_file, candidate, capability.id)
+                rough_score = prefilter_pair(
+                    owner_file,
+                    candidate,
+                    capability.id,
+                    pair_channels,
+                )
                 if rough_score is not None:
                     preliminary.append((rough_score, owner_file))
                 write_checkpoint()
@@ -520,12 +613,16 @@ def gather_reuse_report(
                         "owner_path": rel(owner_file),
                         "capability": capability.id,
                         "capabilities": [capability.id],
+                        "channels": pair_channels,
                         "score": round(score, 4),
                         "message": f"duplicate implementation signal for {capability.id}",
                     }
                 elif capability.id not in existing["capabilities"]:
                     existing["capabilities"].append(capability.id)
                     existing["capabilities"].sort()
+                    existing["channels"] = sorted(
+                        set(existing.get("channels", [])) | set(pair_channels)
+                    )
                     if score >= 0.92:
                         existing["severity"] = "P1"
                     existing["score"] = max(existing["score"], round(score, 4))
@@ -613,9 +710,45 @@ def gather_reuse_report(
     else:
         completion_status = "complete"
         termination_reason = None
+    for name, channel in channel_plan.items():
+        if not channel.get("required"):
+            continue
+        planned_ids = set(channel.get("capability_ids", []))
+        scanned_ids = sorted(planned_ids & processed_capability_ids)
+        channel_findings = [
+            finding
+            for finding in findings
+            if name in finding.get("channels", [])
+        ]
+        channel_complete = (
+            completion_status == "complete"
+            and bool(planned_ids)
+            and planned_ids <= processed_capability_ids
+        )
+        channel.update(
+            {
+                "completion_status": (
+                    "complete" if channel_complete else completion_status
+                ),
+                "evidence_complete": channel_complete,
+                "planned_capability_count": len(planned_ids),
+                "scanned_capability_ids": scanned_ids,
+                "scanned_capability_count": len(scanned_ids),
+                "finding_count": len(channel_findings),
+                "coverage": (
+                    len(scanned_ids) / len(planned_ids) if planned_ids else 0.0
+                ),
+            }
+        )
+    channel_summary = summarize_channel_coverage(channel_plan)
     metrics["completion_status"] = completion_status
     metrics["termination_reason"] = termination_reason
-    metrics["evidence_complete"] = completion_status == "complete"
+    metrics["channels"] = channel_plan
+    metrics["channel_summary"] = channel_summary
+    metrics["evidence_complete"] = (
+        completion_status == "complete"
+        and channel_summary["evidence_complete"]
+    )
     metrics["status"] = "complete" if completion_status == "complete" else "warn"
 
     if completion_status != "complete" and not any(

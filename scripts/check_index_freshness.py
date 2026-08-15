@@ -7,6 +7,7 @@ from pathlib import Path
 
 from router_core import freshness_report, route_bundle_from_repo
 from router_support.freshness_checks import collect_git_changed_paths
+from router_support.runtime_identity import runtime_identity
 
 
 def main() -> int:
@@ -26,6 +27,7 @@ def main() -> int:
     merged_changes.update(args.changed_path or [])
     changed_paths = sorted(merged_changes)
     report = freshness_report(repo_root, bundle, changed_paths)
+    report["runtime_identity"] = runtime_identity()
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if args.format == "json":

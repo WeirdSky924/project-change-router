@@ -1,5 +1,5 @@
 {
-  "report_schema_version": 2,
+  "report_schema_version": 3,
   "report_class": "canonical",
   "report_id": "check-reuse",
   "run_id": "reuse-20260722-120000-a1b2c3d4",
@@ -39,14 +39,25 @@
       "scope": {
         "mode": "changed_paths",
         "status": "resolved",
-        "capability_ids": ["orders", "shared-validation"],
-        "direct_capability_ids": ["orders"],
-        "dependency_capability_ids": ["shared-validation"],
+        "capability_ids": [
+          "orders",
+          "shared-validation"
+        ],
+        "direct_capability_ids": [
+          "orders"
+        ],
+        "dependency_capability_ids": [
+          "shared-validation"
+        ],
         "unresolved_paths": [],
         "ignored_broad_mappings": [],
         "sources": {
-          "orders": ["path_map:app/services/orders/**"],
-          "shared-validation": ["module_dependency_neighbor"]
+          "orders": [
+            "path_map:app/services/orders/**"
+          ],
+          "shared-validation": [
+            "module_dependency_neighbor"
+          ]
         }
       },
       "elapsed_ms_by_phase": {
@@ -54,7 +65,39 @@
         "fingerprint_and_compare": 91
       },
       "elapsed_ms": 105,
-      "fingerprint_version": 1
+      "fingerprint_version": 1,
+      "channels": {
+        "intra_capability": {
+          "required": true,
+          "capability_ids": [
+            "example-capability"
+          ],
+          "completion_status": "complete",
+          "evidence_complete": true,
+          "finding_count": 0
+        },
+        "cross_capability": {
+          "required": false,
+          "capability_ids": [],
+          "completion_status": "not_required",
+          "evidence_complete": true,
+          "finding_count": 0
+        },
+        "extended": {
+          "required": false,
+          "capability_ids": [],
+          "completion_status": "not_required",
+          "evidence_complete": true,
+          "finding_count": 0
+        }
+      },
+      "channel_summary": {
+        "evidence_complete": true,
+        "finding_count": 0,
+        "duplicate_conclusion": "none_found",
+        "required_channel_count": 1,
+        "complete_channel_count": 1
+      }
     },
     "retention_cleanup": {
       "fingerprints": 0,
@@ -68,5 +111,27 @@
     "deduplicated": false,
     "occurrence_count": 1
   },
-  "findings": []
+  "findings": [],
+  "runtime_identity": {
+    "skill_version": "0.4.0",
+    "skill_git_commit": null,
+    "installed_payload_digest": "a6d415b7b61b426b3b9b76d4f280e43303fecb02836c98f13800ea54c0ca5f73",
+    "installed_payload_source": "example_fixture",
+    "bundle_schema_compatibility": [
+      1
+    ],
+    "report_schema_version": 3,
+    "reuse_engine_api_version": 2,
+    "architecture_governance_api_version": 2,
+    "typed_finding_schema_version": 1,
+    "gate_policy_version": 1,
+    "change_flow_api_version": 1,
+    "authorization_api_version": 1,
+    "parser_versions": {
+      "python": 1,
+      "typescript": 1,
+      "java": 1
+    },
+    "identity_digest": "f6c40637285745c88209d816e03973c1164f23e4479da36fa044dd5aa05e127c"
+  }
 }

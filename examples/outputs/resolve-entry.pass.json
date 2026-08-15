@@ -143,9 +143,10 @@
     "source_commit": null,
     "structure_digest": "0000000000000000000000000000000000000000000000000000000000000000",
     "routing_truth_digest": "0000000000000000000000000000000000000000000000000000000000000000",
-    "freshness_classification": "baseline_unchanged"
+    "freshness_classification": "baseline_unchanged",
+    "runtime_identity_digest": "f6c40637285745c88209d816e03973c1164f23e4479da36fa044dd5aa05e127c"
   },
-  "route_fingerprint": "9c02b21a024e631d08d727b31fec1a3d3c150bc9f292d9872d0dcfc0876ff072",
+  "route_fingerprint": "5a2c4bcdde8cdc1ee6d24bb51eb34b23e25256bc82b6041ca5e117b56e731a11",
   "source_of_truths": {
     "capability_catalog": {
       "generated_by": "bootstrap_router",
@@ -162,5 +163,72 @@
       "generated_at": "2026-06-11T12:32:56Z",
       "source_commit": "f4b7c90b77828d5cad306acf7ec8d84962926744"
     }
-  }
+  },
+  "runtime_identity": {
+    "skill_version": "0.4.0",
+    "skill_git_commit": null,
+    "installed_payload_digest": "a6d415b7b61b426b3b9b76d4f280e43303fecb02836c98f13800ea54c0ca5f73",
+    "installed_payload_source": "example_fixture",
+    "bundle_schema_compatibility": [
+      1
+    ],
+    "report_schema_version": 3,
+    "reuse_engine_api_version": 2,
+    "architecture_governance_api_version": 2,
+    "typed_finding_schema_version": 1,
+    "gate_policy_version": 1,
+    "change_flow_api_version": 1,
+    "authorization_api_version": 1,
+    "parser_versions": {
+      "python": 1,
+      "typescript": 1,
+      "java": 1
+    },
+    "identity_digest": "f6c40637285745c88209d816e03973c1164f23e4479da36fa044dd5aa05e127c"
+  },
+  "typed_findings": [],
+  "execution_gate": {
+    "state": "pass",
+    "blocking": false,
+    "conditional": false,
+    "authoritative": true,
+    "gate_policy_version": 1,
+    "policy_rule_ids": [
+      "GATE-PASS-001"
+    ],
+    "decisive_finding_ids": [],
+    "unknown_evidence": [],
+    "proposed_allowed_write_paths": [
+      "<new-isolated-capability-boundary-after-confirmation>"
+    ],
+    "proposed_forbidden_write_paths": [],
+    "allowed_write_paths": [
+      "<new-isolated-capability-boundary-after-confirmation>"
+    ],
+    "forbidden_write_paths": [],
+    "required_commands": [
+      "python scripts/check_reuse.py --repo <repo-root> --format json",
+      "python scripts/check_deps.py --repo <repo-root> --format json",
+      "python scripts/check_public_api.py --repo <repo-root> --format json",
+      "python scripts/check_index_freshness.py --repo <repo-root> --format json"
+    ],
+    "reason": "relevant evidence is complete and no blocking finding remains"
+  },
+  "gate_shadow": {
+    "legacy_state": "pass",
+    "new_state": "pass",
+    "classification": "equivalent",
+    "cutover_eligible": true,
+    "new_decisive_finding_ids": [],
+    "legacy_action": "new",
+    "legacy_block_reason": {
+      "code": "not_blocked",
+      "severity": "none",
+      "summary": "Route does not require manual review."
+    }
+  },
+  "must_read_targets": [],
+  "inventory_targets": [],
+  "unresolved_read_targets": [],
+  "authorization_request": {}
 }

@@ -26,6 +26,12 @@ ROUTE_AUTHORIZATION_FIELDS = (
     "must_read_before_edit",
     "source_of_truths",
     "authorization_context",
+    "typed_findings",
+    "execution_gate",
+    "must_read_targets",
+    "inventory_targets",
+    "unresolved_read_targets",
+    "runtime_identity",
 )
 
 

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-change-router.dev/schemas/precise-read-targets.schema.json",
+  "$defs": {
+    "mustReadTarget": {
+      "type": "object",
+      "required": [
+        "path",
+        "symbol",
+        "content_digest",
+        "line_hint",
+        "reason",
+        "resolution_status"
+      ],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "symbol": { "type": ["string", "null"] },
+        "content_digest": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "line_hint": { "type": ["integer", "null"], "minimum": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "resolution_status": { "enum": ["resolved", "unresolved"] },
+        "candidate_symbols": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "resolution_status": { "const": "resolved" } },
+            "required": ["resolution_status"]
+          },
+          "then": {
+            "properties": {
+              "symbol": { "type": "string", "minLength": 1 },
+              "content_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "line_hint": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "inventoryTarget": {
+      "type": "object",
+      "required": ["path", "reason"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "unresolvedReadTarget": {
+      "type": "object",
+      "required": ["path", "command", "reason"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "candidate_symbols": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

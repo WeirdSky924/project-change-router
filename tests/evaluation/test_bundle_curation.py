@@ -199,9 +199,9 @@ def test_atomic_skill_upgrade_does_not_modify_existing_repository_bundle(tmp_pat
     assert bundle_file.read_bytes() == before
     assert not (old_install / "old-file.txt").exists()
     manifest = json.loads((old_install / ".installation-manifest.json").read_text(encoding="utf-8"))
-    assert manifest["skill_version"] == "0.3.0"
+    assert manifest["skill_version"] == "0.4.0"
     assert manifest["reuse_engine_api_version"] == 2
-    assert manifest["architecture_governance_api_version"] == 1
+    assert manifest["architecture_governance_api_version"] == 2
 
 
 def test_path_map_preserves_profile_ownership_rules_without_discovered_modules(tmp_path: Path) -> None:

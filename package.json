@@ -1,6 +1,6 @@
 {
   "name": "project-change-router-skill",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Project-level direction, boundary, and reuse governance for AI coding agents.",
   "type": "module",
   "main": "./integrations/deepseek-harness/index.js",

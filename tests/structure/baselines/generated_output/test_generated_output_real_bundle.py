@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 import yaml
-from jsonschema import Draft202012Validator
 
 import router_core
 
@@ -24,6 +23,7 @@ from router_support.generated_output_baseline import (
     canonical_yaml_text,
     verify_generated_output_baseline,
 )
+from router_support.schema_validation import validator_for_schema
 
 
 COMMIT_BEARING_KEYS = {
@@ -275,12 +275,10 @@ def test_tracked_pin_survives_rebuild_commit_and_joint_guardrails(
     rebuild_report = router_core.rebuild_index(repo, write_back=True)
 
     assert rebuild_report["status"] == "pass"
-    schema = json.loads(
-        (SKILL_ROOT / "schemas/index-rebuild-report.schema.json").read_text(
-            encoding="utf-8"
-        )
+    validator = validator_for_schema(
+        SKILL_ROOT / "schemas/index-rebuild-report.schema.json"
     )
-    assert list(Draft202012Validator(schema).iter_errors(rebuild_report)) == []
+    assert list(validator.iter_errors(rebuild_report)) == []
     assert set(rebuild_report["preserved_generated_output_keys"]) == set(
         PCR_BUNDLE_ARTIFACTS
     )

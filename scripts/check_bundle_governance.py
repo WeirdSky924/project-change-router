@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from router_core import audit_bundle_governance, route_bundle_from_repo
+from router_support.runtime_identity import runtime_identity
 
 
 def main() -> int:
@@ -23,6 +24,7 @@ def main() -> int:
     repo_root = Path(args.repo).resolve()
     bundle = route_bundle_from_repo(repo_root)
     report = audit_bundle_governance(repo_root, bundle)
+    report["runtime_identity"] = runtime_identity()
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if args.format == "json":

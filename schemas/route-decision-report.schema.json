@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-change-router.dev/schemas/route-decision-report.schema.json",
   "type": "object",
-  "required": ["decision_id", "timestamp", "request_type", "request_summary", "changed_paths", "repo_stage", "action", "decision_basis", "routing_confidence", "routing_confidence_level", "decision_confidence", "decision_confidence_level", "confidence", "confidence_level", "overlap_score", "primary_capability", "primary_capability_stage", "secondary_capabilities", "candidate_capabilities", "candidate_modules", "required_reads", "required_checks", "forbidden_paths", "review_required", "coordination_required", "composite_route_required", "recommended_next_action", "recommended_next_steps", "why_not_actions", "block_reason", "missing_evidence", "analysis_directions", "safe_next_steps", "suggested_questions", "profile_repair_hints", "override_requirements", "allowed_write_paths", "forbidden_write_paths", "must_read_before_edit", "post_change_closeout", "composite_route", "capability_lifecycle_action", "evaluation_regression_hints", "confidence_reasons", "veto_reasons", "positive_signals", "negative_signals", "risk_signals", "reasoning", "authorization_context", "route_fingerprint", "source_of_truths"],
+  "required": ["decision_id", "timestamp", "request_type", "request_summary", "changed_paths", "repo_stage", "action", "decision_basis", "routing_confidence", "routing_confidence_level", "decision_confidence", "decision_confidence_level", "confidence", "confidence_level", "overlap_score", "primary_capability", "primary_capability_stage", "secondary_capabilities", "candidate_capabilities", "candidate_modules", "required_reads", "required_checks", "forbidden_paths", "review_required", "coordination_required", "composite_route_required", "recommended_next_action", "recommended_next_steps", "why_not_actions", "block_reason", "missing_evidence", "analysis_directions", "safe_next_steps", "suggested_questions", "profile_repair_hints", "override_requirements", "allowed_write_paths", "forbidden_write_paths", "must_read_before_edit", "post_change_closeout", "composite_route", "capability_lifecycle_action", "evaluation_regression_hints", "confidence_reasons", "veto_reasons", "positive_signals", "negative_signals", "risk_signals", "reasoning", "authorization_context", "route_fingerprint", "runtime_identity", "typed_findings", "execution_gate", "gate_shadow", "must_read_targets", "inventory_targets", "unresolved_read_targets", "authorization_request", "source_of_truths"],
   "properties": {
     "decision_id": { "type": "string" },
     "timestamp": { "type": "string" },
@@ -54,16 +55,37 @@
     "reasoning": { "type": "array", "items": { "type": "string" } },
     "authorization_context": {
       "type": "object",
-      "required": ["source_commit", "structure_digest", "routing_truth_digest", "freshness_classification"],
+      "required": ["source_commit", "structure_digest", "routing_truth_digest", "freshness_classification", "runtime_identity_digest"],
       "properties": {
         "source_commit": { "type": ["string", "null"] },
         "structure_digest": { "type": ["string", "null"] },
         "routing_truth_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "freshness_classification": { "type": ["string", "null"] }
+        "freshness_classification": { "type": ["string", "null"] },
+        "runtime_identity_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       },
       "additionalProperties": false
     },
     "route_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "runtime_identity": { "$ref": "https://project-change-router.dev/schemas/runtime-identity.schema.json" },
+    "typed_findings": {
+      "type": "array",
+      "items": { "$ref": "https://project-change-router.dev/schemas/typed-finding.schema.json" }
+    },
+    "execution_gate": { "$ref": "https://project-change-router.dev/schemas/execution-gate.schema.json" },
+    "gate_shadow": { "type": "object" },
+    "must_read_targets": {
+      "type": "array",
+      "items": { "$ref": "https://project-change-router.dev/schemas/precise-read-targets.schema.json#/$defs/mustReadTarget" }
+    },
+    "inventory_targets": {
+      "type": "array",
+      "items": { "$ref": "https://project-change-router.dev/schemas/precise-read-targets.schema.json#/$defs/inventoryTarget" }
+    },
+    "unresolved_read_targets": {
+      "type": "array",
+      "items": { "$ref": "https://project-change-router.dev/schemas/precise-read-targets.schema.json#/$defs/unresolvedReadTarget" }
+    },
+    "authorization_request": { "type": "object" },
     "source_of_truths": { "type": "object" }
   },
   "additionalProperties": true

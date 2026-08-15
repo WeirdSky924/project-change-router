@@ -374,7 +374,8 @@ def test_untrusted_secondary_capability_owner_blocks_route_writes(
 
     assert decision.primary_capability == "record-contracts"
     assert decision.secondary_capabilities == ["audit-hooks"]
-    assert decision.action == "review"
+    assert decision.action == "extend"
+    assert decision.execution_gate["state"] == "blocked"
     assert decision.allowed_write_paths == []
     assert "**" in decision.forbidden_write_paths
     assert any("audit-hooks" in reason for reason in decision.veto_reasons)

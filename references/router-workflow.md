@@ -12,20 +12,14 @@ Use this workflow whenever the user asks to:
 
 1. Identify the repository root.
 2. If `project-change-router/router-config.yaml` does not exist, bootstrap the bundle with `scripts/bootstrap_router.py` only when the user wants durable repository-local routing metadata.
-3. Use `scripts/resolve_entry.py` with the request text and known changed paths.
-4. Read the routed capability entries before editing.
-5. Validate and aggregate the applicable evidence in this order:
-   - `scripts/validate_router_bundle.py`
-   - `scripts/check_bundle_governance.py`
-   - `scripts/check_index_freshness.py`
-   - `scripts/check_deps.py`
-   - `scripts/check_public_api.py`
-   - `scripts/check_structure.py`
-   - `scripts/run_evaluation.py`
-   - `scripts/check_reuse.py`
-6. If route confidence is low or multiple stable capabilities overlap, return `review`.
-7. If evaluation thresholds or the attestation are not satisfied, keep PCR in `review_only` even when capability routing appears correct.
-8. After changes, update the bundle only if the change created a capability or changed an owner, public boundary, lifecycle, or indexed structure.
+3. Prefer `scripts/run_change_flow.py` with the request text and known changed paths. It preserves legacy command behavior while providing the compact agent-facing orchestration path.
+4. Read `execution_gate` and the non-projectable safety envelope before interpreting advisory `action`.
+5. The flow resolves the route and aggregates `check_bundle_governance`, `check_index_freshness`, `check_deps`, `check_public_api`, `check_structure`, and `check_reuse`. It consumes the bundle's current evaluation policy/attestation as route evidence; run `validate_router_bundle.py` and `run_evaluation.py` separately when route metadata or evaluation truth changes.
+6. Normalize all gate-affecting evidence into schema-valid typed findings and deterministically reduce `execution_gate=pass|conditional|blocked` through one policy table.
+7. Read exact `must_read_targets`; inventory directory targets without blind full reads; execute unresolved structured queries before editing.
+8. If blocked, do not write product code. If conditional, run all required commands and stay inside the bounded envelope. If pass, still preserve the envelope.
+9. Use `action` only to guide reuse/extend/extract/new/review engineering analysis. It cannot override the gate.
+10. After changes, execute `post_change_closeout` and update the bundle only if the change created a capability or changed an owner, public boundary, lifecycle, or indexed structure.
 
 For `check_reuse.py`, `result_status` and `completion_status` answer different questions. A non-failing result does not close the duplicate check when `completion_status` is `bounded`, `incomplete`, `timeout`, `cancelled`, or `error`. Read `summary.scan.scope` and continue targeted source analysis; never expand an unresolved changed path into an implicit repository-wide scan.
 
@@ -35,10 +29,11 @@ PCR is not an automatic architecture decision engine. It separates mandatory gua
 
 Mandatory guardrails:
 
+- `execution_gate`, typed findings, and policy traces
 - `allowed_write_paths`, `forbidden_write_paths`, and `must_read_before_edit`
 - canonical roots, owners, public entries, and dependency direction
 - duplicate implementation warnings
-- `veto_reasons`, lifecycle review requirements, low routing confidence, provisional boundaries, and high-risk overlaps
+- `veto_reasons`, unknown evidence, lifecycle findings, provisional boundaries, and high-risk overlaps
 
 Advisory guidance:
 
@@ -50,7 +45,7 @@ Advisory guidance:
 - `why_not_actions`
 - `profile_repair_hints`
 
-Use advisory fields to decide what to inspect next and how to unblock the route. Final implementation choices still require source-code analysis, tests, and user-confirmed scope.
+Use advisory fields to decide what to inspect next and how to unblock the route. `action=review` may coexist with any gate state and is never a second decision engine. Final implementation choices still require source-code analysis, tests, and user-confirmed scope.
 
 ## Route Outputs
 
@@ -58,6 +53,7 @@ The resolver emits one integrated route report. Governance fields are not an opt
 
 The report includes:
 
+- authoritative execution gate, matched policy rules, decisive finding IDs, and unknown evidence
 - route action
 - confidence
 - primary capability
@@ -72,22 +68,24 @@ The report includes:
 - lifecycle action requirements for delete, merge, deprecate, or migrate requests
 - composite route participants for cross-stack changes
 - evaluation regression hints for human-confirmed routing outcomes
+- symbol/digest-bound must-read targets, directory inventory targets, and unresolved query commands
+- runtime identity, baseline delta, incremental cache summary, authorization request, and content-addressed artifact reference
 
 The detailed contract for these integrated outputs is in `references/governance-outputs.md`.
 
 ## Review Handling
 
-When `action=review`, the agent must not start product-code implementation automatically. It may follow `safe_next_steps`, inspect the referenced bundle files, repair routing metadata after confirmation, and ask the suggested questions that are relevant to the task.
+When `action=review`, use `safe_next_steps`, inspect the referenced bundle/code evidence, repair routing metadata after confirmation, and ask only relevant questions. Do not infer write authority from review or any other action.
 
 The skill gives direction, not final architecture decisions. Use `analysis_directions` to decide what to inspect next, then make the engineering call from real code, profile data, tests, and user confirmation.
 
-To continue after a stop, the user override should be scoped by current task, phase, or changed paths and should record the reason. Do not reuse a Phase 0 override for later phases.
+To continue after an authoritative block where policy permits an override, persist an authorization request scoped to the current task, phase, changed paths, owner, route, pre-change snapshot, and mutation envelope. Record explicit user confirmation as a grant; do not reuse a Phase 0 grant for later phases or revive consumed authority.
 
-Evaluation review-only is a separate calibration stop. Missing, stale, or below-threshold attestation permits read-only analysis and profile repair, but it does not grant unattended product writes merely because top-1 capability selection looks plausible.
+Evaluation `review_only` is calibration evidence, not an action rewrite. Missing, stale, or below-threshold attestation becomes a typed finding that the authoritative gate evaluates; a plausible top-1 capability selection cannot override a blocked gate.
 
 ## Write Constraints
 
-Before editing, read `must_read_before_edit`. Writes are allowed only under `allowed_write_paths` and must avoid `forbidden_write_paths`. For `review`, `allowed_write_paths` is empty and `forbidden_write_paths` includes `**`.
+Before editing, read the exact path/symbol/content digest in `must_read_targets`. Directories are inventory-only; unresolved targets require the supplied structured query. Writes are allowed only under the authoritative `allowed_write_paths` and must avoid `forbidden_write_paths`. A blocked gate forces an empty allowed set and `**` forbidden; `action=review` alone does not.
 
 ## Closeout
 

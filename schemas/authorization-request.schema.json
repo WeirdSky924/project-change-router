@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-change-router.dev/schemas/authorization-request.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "request_id",
+    "state",
+    "created_at",
+    "context",
+    "context_digest"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "request_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "state": { "const": "requested" },
+    "created_at": { "type": "string" },
+    "context": { "$ref": "#/$defs/context" },
+    "context_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "$defs": {
+    "context": {
+      "type": "object",
+      "required": [
+        "route_fingerprint",
+        "pre_change_snapshot",
+        "task_id",
+        "paths",
+        "owner",
+        "canonical_root",
+        "route",
+        "mutation_envelope"
+      ],
+      "properties": {
+        "route_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "pre_change_snapshot": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "task_id": { "type": "string" },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "owner": { "type": "string" },
+        "canonical_root": { "type": "string" },
+        "route": { "type": "string" },
+        "mutation_envelope": {
+          "type": "object",
+          "required": ["allowed_write_paths", "forbidden_write_paths"],
+          "properties": {
+            "allowed_write_paths": { "type": "array", "items": { "type": "string" } },
+            "forbidden_write_paths": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

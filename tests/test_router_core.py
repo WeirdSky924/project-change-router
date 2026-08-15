@@ -358,11 +358,12 @@ def test_seed_repo_new_feature_requires_owner_review(tmp_path: Path) -> None:
         repo / "project-change-router",
         enforce_evaluation_policy=False,
     )
-    assert decision.action == "review"
+    assert decision.action == "new"
     assert decision.routing_confidence_level == "low"
     assert decision.decision_confidence_level == "high"
     assert decision.decision_basis == "policy_guardrail"
     assert decision.block_reason["code"] == "unclear_owner"
+    assert decision.execution_gate["state"] == "blocked"
 
 
 def test_emerging_repo_limits_provisional_capabilities(tmp_path: Path) -> None:

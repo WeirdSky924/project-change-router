@@ -26,6 +26,7 @@ INSTALL_IGNORED_NAMES = (
     ".pytest_cache",
     "node_modules",
     "project-change-router",
+    "reports",
     INSTALL_MANIFEST,
 )
 INSTALL_IGNORE = shutil.ignore_patterns(*INSTALL_IGNORED_NAMES)
@@ -71,16 +72,37 @@ def install_payload_files(skill_root: Path) -> list[Path]:
 
 def install_manifest(skill_root: Path) -> dict[str, object]:
     hashes: dict[str, str] = {}
-    required = ("SKILL.md", "skill-version.json", "scripts/router_core.py")
+    required = (
+        "SKILL.md",
+        "skill-version.json",
+        "scripts/router_core.py",
+        "scripts/run_change_flow.py",
+        "scripts/manage_authorization.py",
+        "schemas/typed-finding.schema.json",
+        "schemas/execution-gate.schema.json",
+        "schemas/change-flow-report.schema.json",
+        "schemas/runtime-identity.schema.json",
+        "schemas/precise-read-targets.schema.json",
+        "scripts/router_support/schema_validation.py",
+    )
     for relative in required:
         if not (skill_root / relative).is_file():
             raise FileNotFoundError(f"required install file missing: {skill_root / relative}")
     for path in install_payload_files(skill_root):
         relative = path.relative_to(skill_root).as_posix()
         hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    payload_digest = hashlib.sha256(
+        json.dumps(
+            hashes,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     return {
         **source_version(skill_root),
-        "manifest_schema_version": 2,
+        "manifest_schema_version": 3,
+        "installed_payload_digest": payload_digest,
         "files": hashes,
     }
 
@@ -93,7 +115,7 @@ def verify_skill_install(skill_root: Path) -> dict[str, object]:
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest_schema = manifest.get("manifest_schema_version")
-    if type(manifest_schema) is not int or manifest_schema != 2:
+    if type(manifest_schema) is not int or manifest_schema != 3:
         raise RuntimeError(
             f"installed skill manifest schema {manifest_schema!r} cannot prove "
             "complete payload integrity; reinstall required"
@@ -118,12 +140,30 @@ def verify_skill_install(skill_root: Path) -> dict[str, object]:
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual != expected:
             raise RuntimeError(f"installed skill hash mismatch for {relative}")
+    expected_payload_digest = hashlib.sha256(
+        json.dumps(
+            expected_hashes,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if manifest.get("installed_payload_digest") != expected_payload_digest:
+        raise RuntimeError("installed skill payload digest does not match manifest files")
     for script in (path for path in actual_files.values() if path.suffix == ".py"):
         compile(script.read_text(encoding="utf-8"), str(script), "exec")
     if manifest.get("reuse_engine_api_version") != 2:
         raise RuntimeError("installed skill reuse-engine API must remain version 2")
-    if manifest.get("architecture_governance_api_version") != 1:
-        raise RuntimeError("installed skill architecture-governance API must be version 1")
+    if manifest.get("architecture_governance_api_version") != 2:
+        raise RuntimeError("installed skill architecture-governance API must be version 2")
+    if manifest.get("typed_finding_schema_version") != 1:
+        raise RuntimeError("installed skill typed-finding schema must be version 1")
+    if manifest.get("gate_policy_version") != 1:
+        raise RuntimeError("installed skill gate policy must be version 1")
+    if manifest.get("change_flow_api_version") != 1:
+        raise RuntimeError("installed skill change-flow API must be version 1")
+    if manifest.get("authorization_api_version") != 1:
+        raise RuntimeError("installed skill authorization API must be version 1")
     probe = """
 import sys
 from pathlib import Path
@@ -136,11 +176,17 @@ import check_structure
 import router_core
 import reuse_runtime
 import run_evaluation
+import run_change_flow
+import manage_authorization
 from router_support import evaluation_policy
 from router_support import import_graph
 from router_support import profile_loader
 from router_support import repository_surfaces
 from router_support import route_authorization
+from router_support import typed_findings
+from router_support import execution_gate
+from router_support import runtime_identity
+from router_support import schema_validation
 from router_support import structure_guardrails
 assert callable(router_core.gather_reuse_report)
 assert callable(router_core.gather_reuse_findings)
@@ -156,11 +202,17 @@ assert callable(evaluation_policy.policy_for_bundle)
 assert callable(profile_loader.load_active_profile)
 assert callable(repository_surfaces.discover_standard_repository_surfaces)
 assert callable(route_authorization.authorization_audit_fields)
+assert callable(typed_findings.validate_typed_finding)
+assert callable(execution_gate.reduce_execution_gate)
+assert callable(runtime_identity.runtime_identity)
+assert callable(schema_validation.validator_for_schema)
 assert callable(check_deps.main)
 assert callable(check_public_api.main)
 assert callable(check_structure.main)
 assert callable(check_index_freshness.main)
 assert callable(run_evaluation.main)
+assert callable(run_change_flow.main)
+assert callable(manage_authorization.main)
 """
     result = subprocess.run(
         [sys.executable, "-B", "-c", probe, str(skill_root)],
@@ -335,13 +387,13 @@ When a request involves feature-level create, modify, delete, migration, reuse, 
 
 `/{SKILL_NAME}`
 
-Use it as a direction index and guardrail system, not as an automatic architecture decision engine.
+Use it as a direction index and guardrail system, not as an automatic architecture decision engine. Prefer `run_change_flow.py` for the integrated route and checks.
 
-Mandatory: respect capability ownership, canonical roots, `must_read_before_edit`, `allowed_write_paths`, `forbidden_write_paths`, veto signals, lifecycle review requirements, and duplicate-implementation warnings before writing product code.
+Mandatory: read authoritative `execution_gate` before advisory `action`. For `blocked`, do not write product code. For `conditional`, run every required command and stay inside the bounded envelope. For `pass`, still obey capability ownership, canonical roots, precise read targets, allowed/forbidden paths, vetoes, lifecycle findings, unknown evidence, and duplicate-risk findings.
 
-Advisory: treat `action`, `recommended_next_steps`, `analysis_directions`, `safe_next_steps`, and `why_not_actions` as structured unblock guidance. They inform source-code analysis and user-confirmed engineering decisions; they do not replace them.
+Advisory: treat every `action`, including `review`, plus recommended steps and analysis directions as source-analysis guidance rather than write authority.
 
-For `check_reuse`, inspect both `result_status` and `completion_status`. `bounded`, `incomplete`, `timeout`, `cancelled`, or `error` means the scan did not prove that duplicate implementations are absent; use its scoped candidates for targeted analysis.
+For reuse, inspect the independent intra-capability, cross-capability, and extended channels. Bounded, incomplete, timed-out, cancelled, or errored evidence proves no absence. Authorization requests do not create authority; require a task-bound user-confirmed grant and never revive consumed authority.
 """
 
 
@@ -353,13 +405,13 @@ When a request involves feature-level create, modify, delete, migration, reuse, 
 
 `$project-change-router`
 
-Use it as a direction index and guardrail system, not as an automatic architecture decision engine.
+Use it as a direction index and guardrail system, not as an automatic architecture decision engine. Prefer `run_change_flow.py` for the integrated route and checks.
 
-Mandatory: respect capability ownership, canonical roots, `must_read_before_edit`, `allowed_write_paths`, `forbidden_write_paths`, veto signals, lifecycle review requirements, and duplicate-implementation warnings before writing product code.
+Mandatory: read authoritative `execution_gate` before advisory `action`. For `blocked`, do not write product code. For `conditional`, run every required command and stay inside the bounded envelope. For `pass`, still obey capability ownership, canonical roots, precise read targets, allowed/forbidden paths, vetoes, lifecycle findings, unknown evidence, and duplicate-risk findings.
 
-Advisory: treat `action`, `recommended_next_steps`, `analysis_directions`, `safe_next_steps`, and `why_not_actions` as structured unblock guidance. They inform source-code analysis and user-confirmed engineering decisions; they do not replace them.
+Advisory: treat every `action`, including `review`, plus recommended steps and analysis directions as source-analysis guidance rather than write authority.
 
-For `check_reuse`, inspect both `result_status` and `completion_status`. `bounded`, `incomplete`, `timeout`, `cancelled`, or `error` means the scan did not prove that duplicate implementations are absent; use its scoped candidates for targeted analysis.
+For reuse, inspect the independent intra-capability, cross-capability, and extended channels. Bounded, incomplete, timed-out, cancelled, or errored evidence proves no absence. Authorization requests do not create authority; require a task-bound user-confirmed grant and never revive consumed authority.
 """
 
 

@@ -15,6 +15,7 @@ from router_core import (
 )
 from router_support.generated_output_baseline import validate_generated_output_rules
 from router_support.profile_loader import load_active_profile
+from router_support.runtime_identity import runtime_identity
 
 
 def main() -> int:
@@ -59,6 +60,7 @@ def main() -> int:
             "severity_counts": governance.get("severity_counts", {}),
             "finding_count": len(governance.get("findings", [])),
         },
+        "runtime_identity": runtime_identity(),
     }
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

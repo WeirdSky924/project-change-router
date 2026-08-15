@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-change-router.dev/schemas/change-flow-report.schema.json",
+  "type": "object",
+  "required": [
+    "change_flow_api_version",
+    "action",
+    "primary_capability",
+    "secondary_capabilities",
+    "execution_gate",
+    "gate_shadow",
+    "veto_reasons",
+    "allowed_write_paths",
+    "forbidden_write_paths",
+    "unknown_evidence",
+    "output_complete",
+    "required_commands",
+    "recommended_next_action",
+    "must_read_targets",
+    "inventory_targets",
+    "unresolved_read_targets",
+    "authorization_request",
+    "delta_summary",
+    "cache_summary",
+    "incremental_summary",
+    "baseline",
+    "runtime_identity",
+    "route_report",
+    "checks",
+    "typed_findings",
+    "evidence_input",
+    "artifact_path",
+    "artifact_digest"
+  ],
+  "properties": {
+    "change_flow_api_version": { "type": "integer", "const": 1 },
+    "action": { "enum": ["reuse", "extend", "extract", "new", "review"] },
+    "primary_capability": { "type": ["string", "null"] },
+    "secondary_capabilities": { "type": "array", "items": { "type": "string" } },
+    "execution_gate": { "$ref": "https://project-change-router.dev/schemas/execution-gate.schema.json" },
+    "gate_shadow": { "type": "object" },
+    "veto_reasons": { "type": "array", "items": { "type": "string" } },
+    "allowed_write_paths": { "type": "array", "items": { "type": "string" } },
+    "forbidden_write_paths": { "type": "array", "items": { "type": "string" } },
+    "unknown_evidence": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    },
+    "output_complete": { "type": "boolean" },
+    "required_commands": { "type": "array", "items": { "type": "string" } },
+    "recommended_next_action": { "type": "string" },
+    "must_read_targets": {
+      "type": "array",
+      "items": { "$ref": "https://project-change-router.dev/schemas/precise-read-targets.schema.json#/$defs/mustReadTarget" }
+    },
+    "inventory_targets": {
+      "type": "array",
+      "items": { "$ref": "https://project-change-router.dev/schemas/precise-read-targets.schema.json#/$defs/inventoryTarget" }
+    },
+    "unresolved_read_targets": {
+      "type": "array",
+      "items": { "$ref": "https://project-change-router.dev/schemas/precise-read-targets.schema.json#/$defs/unresolvedReadTarget" }
+    },
+    "authorization_request": { "type": "object" },
+    "delta_summary": { "type": "object" },
+    "cache_summary": { "type": "object" },
+    "incremental_summary": { "type": "object" },
+    "baseline": { "type": "object" },
+    "runtime_identity": { "$ref": "https://project-change-router.dev/schemas/runtime-identity.schema.json" },
+    "route_report": { "$ref": "https://project-change-router.dev/schemas/route-decision-report.schema.json" },
+    "checks": { "type": "object" },
+    "typed_findings": {
+      "type": "array",
+      "items": { "$ref": "https://project-change-router.dev/schemas/typed-finding.schema.json" }
+    },
+    "evidence_input": { "type": "object" },
+    "artifact_path": { "type": "string", "minLength": 1 },
+    "artifact_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "additionalProperties": true
+}

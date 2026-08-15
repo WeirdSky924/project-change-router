@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "source": "anonymized-large-fullstack-repository",
+  "cases": [
+    {
+      "id": "INT-04-unrelated-stale-debt",
+      "legacy_state": "blocked",
+      "allowed_write_paths": ["frontend/src/navigation/**"],
+      "required_commands": ["python scripts/check_index_freshness.py --repo <repo> --format json"],
+      "finding": {
+        "type": "historical_freshness_debt",
+        "severity": "P2",
+        "invariant_class": "closure_global",
+        "origin": "freshness",
+        "delta_state": "baseline_unchanged",
+        "task_relevance": "unrelated",
+        "evidence_status": "complete",
+        "policy_rule_id": "GATE-HISTORY-001",
+        "paths": ["legacy/runtime.py"],
+        "capabilities": ["legacy-runtime"]
+      },
+      "expected_gate": "conditional",
+      "expected_shadow": "precision_improvement"
+    },
+    {
+      "id": "duplicate-owner",
+      "legacy_state": "blocked",
+      "finding": {
+        "type": "duplicate_owner",
+        "severity": "P0",
+        "invariant_class": "always_global",
+        "origin": "ownership",
+        "delta_state": "task_local_new",
+        "task_relevance": "relevant",
+        "evidence_status": "complete",
+        "policy_rule_id": "GATE-OWNER-CONFLICT-001",
+        "paths": ["app/services/workflow"],
+        "capabilities": ["workflow-runtime"]
+      },
+      "expected_gate": "blocked",
+      "expected_shadow": "equivalent"
+    },
+    {
+      "id": "unindexed-path",
+      "legacy_state": "blocked",
+      "finding": {
+        "type": "unindexed_path",
+        "severity": "P0",
+        "invariant_class": "task_local",
+        "origin": "freshness",
+        "delta_state": "unknown",
+        "task_relevance": "unknown",
+        "evidence_status": "incomplete",
+        "policy_rule_id": "GATE-PATH-001",
+        "paths": ["frontend/src/new-surface.ts"],
+        "capabilities": []
+      },
+      "expected_gate": "blocked",
+      "expected_shadow": "equivalent"
+    },
+    {
+      "id": "new-public-export",
+      "legacy_state": "blocked",
+      "finding": {
+        "type": "public_export_conflict",
+        "severity": "P1",
+        "invariant_class": "always_global",
+        "origin": "public_api",
+        "delta_state": "task_local_new",
+        "task_relevance": "relevant",
+        "evidence_status": "complete",
+        "policy_rule_id": "CHECK-PUBLIC-API-NEW-EXPORT",
+        "paths": ["app/api/public.py"],
+        "capabilities": ["api-facade"]
+      },
+      "expected_gate": "blocked",
+      "expected_shadow": "equivalent"
+    },
+    {
+      "id": "relevant-dynamic-import-unknown",
+      "legacy_state": "blocked",
+      "finding": {
+        "type": "dynamic_import_unknown",
+        "severity": "P0",
+        "invariant_class": "closure_global",
+        "origin": "dependency",
+        "delta_state": "unknown",
+        "task_relevance": "relevant",
+        "evidence_status": "incomplete",
+        "policy_rule_id": "CHECK-DEPENDENCY-DYNAMIC-IMPORT",
+        "paths": ["app/services/workflow/loader.py"],
+        "capabilities": ["workflow-runtime"]
+      },
+      "expected_gate": "blocked",
+      "expected_shadow": "equivalent"
+    },
+    {
+      "id": "cross-capability-duplicate",
+      "legacy_state": "blocked",
+      "finding": {
+        "type": "cross_capability_duplicate",
+        "severity": "P1",
+        "invariant_class": "task_local",
+        "origin": "reuse",
+        "delta_state": "task_local_new",
+        "task_relevance": "relevant",
+        "evidence_status": "complete",
+        "policy_rule_id": "CHECK-REUSE-CROSS-CAPABILITY-DUPLICATE",
+        "paths": ["app/services/a/adapter.py", "app/services/b/adapter.py"],
+        "capabilities": ["service-a", "service-b"]
+      },
+      "expected_gate": "blocked",
+      "expected_shadow": "equivalent"
+    },
+    {
+      "id": "schema-v1-insufficient-evidence",
+      "legacy_state": "blocked",
+      "finding": {
+        "type": "freshness_unknown",
+        "severity": "P0",
+        "invariant_class": "closure_global",
+        "origin": "freshness",
+        "delta_state": "unknown",
+        "task_relevance": "unknown",
+        "evidence_status": "unavailable",
+        "policy_rule_id": "GATE-LEGACY-EVIDENCE-001",
+        "paths": ["app/legacy.py"],
+        "capabilities": []
+      },
+      "expected_gate": "blocked",
+      "expected_shadow": "equivalent"
+    }
+  ]
+}

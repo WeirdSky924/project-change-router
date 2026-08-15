@@ -195,8 +195,10 @@ def test_resolve_blocks_stale_commit_and_digest_despite_fresh_marker(
         repo / "project-change-router",
     )
 
-    assert decision.action == "review"
+    assert decision.action == "extend"
     assert decision.review_required is True
+    assert decision.execution_gate["state"] == "blocked"
+    assert decision.gate_shadow["legacy_state"] == "blocked"
     assert decision.block_reason["code"] == "stale_bundle"
     assert decision.allowed_write_paths == []
     assert "**" in decision.forbidden_write_paths
@@ -219,9 +221,10 @@ def test_resolve_blocks_when_persisted_freshness_snapshot_is_missing(
         repo / "project-change-router",
     )
 
-    assert decision.action == "review"
+    assert decision.action == "extend"
     assert decision.block_reason["code"] == "stale_bundle"
     assert decision.allowed_write_paths == []
+    assert decision.execution_gate["state"] == "blocked"
     assert bundle["_runtime"]["freshness"]["status"] == "fail"
 
 
@@ -241,9 +244,10 @@ def test_resolve_explicit_route_paths_cannot_hide_other_git_changes(
     )
 
     freshness = bundle["_runtime"]["freshness"]
-    assert decision.action == "review"
+    assert decision.action == "extend"
     assert "outside/unmapped.py" in freshness["changed_paths"]
     assert freshness["unmapped_changed_paths"] == ["outside/unmapped.py"]
+    assert decision.execution_gate["state"] == "blocked"
 
 
 def test_resolve_allows_proven_unrelated_freshness_debt(
@@ -349,6 +353,8 @@ def test_resolve_allows_proven_unrelated_freshness_debt(
     assert decision.action == "extend", decision.to_dict()
     assert decision.review_required is False
     assert "**" not in decision.forbidden_write_paths
+    assert decision.execution_gate["state"] == "conditional"
+    assert decision.gate_shadow["classification"] == "more_restrictive"
 
 
 def test_route_freshness_blocks_reverse_dependency_closure_delta() -> None:

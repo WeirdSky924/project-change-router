@@ -19,6 +19,7 @@ IGNORED_PAYLOAD_NAMES = {
     ".pytest_cache",
     "node_modules",
     "project-change-router",
+    "reports",
     INSTALL_MANIFEST,
 }
 
@@ -73,14 +74,18 @@ def _payload_files(root: Path) -> set[str]:
     }
 
 
-def test_v030_release_metadata_preserves_reuse_api_and_versions_architecture_api() -> None:
+def test_v040_release_metadata_preserves_reuse_api_and_versions_governance_apis() -> None:
     version = json.loads((SKILL_ROOT / "skill-version.json").read_text(encoding="utf-8"))
     project = tomllib.loads((SKILL_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert version["skill_version"] == "0.3.0"
-    assert project["project"]["version"] == "0.3.0"
+    assert version["skill_version"] == "0.4.0"
+    assert project["project"]["version"] == "0.4.0"
     assert version["reuse_engine_api_version"] == 2
-    assert version["architecture_governance_api_version"] == 1
+    assert version["architecture_governance_api_version"] == 2
+    assert version["typed_finding_schema_version"] == 1
+    assert version["gate_policy_version"] == 1
+    assert version["change_flow_api_version"] == 1
+    assert version["authorization_api_version"] == 1
 
 
 def test_atomic_install_manifest_hashes_the_complete_payload(tmp_path: Path) -> None:
@@ -90,12 +95,16 @@ def test_atomic_install_manifest_hashes_the_complete_payload(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
     installed = codex_home / "skills" / "project-change-router"
     manifest = json.loads((installed / INSTALL_MANIFEST).read_text(encoding="utf-8"))
-    assert manifest["manifest_schema_version"] == 2
-    assert manifest["architecture_governance_api_version"] == 1
+    assert manifest["manifest_schema_version"] == 3
+    assert manifest["architecture_governance_api_version"] == 2
+    assert len(manifest["installed_payload_digest"]) == 64
     assert set(manifest["files"]) == _payload_files(installed)
     assert "scripts/router_support/import_graph.py" in manifest["files"]
     assert "scripts/router_support/repository_surfaces.py" in manifest["files"]
     assert "scripts/router_support/structure_guardrails.py" in manifest["files"]
+    assert "scripts/run_change_flow.py" in manifest["files"]
+    assert "scripts/manage_authorization.py" in manifest["files"]
+    assert "schemas/typed-finding.schema.json" in manifest["files"]
     assert "schemas/router-config.schema.json" in manifest["files"]
 
 
@@ -176,7 +185,7 @@ def test_verify_only_rejects_legacy_schema_manifest_as_reinstall_required(
     assert "reinstall required" in verify.stderr
 
 
-def test_verify_only_rejects_v030_manifest_downgrade_and_subset_bypass(
+def test_verify_only_rejects_v040_manifest_downgrade_and_subset_bypass(
     tmp_path: Path,
 ) -> None:
     codex_home = tmp_path / "codex-home"
@@ -185,8 +194,8 @@ def test_verify_only_rejects_v030_manifest_downgrade_and_subset_bypass(
     installed = codex_home / "skills" / "project-change-router"
     manifest_path = installed / INSTALL_MANIFEST
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["skill_version"] == "0.3.0"
-    assert manifest["architecture_governance_api_version"] == 1
+    assert manifest["skill_version"] == "0.4.0"
+    assert manifest["architecture_governance_api_version"] == 2
     manifest["manifest_schema_version"] = 1
     manifest["files"] = {"SKILL.md": manifest["files"]["SKILL.md"]}
     manifest_path.write_text(
@@ -534,6 +543,20 @@ def test_atomic_install_supports_all_agent_homes(tmp_path: Path) -> None:
         installed = home / "skills" / "project-change-router"
         assert (installed / "SKILL.md").exists()
         assert (installed / INSTALL_MANIFEST).exists()
+        manifest = json.loads(
+            (installed / INSTALL_MANIFEST).read_text(encoding="utf-8")
+        )
+        assert manifest["skill_version"] == "0.4.0"
+        assert manifest["manifest_schema_version"] == 3
+        assert manifest["change_flow_api_version"] == 1
+        for script in ("run_change_flow.py", "manage_authorization.py"):
+            probe = subprocess.run(
+                [sys.executable, str(installed / "scripts" / script), "--help"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert probe.returncode == 0, probe.stderr
     assert "project-change-router-codex-hint:begin" in (
         codex_home / "AGENTS.md"
     ).read_text(encoding="utf-8")
@@ -549,7 +572,7 @@ def test_deepseek_harness_provider_loads_root_skill() -> None:
             encoding="utf-8"
         )
     )
-    assert package["version"] == "0.3.0"
+    assert package["version"] == "0.4.0"
     assert package["main"] == "./integrations/deepseek-harness/index.js"
     assert package["engines"]["node"] == "^22.19.0 || >=24.0.0"
     assert package["dsh"]["bundle"]["patch"] == (
@@ -606,6 +629,48 @@ assert.equal(definition.resourceBase.kind, 'directory')
         check=False,
     )
 
+    assert result.returncode == 0, result.stderr
+
+
+def test_installed_dsh_provider_loads_v040_flow_skill(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    dsh_home = tmp_path / "dsh-home"
+    install = _run_installer(
+        SKILL_ROOT,
+        codex_home,
+        target="deepseek",
+        dsh_home=dsh_home,
+    )
+    installed = dsh_home / "skills" / "project-change-router"
+    probe = r"""
+import assert from 'node:assert/strict'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const plugin = await import(pathToFileURL(process.argv[1]).href)
+let provider
+plugin.apply({ skills: { registerProvider(create) { provider = create() } } })
+const candidates = await provider.list({})
+const definition = await provider.get(candidates[0], {})
+assert.match(definition.content, /run_change_flow\.py/)
+assert.match(definition.content, /execution_gate/)
+assert.equal(path.resolve(definition.resourceBase.path), path.resolve(process.argv[2]))
+"""
+    result = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "--eval",
+            probe,
+            str(installed / "integrations" / "deepseek-harness" / "index.js"),
+            str(installed),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert install.returncode == 0, install.stderr
     assert result.returncode == 0, result.stderr
 
 

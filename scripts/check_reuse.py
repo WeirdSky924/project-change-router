@@ -25,6 +25,7 @@ from reuse_runtime import (
     semantic_report_value,
 )
 from router_support.freshness_checks import build_structure_snapshot
+from router_support.runtime_identity import runtime_identity
 from router_core import (
     changed_path_candidate_files,
     default_ignore_patterns,
@@ -116,7 +117,7 @@ def run_isolated_scan(
         store.write_checkpoint(
             run_id,
             {
-                "report_schema_version": 2,
+                "report_schema_version": 3,
                 "report_class": "checkpoint",
                 "run_id": run_id,
                 "timestamp": iso_now(),
@@ -128,6 +129,7 @@ def run_isolated_scan(
                     "changed_path_count": len(changed_paths),
                 },
                 "findings": [],
+                "runtime_identity": runtime_options.get("runtime_identity", {}),
             },
         )
 
@@ -202,6 +204,8 @@ def build_input_fingerprint(
     changed_paths: list[str],
     budget_overrides: dict[str, Any],
     source_fingerprint_digest: str | None = None,
+    route_action: str = "review",
+    lifecycle_intent: bool = False,
 ) -> str:
     identity_files = changed_path_candidate_files(
         repo_root,
@@ -257,6 +261,8 @@ def build_input_fingerprint(
             ),
             "full_scan_snapshot": full_scan_snapshot,
             "source_fingerprint_digest": source_fingerprint_digest,
+            "route_action": route_action,
+            "lifecycle_intent": lifecycle_intent,
         }
     )
 
@@ -272,7 +278,7 @@ def build_canonical_report(
     completion_status = str(scan.get("completion_status", "complete"))
     result_status = "fail" if blocking else "pass" if completion_status == "complete" else "warn"
     return {
-        "report_schema_version": 2,
+        "report_schema_version": 3,
         "report_class": "canonical",
         "report_id": "check-reuse",
         "run_id": run_id,
@@ -308,6 +314,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--diagnostics", choices=["auto", "always", "never"], help="Diagnostic report persistence mode.")
     parser.add_argument("--persist-reports", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--strict-completeness", action="store_true", help="Return exit code 2 for bounded or unresolved scans.")
+    parser.add_argument(
+        "--action",
+        choices=["reuse", "extend", "extract", "new", "review"],
+        default="review",
+        help="Advisory route action used to select required reuse coverage channels.",
+    )
+    parser.add_argument(
+        "--lifecycle-intent",
+        action="store_true",
+        help="Require the extended cross-capability lifecycle scan channel.",
+    )
     parser.add_argument("--cleanup-only", action="store_true", help="Apply configured cache/report retention and exit.")
     parser.add_argument("--format", choices=["json", "text"], default="text")
     parser.add_argument("--output", help="Optional canonical report output path.")
@@ -336,7 +353,7 @@ def main() -> int:
         with ReuseRuntimeStore(runtime_root, policy.cache_mode) as store:
             removed = store.cleanup(repo_root, retention)
         report = {
-            "report_schema_version": 2,
+            "report_schema_version": 3,
             "report_class": "canonical",
             "report_id": "check-reuse-cleanup",
             "run_id": f"cleanup-{uuid.uuid4().hex[:12]}",
@@ -348,6 +365,7 @@ def main() -> int:
             "evidence_complete": True,
             "summary": {"removed": removed, "runtime_root": str(runtime_root)},
             "findings": [],
+            "runtime_identity": runtime_identity(),
         }
         print(json.dumps(report, indent=2, ensure_ascii=False) if args.format == "json" else f"status=pass removed={removed}")
         return 0
@@ -367,10 +385,14 @@ def main() -> int:
     }
     budget_overrides = {key: value for key, value in budget_overrides.items() if value is not None}
     run_id = f"reuse-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    current_runtime_identity = runtime_identity()
     runtime_options = {
         **dataclasses.asdict(policy),
         "runtime_root": str(runtime_root),
         "run_id": run_id,
+        "route_action": args.action,
+        "lifecycle_intent": args.lifecycle_intent,
+        "runtime_identity": current_runtime_identity,
     }
     reuse_report, interrupted = run_isolated_scan(
         repo_root,
@@ -391,9 +413,13 @@ def main() -> int:
             args.changed_path,
             budget_overrides,
             reuse_report["scan"].get("source_fingerprint_digest"),
+            args.action,
+            args.lifecycle_intent,
         ),
         reuse_report,
     )
+    report["report_schema_version"] = 3
+    report["runtime_identity"] = current_runtime_identity
     with ReuseRuntimeStore(runtime_root, policy.cache_mode) as store:
         diagnostic_needed = policy.diagnostics_mode == "always" or (
             policy.diagnostics_mode == "auto"
@@ -404,13 +430,14 @@ def main() -> int:
         )
         if diagnostic_needed:
             diagnostic = {
-                "report_schema_version": 2,
+                "report_schema_version": 3,
                 "report_class": "diagnostic",
                 "run_id": run_id,
                 "timestamp": iso_now(),
                 "result_status": report["result_status"],
                 "completion_status": report["completion_status"],
                 "scan": report["summary"]["scan"],
+                "runtime_identity": report["runtime_identity"],
             }
             artifact = store.persist_report("diagnostic", diagnostic)
             report["artifacts"]["diagnostic"] = str(artifact.path)

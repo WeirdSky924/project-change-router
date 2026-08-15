@@ -1,7 +1,16 @@
 {
-  "skill_version": "0.3.0",
+  "skill_version": "0.4.0",
   "reuse_engine_api_version": 2,
-  "architecture_governance_api_version": 1,
+  "architecture_governance_api_version": 2,
   "bundle_schema_compatibility": [1],
-  "report_schema_version": 2
+  "report_schema_version": 3,
+  "typed_finding_schema_version": 1,
+  "gate_policy_version": 1,
+  "change_flow_api_version": 1,
+  "authorization_api_version": 1,
+  "parser_versions": {
+    "python": 1,
+    "typescript": 1,
+    "java": 1
+  }
 }

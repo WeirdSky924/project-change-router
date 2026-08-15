@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["report_id", "timestamp", "status", "severity_counts", "summary", "findings", "repair_suggestions"],
+  "required": ["report_id", "timestamp", "status", "severity_counts", "summary", "findings", "repair_suggestions", "runtime_identity"],
   "properties": {
     "report_id": { "type": "string" },
     "timestamp": { "type": "string" },
@@ -46,7 +46,8 @@
         },
         "additionalProperties": true
       }
-    }
+    },
+    "runtime_identity": { "$ref": "https://project-change-router.dev/schemas/runtime-identity.schema.json" }
   },
   "additionalProperties": true
 }

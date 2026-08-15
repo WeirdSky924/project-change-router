@@ -18,20 +18,26 @@ Use this skill to turn a large repository into a governed change-routing system.
 
 PCR is a direction index and guardrail system, not an automatic architecture decision engine. Its boundary, risk, and read/write constraints are mandatory for the agent to respect. Its `action`, `recommended_next_steps`, `analysis_directions`, and `why_not_actions` are structured guidance for the agent's own source-code analysis and user-confirmed engineering decision.
 
+The authoritative write decision is `execution_gate`, reduced from schema-valid typed findings as `pass`, `conditional`, or `blocked`. `action` remains independent advisory direction and is never rewritten merely to imitate a gate state.
+
 ## Two-Layer Contract
 
 Mandatory guardrail layer:
 
+- Read `execution_gate` before interpreting `action`. It is the authoritative write decision.
+- For `execution_gate.state=blocked`, do not write product code. Resolve the decisive typed findings or obtain a valid, task-bound authorization grant where policy allows one.
+- For `execution_gate.state=conditional`, run every `required_command` and stay inside the returned write envelope. Conditional means only proven unrelated or non-expanding historical debt remains; it is not a general bypass.
+- For `execution_gate.state=pass`, continue only inside the returned write envelope after reading the precise targets.
 - Respect `allowed_write_paths`, `forbidden_write_paths`, and `must_read_before_edit`.
 - Do not bypass confirmed owners, public entries, canonical roots, or dependency direction.
 - Do not create a second implementation center when a reusable capability may already exist.
-- Treat `veto_reasons`, lifecycle review, low routing confidence, provisional boundaries, and high-risk overlaps as stop-or-confirm signals before product writes.
+- Never ignore `veto_reasons`, unknown evidence, lifecycle findings, low routing confidence, provisional boundaries, or high-risk overlaps. Trace them to the decisive typed findings and gate policy rules.
 
 Advisory direction layer:
 
 - Treat `action` as the router's current processing tendency, not a final engineering command.
 - Use `recommended_next_steps`, `safe_next_steps`, `analysis_directions`, `profile_repair_hints`, and `why_not_actions` as unblock directions and investigation prompts.
-- When `action=review`, do not treat it as permanent refusal. It means evidence is insufficient for automatic writes; continue with read-only analysis, profile repair, or scoped user confirmation.
+- `action=review` is an investigation direction, not a write decision. It may coexist with `pass`, `conditional`, or `blocked`; follow `execution_gate` and use review guidance to gather evidence.
 - Final implementation choices still require real code reading, dependency tracing, tests, and user-confirmed scope.
 
 ## Workflow
@@ -39,16 +45,16 @@ Advisory direction layer:
 1. Detect whether the request is a feature addition, feature modification, refactor, migration, or bug fix.
 2. Find the repository root and look for an existing `project-change-router/` bundle.
 3. If the bundle is missing and the user explicitly wants durable routing metadata, bootstrap one from the current repository structure.
-4. Resolve the route report with the repository-local catalog and module map.
-5. Treat guardrail fields as mandatory constraints and action/review guidance as structured advice.
-6. Read the required capability entries and public code entry points before editing.
-7. Apply the change only in the routed layer.
-8. Run the required guardrails and capability-bound tests. For route freshness, preserve the global report and use its generated `route_assessment`: `task_local_new` and `unknown` remain blocking, while only a proven `baseline_unchanged` delta outside the forward/reverse capability closure may proceed.
-9. Run `check_structure.py` for central-file growth, file-size bands, forbidden implementation roots, exclusive canonical owners, and exact pinned generated-output verification when the profile declares those baselines. For a new pin, require the user-approved exact fingerprint through `--initialize-generated-output-baseline` on structure verification and the first write-enabled rebuild; never treat profile text as authorization. While a current or committed pin remains active, malformed, or only worktree-removed, use the verified rebuild path and never bootstrap over its seven protected refs.
-10. For `check_reuse`, inspect `result_status`, `completion_status`, `evidence_complete`, and the resolved capability scope together. Do not interpret bounded, incomplete, timed-out, cancelled, or errored evidence as proof that duplicate implementations are absent.
-11. If evaluation thresholds or attestation are not satisfied, keep PCR in `review_only`; do not convert a correct capability match into unattended write authority.
-12. If the route is `review`, stop automatic product-code editing and report `block_reason`, `missing_evidence`, `analysis_directions`, `safe_next_steps`, and scoped `override_requirements`. Any structured override feedback must return the original `route_fingerprint`; never recompute it after changing the route report or mutation envelope.
-13. Apply writes only inside `allowed_write_paths`, never inside `forbidden_write_paths`, and read `must_read_before_edit` first.
+4. Prefer `scripts/run_change_flow.py` to resolve the route and run freshness, dependency, public API, structure, governance, and reuse checks as one compact flow. Use the legacy commands separately only for focused diagnostics or compatibility.
+5. Read `execution_gate`, the fixed safety envelope, decisive typed findings, and ordered `required_commands` before interpreting advisory `action` guidance.
+6. Read each resolved `must_read_target` and its symbol/content digest. Inventory directories without reading them wholesale; run each structured query for unresolved targets.
+7. If the gate is `blocked`, stop product writes and resolve the reported unknown or blocking evidence. If it is `conditional`, execute all pre-change commands and preserve the bounded envelope. If it is `pass`, continue inside the envelope.
+8. Apply the change only in the routed layer. `action` helps choose reuse, extension, extraction, or a new boundary but never grants write authority.
+9. Preserve the global report and its route-relevant delta: `task_local_new`, `task_local_expanded`, and `unknown` remain blocking under their policy rules; only trusted `baseline_unchanged` debt proven outside the forward/reverse closure may yield `conditional`.
+10. Run `check_structure.py` for central-file growth, file-size bands, forbidden implementation roots, exclusive canonical owners, and exact pinned generated-output verification when the profile declares those baselines. For a new pin, require the user-approved exact fingerprint through `--initialize-generated-output-baseline` on structure verification and the first write-enabled rebuild; never treat profile text as authorization. While a current or committed pin remains active, malformed, or only worktree-removed, use the verified rebuild path and never bootstrap over its seven protected refs.
+11. For reuse, inspect the independent `intra_capability`, `cross_capability`, and `extended` channels. A bounded, incomplete, timed-out, cancelled, or errored channel cannot prove that duplicates are absent.
+12. Promote a baseline only from a clean, complete candidate bound to the current commit/profile/bundle/structure/index/tool/policy identity, using an exact accepted fingerprint or trusted CI authority. Never promote a dirty or incomplete first scan.
+13. If policy permits an override, create an authorization request and require an externally confirmed grant. Grants are task/path/owner/route/mutation-bound, expire, are single-use by default, and never revive after consumption.
 14. If the change reveals stale indexes, ownership gaps, or missing capability coverage, run the governance audit before deciding whether to rebuild.
 15. Rebuild the bundle only when routing references are stale or the user explicitly asks to refresh repository-local routing data.
 16. After a routed change, follow `post_change_closeout` and record feedback or evaluation regressions when review, override, delete, merge, or capability correction happened.
@@ -56,7 +62,9 @@ Advisory direction layer:
 
 ## Execution Modes
 
-- Read-only mode: use `scripts/resolve_entry.py`, `scripts/check_reuse.py`, `scripts/check_deps.py`, `scripts/check_public_api.py`, `scripts/check_structure.py`, `scripts/check_index_freshness.py`, `scripts/check_bundle_governance.py`, and `scripts/run_evaluation.py`
+- Unified read-only flow: use `scripts/run_change_flow.py`; it runs route plus governed checks, persists the full content-addressed artifact, and returns compact safety output by default
+- Focused read-only mode: use `scripts/resolve_entry.py`, `scripts/check_reuse.py`, `scripts/check_deps.py`, `scripts/check_public_api.py`, `scripts/check_structure.py`, `scripts/check_index_freshness.py`, `scripts/check_bundle_governance.py`, and `scripts/run_evaluation.py`
+- Authorization mode: use `scripts/manage_authorization.py` to persist a request, record external confirmation as a bounded grant, consume it, or inspect its audit chain
 - Write mode: use `scripts/bootstrap_router.py` or `scripts/rebuild_index.py` only when the user explicitly asks to create or refresh repository-local routing data
 
 Do not silently create or rebuild `project-change-router/` during an unrelated code-edit request.
@@ -67,11 +75,11 @@ Do not silently create or rebuild `project-change-router/` during an unrelated c
 - `extend`: add behavior through a shared capability entry or compatible internal change
 - `extract`: move repeated logic into a shared capability first
 - `new`: introduce a new capability because no acceptable shared fit exists
-- `review`: stop automatic routing because the request is ambiguous, high-risk, or multi-capability
+- `review`: prioritize evidence gathering, profile repair, coordination, or user confirmation because the request is ambiguous, high-risk, or multi-capability
 
 Route actions are advisory direction labels. They help the agent decide what to inspect next and what risks to manage, but they do not replace engineering judgment from the actual repository.
 
-`review` is not an implementation decision and not a permanent block. It is a request for more evidence before automatic writes. The skill should provide analysis directions and safe read-only next steps, while leaving the deeper engineering decision to the agent and user.
+`review` is not an implementation decision, write denial, or permanent block. It is a request to investigate before choosing the engineering approach. Only `execution_gate` decides whether writes are currently `pass`, `conditional`, or `blocked`.
 
 The governance outputs are not a separate add-on. They are first-class fields of the same route report and must be interpreted together with `action`, `primary_capability`, and confidence. Mandatory guardrails take precedence over advisory actions.
 
@@ -109,6 +117,7 @@ These overrides can define capability mappings, path-level ownership rules, expl
 - `references/governance-outputs.md`
 - `references/architecture-governance.md`
 - `references/reuse-scan-runtime.md`
+- `references/typed-findings-gate-todo.md`
 - `examples/agent-workflows/README.md`
 
 ## Resources
@@ -123,6 +132,8 @@ These overrides can define capability mappings, path-level ownership rules, expl
 - `scripts/check_index_freshness.py`
 - `scripts/check_bundle_governance.py`
 - `scripts/run_evaluation.py`
+- `scripts/run_change_flow.py`
+- `scripts/manage_authorization.py`
 - `scripts/sync_feedback.py`
 - `scripts/validate_router_bundle.py`
 
@@ -147,5 +158,6 @@ These overrides can define capability mappings, path-level ownership rules, expl
 - DeepSeek Harness is currently a developer preview. Revalidate the filesystem and provider contracts when upgrading Harness across preview releases.
 - It does not depend on a specific repository.
 - The repository-local router bundle is generated on demand and is not the skill itself.
-- Version 0.3 exposes architecture governance API v1 while preserving reuse engine API v2.
-- Updating the installed skill does not bootstrap, rebuild, or overwrite an existing repository-local bundle. Bundle schema v1 remains readable; missing 0.3 fields use runtime defaults without being written back. Runtime fingerprints and managed scan reports live outside the repository by default.
+- Version 0.4 exposes architecture governance API v2, typed-finding/gate/change-flow/authorization API v1, and preserves reuse engine API v2.
+- Every current report carries runtime identity: skill version, Git commit when available, installed payload digest/source, compatible bundle schemas, report/API/policy versions, parser versions, and an identity digest.
+- Updating the installed skill does not bootstrap, rebuild, or overwrite an existing repository-local bundle. Bundle schema v1 remains readable; missing 0.4 precision becomes `unknown` and blocks when required instead of being fabricated or written back. Runtime fingerprints, baselines, authorization manifests, and managed artifacts live outside the repository by default.

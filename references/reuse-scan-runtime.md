@@ -15,6 +15,18 @@
 
 If a changed path cannot be resolved, references a capability absent from the catalog, has import-parser diagnostics, or resolves to no readable canonical owner files, the scan returns `completion_status=incomplete`. A full scan with no governed capabilities is also incomplete. It never falls back to unrelated capability owners or treats an empty comparison surface as proof of uniqueness.
 
+## Independent Coverage Channels
+
+PCR 0.4 records three channels instead of collapsing every comparison into one completeness bit:
+
+- `intra_capability`: owner/candidate pairs inside the direct routed capability.
+- `cross_capability`: direct, dependency, shared-surface, and canonical-owner pairs across related capabilities.
+- `extended`: additional capabilities required for `new`, `extract`, and lifecycle requests.
+
+Channel membership derives from the actual owner/candidate pair. Each channel has its own capability set, scope digest, planned and executed coverage, budget, skipped reasons, completion state, finding count, and evidence digest. A channel may be `not_required`, but every required channel must be complete before the aggregate can say `none_found`. Any bounded, incomplete, timed-out, cancelled, or errored required channel produces `duplicate_conclusion=not_proven` even when completed comparisons found no duplicate.
+
+Cross-capability coverage is not optional for shared/canonical paths. `new`, `extract`, and lifecycle requests activate the extended channel so a local capability scan cannot accidentally approve a parallel implementation center.
+
 Budget values are validated fail-closed. Integer limits must be non-negative, ratio values must be finite, `max_length_ratio` cannot be stricter than `8.0`, and token/path prefilter thresholds cannot exceed the generated safe defaults. Invalid or skip-all configuration produces `reuse-scan-configuration-invalid` with incomplete evidence rather than silently reducing comparisons.
 
 ## Reuse Engine API v2
@@ -39,6 +51,8 @@ The cache uses Python's standard-library `sqlite3` and `hashlib`. It stores deri
 - fingerprint algorithm version
 
 It does not persist normalized source text. Exact similarity reads full text only for Top-K pairs selected by the fingerprints.
+
+This fingerprint database is distinct from the flow's incremental global evidence cache. The fingerprint cache accelerates source-pair selection. The incremental cache binds global check inputs, stable graph nodes/edges, the route capability closure, unresolved edges, and reused/recomputed/invalidated counts to runtime and policy identity. Neither cache can promote its own contents into a trusted baseline.
 
 Each completed scan also emits `source_fingerprint_digest` and `source_fingerprint_file_count` for the owner and candidate files that actually participated. Changed-path canonical identity combines that digest with the target content, `HEAD`, routing truth, scope, and budget. It does not include unrelated worktree status. Full scans retain the complete structure snapshot.
 
@@ -167,7 +181,7 @@ Consumers should use JSON fields rather than exit code alone.
 
 ## Existing Bundle Compatibility
 
-The runtime reads bundle schema v1. Missing `reuse_scan_scope`, `reuse_scan_runtime`, and `reuse_scan_retention` sections receive code defaults without modifying the bundle.
+The runtime reads bundle schema v1. Missing `reuse_scan_scope`, `reuse_scan_runtime`, and `reuse_scan_retention` sections receive code defaults without modifying the bundle. Missing channel or relevance precision never becomes optimistic evidence: the corresponding coverage stays bounded/unknown and the authoritative gate blocks when that evidence is required.
 
 Installing a newer skill:
 

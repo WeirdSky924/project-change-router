@@ -4,6 +4,6 @@ interface:
   icon_small: "./assets/router-icon.svg"
   icon_large: "./assets/router-icon.svg"
   brand_color: "#0F766E"
-  default_prompt: "Use $project-change-router before code edits to get capability direction, canonical-root and owner signals, mandatory read/write boundaries, duplicate-implementation risks, and advisory action guidance. Respect guardrails; use actions and unblock suggestions as input to source-code analysis, not as final architecture decisions."
+  default_prompt: "Use $project-change-router before code edits. Run the unified change flow, follow the authoritative execution_gate and fixed safety envelope, read precise path/symbol targets, and inspect all required reuse channels. Treat action, including review, as advisory direction for source analysis rather than write authority."
 policy:
   allow_implicit_invocation: true

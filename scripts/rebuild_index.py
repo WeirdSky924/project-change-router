@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from router_core import rebuild_index
+from router_support.runtime_identity import runtime_identity
 
 
 def main() -> int:
@@ -30,6 +31,7 @@ def main() -> int:
             args.initialize_generated_output_baseline
         ),
     )
+    report["runtime_identity"] = runtime_identity()
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if args.format == "json":

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-change-router.dev/schemas/execution-gate.schema.json",
+  "type": "object",
+  "required": [
+    "state",
+    "blocking",
+    "conditional",
+    "authoritative",
+    "gate_policy_version",
+    "policy_rule_ids",
+    "decisive_finding_ids",
+    "unknown_evidence",
+    "proposed_allowed_write_paths",
+    "proposed_forbidden_write_paths",
+    "allowed_write_paths",
+    "forbidden_write_paths",
+    "required_commands",
+    "reason"
+  ],
+  "properties": {
+    "state": { "enum": ["pass", "conditional", "blocked"] },
+    "blocking": { "type": "boolean" },
+    "conditional": { "type": "boolean" },
+    "authoritative": { "type": "boolean" },
+    "gate_policy_version": { "type": "integer", "minimum": 1 },
+    "policy_rule_ids": { "type": "array", "items": { "type": "string" } },
+    "decisive_finding_ids": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    },
+    "unknown_evidence": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    },
+    "proposed_allowed_write_paths": { "type": "array", "items": { "type": "string" } },
+    "proposed_forbidden_write_paths": { "type": "array", "items": { "type": "string" } },
+    "allowed_write_paths": { "type": "array", "items": { "type": "string" } },
+    "forbidden_write_paths": { "type": "array", "items": { "type": "string" } },
+    "required_commands": { "type": "array", "items": { "type": "string" } },
+    "reason": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

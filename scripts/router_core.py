@@ -16,8 +16,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
-from jsonschema import Draft202012Validator
-
 from router_support.bundle_io import (
     dump_json_file,
     dump_yaml_file,
@@ -68,12 +66,23 @@ from router_support.route_capability_contracts import (
     ordered_secondary_capabilities,
 )
 from router_support.route_constraints import glob_match, required_checks_for, scoped_owner_modules
-from router_support.route_read_paths import build_required_read_paths
+from router_support.route_read_paths import (
+    build_precise_read_targets,
+    build_required_read_paths,
+)
 from router_support.route_authorization import (
     authorization_audit_fields,
     route_authorization_fingerprint,
     routing_truth_digest,
 )
+from router_support.execution_gate import (
+    reduce_execution_gate,
+    shadow_gate_comparison,
+)
+from router_support.route_evidence import build_route_findings
+from router_support.runtime_identity import runtime_identity
+from router_support.schema_validation import validator_for_schema
+from router_support.typed_findings import digest_value
 from router_support.reuse_scan import (
     ReuseScanBudget,
     ReuseScanEnvironment,
@@ -313,6 +322,14 @@ class RouteDecision:
     reasoning: list[str]
     authorization_context: dict[str, Any]
     route_fingerprint: str
+    runtime_identity: dict[str, Any]
+    typed_findings: list[dict[str, Any]]
+    execution_gate: dict[str, Any]
+    gate_shadow: dict[str, Any]
+    must_read_targets: list[dict[str, Any]]
+    inventory_targets: list[dict[str, Any]]
+    unresolved_read_targets: list[dict[str, Any]]
+    authorization_request: dict[str, Any]
     source_of_truths: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
@@ -575,8 +592,7 @@ def resolve_bundle_root(repo_root: Path) -> Path:
 
 
 def validate_against_schema(data: dict[str, Any], schema_path: Path) -> list[str]:
-    schema = load_json_file(schema_path)
-    validator = Draft202012Validator(schema)
+    validator = validator_for_schema(schema_path)
     errors = sorted(validator.iter_errors(data), key=lambda error: list(error.path))
     return [f"{'/'.join(str(part) for part in error.path) or '<root>'}: {error.message}" for error in errors]
 
@@ -3352,6 +3368,7 @@ def audit_bundle_governance(repo_root: Path, bundle: dict[str, Any]) -> dict[str
         },
         "findings": findings,
         "repair_suggestions": repair_suggestions,
+        "runtime_identity": runtime_identity(project_root_from_file()),
     }
 
 
@@ -4432,6 +4449,39 @@ def build_write_constraints(
     )
 
 
+def required_check_commands(
+    required_checks: list[str], changed_paths: list[str]
+) -> list[str]:
+    changed_args = " ".join(
+        f'--changed-path "{path}"' for path in changed_paths
+    )
+    commands = {
+        "check-reuse": (
+            "python scripts/check_reuse.py --repo <repo-root> "
+            f"{changed_args} --strict-completeness --format json"
+        ).strip(),
+        "check-deps": "python scripts/check_deps.py --repo <repo-root> --format json",
+        "check-public-api": (
+            "python scripts/check_public_api.py --repo <repo-root> --format json"
+        ),
+        "check-structure": (
+            "python scripts/check_structure.py --repo <repo-root> --format json"
+        ),
+        "check-index-freshness": (
+            "python scripts/check_index_freshness.py --repo <repo-root> "
+            f"{changed_args} --format json"
+        ).strip(),
+        "run-evaluation": (
+            "python scripts/run_evaluation.py --repo <repo-root> --format json"
+        ),
+    }
+    return [
+        commands[name]
+        for name in required_checks
+        if name in commands
+    ]
+
+
 def build_post_change_closeout(
     action: str,
     repo_stage: str,
@@ -4655,8 +4705,6 @@ def determine_action(
         path_capabilities=lambda path: path_index_capabilities_for_path(bundle, path),
     )
     high_risk_ids = set(bundle.get("change_rules", {}).get("high_risk_capability_ids", []))
-    stale_bundle = bundle.get("_runtime", {}).get("stale_bundle", False)
-    has_conflict = bundle.get("_runtime", {}).get("has_conflict", False)
     targets_existing = request_targets_existing_capability(request_text)
     extract_intent = request_prefers_extract(request_text)
     explicit_review = request_requires_review(request_text)
@@ -4701,10 +4749,6 @@ def determine_action(
     if high_risk and (best_cap.id in high_risk_ids or ov >= 0.75):
         reasoning.append("high-risk request requires manual review")
         veto_reasons.append("high-risk capability or overlapping high-risk candidates")
-        return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
-    if stale_bundle or has_conflict:
-        reasoning.append("routing bundle is stale or internally inconsistent")
-        veto_reasons.append("bundle is stale or conflicts exist")
         return "review", best_cap, secondary, best_score, confidence_level, ov, coordination_required, composite_required, reasoning, confidence_reasons, veto_reasons
     if lifecycle_intent:
         reasoning.append(f"capability lifecycle intent detected: {lifecycle_intent}")
@@ -4850,8 +4894,9 @@ def resolve_request(
         high_risk,
         bundle,
     )
+    legacy_action = action
     if freshness.get("route_status", freshness["status"]) == "fail":
-        action = "review"
+        legacy_action = "review"
         if "routing bundle freshness evidence failed" not in reasoning:
             reasoning.append("routing bundle freshness evidence failed")
         if "bundle is stale or freshness evidence is missing" not in veto_reasons:
@@ -4861,16 +4906,20 @@ def resolve_request(
         ([primary_capability.id] if primary_capability else [])
         + secondary_capabilities,
     )
-    if action != "review" and not owner_assessment["trusted"]:
-        action = "review"
+    if legacy_action != "review" and not owner_assessment["trusted"]:
+        legacy_action = "review"
         reasoning.append("capability owner governance blocks automatic write eligibility")
         veto_reasons.append(
             "capability owner governance is incomplete: "
             + ", ".join(owner_assessment["reasons"])
         )
     evaluation_decision = policy_for_bundle(bundle)
-    if enforce_evaluation_policy and action != "review" and not evaluation_decision.passed:
-        action = "review"
+    if (
+        enforce_evaluation_policy
+        and legacy_action != "review"
+        and not evaluation_decision.passed
+    ):
+        legacy_action = "review"
         reasoning.append("PCR evaluation policy blocks automatic write eligibility")
         veto_reasons.append(
             "evaluation threshold not met: " + ", ".join(evaluation_decision.reasons)
@@ -4940,7 +4989,7 @@ def resolve_request(
         veto_reasons,
     )
     block_reason = build_block_reason(
-        action,
+        legacy_action,
         bundle.get("config", {}).get("repo_stage", "emerging"),
         veto_reasons,
         routing_confidence_level,
@@ -4960,8 +5009,10 @@ def resolve_request(
         "capability_lifecycle_change",
         "evaluation_threshold_not_met",
     }
-    guardrail_review_required = action == "review" or block_reason.get("code") in mandatory_review_codes
-    governance_action = "review" if guardrail_review_required else action
+    legacy_review_required = (
+        legacy_action == "review" or block_reason.get("code") in mandatory_review_codes
+    )
+    governance_action = "review" if legacy_review_required else action
     if governance_action != action:
         recommended_next_action, recommended_next_steps = build_recommended_next_action(
             governance_action,
@@ -5017,8 +5068,11 @@ def resolve_request(
         normalized_changed_paths,
         request_text,
     )
+    constraint_action = action
+    if action == "review" and primary_capability is not None:
+        constraint_action = "extend"
     allowed_write_paths, forbidden_write_paths, must_read_before_edit = build_write_constraints(
-        governance_action,
+        constraint_action,
         primary_capability,
         normalized_changed_paths,
         forbidden_paths,
@@ -5063,6 +5117,64 @@ def resolve_request(
             "route_assessment", {}
         ).get("classification", freshness.get("status")),
     }
+    current_runtime_identity = runtime_identity(project_root_from_file())
+    authorization_context["runtime_identity_digest"] = current_runtime_identity[
+        "identity_digest"
+    ]
+    repository_root = (
+        bundle_root.parent if bundle_root.name == "project-change-router" else bundle_root
+    )
+    precise_reads = build_precise_read_targets(repository_root, required_reads)
+    route_findings = build_route_findings(
+        freshness=freshness,
+        changed_paths=normalized_changed_paths,
+        primary_capability=(primary_capability.id if primary_capability else None),
+        primary_public_entries=(
+            primary_capability.public_entries if primary_capability else []
+        ),
+        primary_internal_only=bool(
+            primary_capability
+            and primary_capability.lifecycle.get("internal_only") is True
+        ),
+        owner_assessment=owner_assessment,
+        evaluation_passed=(
+            evaluation_decision.passed or not enforce_evaluation_policy
+        ),
+        evaluation_reasons=evaluation_decision.reasons,
+        high_risk=high_risk,
+        lifecycle_intent=request_lifecycle_intent(request_text),
+        capability_conflicts=capability_conflicts(bundle),
+    )
+    gate_commands = required_check_commands(
+        required_checks, normalized_changed_paths
+    )
+    execution_gate = reduce_execution_gate(
+        route_findings,
+        allowed_write_paths=allowed_write_paths,
+        forbidden_write_paths=forbidden_write_paths,
+        required_commands=gate_commands,
+        output_complete=True,
+        authoritative=True,
+    )
+    gate_shadow = shadow_gate_comparison(
+        legacy_state="blocked" if legacy_review_required else "pass",
+        new_gate=execution_gate,
+    )
+    gate_shadow["legacy_action"] = legacy_action
+    gate_shadow["legacy_block_reason"] = block_reason
+    review_required = bool(execution_gate["blocking"])
+    allowed_write_paths = list(execution_gate["allowed_write_paths"])
+    forbidden_write_paths = list(execution_gate["forbidden_write_paths"])
+    if not review_required:
+        override_requirements = []
+        missing_evidence = []
+        block_reason = {}
+    elif not block_reason:
+        block_reason = {
+            "code": "execution_gate_blocked",
+            "severity": "P0",
+            "summary": execution_gate["reason"],
+        }
     decision = RouteDecision(
         decision_id=decision_id,
         timestamp=iso_now(),
@@ -5087,7 +5199,7 @@ def resolve_request(
         required_reads=required_reads,
         required_checks=required_checks,
         forbidden_paths=forbidden_paths,
-        review_required=guardrail_review_required,
+        review_required=review_required,
         coordination_required=coordination_required,
         composite_route_required=composite_required,
         recommended_next_action=recommended_next_action,
@@ -5115,9 +5227,49 @@ def resolve_request(
         reasoning=reasoning,
         authorization_context=authorization_context,
         route_fingerprint="",
+        runtime_identity=current_runtime_identity,
+        typed_findings=[finding.to_dict() for finding in route_findings],
+        execution_gate=execution_gate,
+        gate_shadow=gate_shadow,
+        must_read_targets=precise_reads["must_read_targets"],
+        inventory_targets=precise_reads["inventory_targets"],
+        unresolved_read_targets=precise_reads["unresolved_queries"],
+        authorization_request={},
         source_of_truths=source_of_truths,
     )
     decision.route_fingerprint = route_authorization_fingerprint(decision.to_dict())
+    if review_required:
+        owner_record = owner_assessment.get("capabilities", {}).get(
+            primary_capability.id if primary_capability else "", {}
+        )
+        canonical_root = (
+            primary_capability.lifecycle.get("canonical_root", {}).get("path")
+            if primary_capability
+            and isinstance(primary_capability.lifecycle.get("canonical_root"), dict)
+            else None
+        )
+        authorization_request = {
+            "state": "requested",
+            "task_id": decision.decision_id,
+            "route_fingerprint": decision.route_fingerprint,
+            "pre_change_snapshot": digest_value(authorization_context),
+            "paths": normalized_changed_paths,
+            "owner": owner_record.get("primary"),
+            "canonical_root": canonical_root,
+            "route": action,
+            "mutation_envelope": {
+                "allowed_write_paths": list(
+                    execution_gate.get("proposed_allowed_write_paths", [])
+                ),
+                "forbidden_write_paths": list(
+                    execution_gate.get("proposed_forbidden_write_paths", [])
+                ),
+            },
+        }
+        authorization_request["request_fingerprint"] = digest_value(
+            authorization_request
+        )
+        decision.authorization_request = authorization_request
     return decision
 
 
@@ -5700,7 +5852,7 @@ def rebuild_index(
         ),
         timestamp=iso_now,
     )
-    return rebuild_router_index(
+    report = rebuild_router_index(
         repo_root,
         write_back=write_back,
         operations=operations,
@@ -5708,6 +5860,8 @@ def rebuild_index(
             generated_output_initialization_fingerprint
         ),
     )
+    report["runtime_identity"] = runtime_identity(project_root_from_file())
+    return report
 
 
 def freshness_report(

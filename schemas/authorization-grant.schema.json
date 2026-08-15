@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-change-router.dev/schemas/authorization-grant.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "grant_id",
+    "request_id",
+    "state",
+    "context",
+    "context_digest",
+    "authorization_source",
+    "confirmation",
+    "max_uses",
+    "uses_remaining",
+    "expires_at",
+    "grant_binding_digest",
+    "audit_events"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "grant_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "request_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "state": { "enum": ["granted", "consumed", "invalidated", "rejected", "expired"] },
+    "context": { "type": "object" },
+    "context_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "authorization_source": { "type": "string", "minLength": 1 },
+    "confirmation": { "type": "string", "minLength": 1 },
+    "max_uses": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "uses_remaining": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "grant_binding_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "audit_events": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["sequence", "action", "state", "timestamp", "previous_digest", "details", "event_digest"],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 0 },
+          "action": { "type": "string", "minLength": 1 },
+          "state": { "enum": ["granted", "consumed", "invalidated", "rejected", "expired"] },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "previous_digest": { "type": ["string", "null"] },
+          "details": { "type": "object" },
+          "event_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

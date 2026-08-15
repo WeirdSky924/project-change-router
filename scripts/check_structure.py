@@ -15,6 +15,7 @@ from router_support.generated_output_baseline.write_policy import (
     generated_output_write_policy,
 )
 from router_support.structure_guardrails import gather_structure_findings
+from router_support.runtime_identity import runtime_identity
 
 
 def main() -> int:
@@ -74,6 +75,7 @@ def main() -> int:
         "summary": {"finding_count": len(findings)},
         "generated_output_evidence": generated_output_evidence,
         "findings": findings,
+        "runtime_identity": runtime_identity(),
     }
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

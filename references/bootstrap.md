@@ -28,8 +28,8 @@ The generated bundle contains:
 - the bundle is repository-local data and validation logic
 - the skill remains reusable across repositories
 - installing or verifying the global skill does not search for or modify repository bundles
-- PCR 0.3 reads bundle schema v1 and keeps reuse engine API v2 while adding architecture governance API v1
-- missing 0.3 fields receive runtime defaults without being written back by read-only checks
+- PCR 0.4 reads bundle schema v1, keeps reuse engine API v2, and adds architecture governance API v2 plus typed-finding/gate/change-flow/authorization API v1
+- missing 0.4 precision becomes unknown/incomplete evidence without being written back by read-only checks
 
 ## Bootstrap Expectations
 
@@ -61,7 +61,7 @@ python scripts/check_structure.py --repo <repo-root> --format json
 python scripts/run_evaluation.py --repo <repo-root> --format json
 ```
 
-The initial generated evaluation set is seed evidence, not production calibration. Until the configured real-case threshold is met, evaluation is expected to report `review_only` and return a non-zero status. Keep that stop in place; curate real positive, boundary, veto, and false-positive/false-negative regression cases rather than lowering the threshold.
+The initial generated evaluation set is seed evidence, not production calibration. Until the configured real-case threshold is met, evaluation is expected to report `review_only` and return a non-zero status. Preserve that evidence so the authoritative gate can block when required; curate real positive, boundary, veto, and false-positive/false-negative regression cases rather than lowering the threshold.
 
 The first bundle is a starting point. The repository owner still needs to curate mature shared capabilities, stable owners, distinct reviewers, contracts, lifecycle metadata, public or internal-only boundaries, and positive plus boundary evaluation coverage.
 

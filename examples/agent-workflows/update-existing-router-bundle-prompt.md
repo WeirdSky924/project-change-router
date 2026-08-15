@@ -41,7 +41,9 @@ Validate the existing bundle before refreshing:
 - If validation fails because the bundle is old, continue only with metadata refresh steps. Do not treat old-schema failure as permission to delete the bundle.
 - If validation reports P0 issues unrelated to schema age, stop and report the exact files and fields that need human confirmation.
 - Run one known changed-path reuse check with the latest skill. Inspect `result_status`, `completion_status`, `evidence_complete`, and `summary.scan.scope` together.
+- Run one compatibility flow with `run_change_flow.py --format compact-json`. Verify `runtime_identity`, `execution_gate`, the fixed safety envelope, artifact digest, exact read targets, delta summary, and cache summary.
 - Missing `reuse_scan_scope`, `reuse_scan_runtime`, or `reuse_scan_retention` in a schema-v1 bundle is compatible and is not a refresh reason by itself.
+- Missing 0.4 evidence precision may produce `unknown/blocked` for that task, but it is not permission to rewrite the old bundle. Identify the exact missing owner/path/public-entry/baseline evidence first.
 
 Compatibility-only exit:
 - If validation passes and no confirmed path, owner, public entry, lifecycle, or capability boundary is stale, stop without changing the repository bundle.
@@ -65,14 +67,17 @@ Update generated local guidance:
 - Refresh only project-change-router generated or marked blocks in agent guidance files.
 - If a marked block exists, replace only the block content between its start and end markers.
 - If no marked block exists, append a new marked project-change-router block without rewriting the original document.
-- The guidance must mention route-before-editing, dual confidence, review stop behavior, allowed/forbidden write paths, lifecycle review, closeout checks, feedback write-back, and `.gitignore` inclusion checks.
+- The guidance must mention route-before-editing, dual confidence, authoritative `execution_gate`, advisory action/review semantics, typed findings, allowed/forbidden write paths, precise read targets, bounded authorization, lifecycle evidence, closeout checks, feedback write-back, and `.gitignore` inclusion checks.
 
 Update output expectations:
 - New route reports should expose `routing_confidence`, `routing_confidence_level`, `decision_confidence`, `decision_confidence_level`, `decision_basis`, `recommended_next_action`, `recommended_next_steps`, and `why_not_actions` when available.
+- New route/flow reports should expose `runtime_identity`, `typed_findings`, `execution_gate`, `gate_shadow`, precise read targets, and an authorization request. `action` is advisory; the gate is authoritative.
 - Do not manually fabricate these fields in old saved reports. Regenerate reports with the latest scripts when examples or verification artifacts need to reflect the new schema.
 - If old saved reports are retained for history, label them as historical instead of mixing them with current examples.
 - New reuse reports expose canonical/checkpoint/diagnostic classes plus `result_status`, `completion_status`, and `evidence_complete`.
+- New reuse reports also expose independent `intra_capability`, `cross_capability`, and `extended` channel coverage. Every required channel must be complete before claiming no duplicate.
 - A bounded, incomplete, timed-out, cancelled, or errored reuse report is partial evidence. Do not report it as proof that duplicate implementations are absent.
+- New flow artifacts, baselines, incremental cache state, and authorization manifests live outside the repository by default. Do not migrate them into the old bundle or add a project `.gitignore` entry for the default runtime.
 
 Profile and calibration follow-up:
 - If governance audit reports generated-only capability boundaries, broad ownership rules, missing public entries, or weak evaluation coverage, propose profile updates instead of guessing.

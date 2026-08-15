@@ -10,6 +10,7 @@ from router_core import audit_bundle_governance, bootstrap_bundle
 from router_support.generated_output_baseline.write_guard import (
     GeneratedOutputWriteBlocked,
 )
+from router_support.runtime_identity import runtime_identity
 
 
 def main() -> int:
@@ -27,6 +28,7 @@ def main() -> int:
             "status": "fail",
             "error_code": "generated_output_write_blocked",
             "error": str(exc),
+            "runtime_identity": runtime_identity(),
         }
         if args.output:
             Path(args.output).write_text(
@@ -48,6 +50,7 @@ def main() -> int:
         "path_index_count": len(bundle["path_to_capability_map"]["path_index"]),
         "governance_status": governance["status"],
         "governance_severity_counts": governance["severity_counts"],
+        "runtime_identity": runtime_identity(),
     }
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

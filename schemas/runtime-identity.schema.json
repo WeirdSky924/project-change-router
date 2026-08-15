@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-change-router.dev/schemas/runtime-identity.schema.json",
+  "type": "object",
+  "required": [
+    "skill_version",
+    "skill_git_commit",
+    "installed_payload_digest",
+    "installed_payload_source",
+    "bundle_schema_compatibility",
+    "report_schema_version",
+    "reuse_engine_api_version",
+    "architecture_governance_api_version",
+    "typed_finding_schema_version",
+    "gate_policy_version",
+    "change_flow_api_version",
+    "authorization_api_version",
+    "parser_versions",
+    "identity_digest"
+  ],
+  "properties": {
+    "skill_version": { "type": "string", "minLength": 1 },
+    "skill_git_commit": { "type": ["string", "null"] },
+    "installed_payload_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "installed_payload_source": { "type": "string", "minLength": 1 },
+    "bundle_schema_compatibility": { "type": "array", "items": { "type": "integer" } },
+    "report_schema_version": { "type": "integer", "minimum": 1 },
+    "reuse_engine_api_version": { "type": "integer", "minimum": 1 },
+    "architecture_governance_api_version": { "type": "integer", "minimum": 1 },
+    "typed_finding_schema_version": { "type": "integer", "minimum": 1 },
+    "gate_policy_version": { "type": "integer", "minimum": 1 },
+    "change_flow_api_version": { "type": "integer", "minimum": 1 },
+    "authorization_api_version": { "type": "integer", "minimum": 1 },
+    "parser_versions": { "type": "object" },
+    "identity_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

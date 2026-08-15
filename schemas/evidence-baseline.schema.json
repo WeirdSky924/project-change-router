@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-change-router.dev/schemas/evidence-baseline.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "state",
+    "snapshot_fingerprint",
+    "created_at",
+    "repo_id",
+    "binding",
+    "findings",
+    "clean_worktree",
+    "evidence_complete",
+    "source"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "state": {
+      "enum": ["candidate_snapshot", "trusted_baseline", "superseded", "invalid"]
+    },
+    "snapshot_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "created_at": { "type": "string" },
+    "repo_id": { "type": "string", "minLength": 1 },
+    "binding": {
+      "type": "object",
+      "required": [
+        "commit",
+        "profile_digest",
+        "bundle_digest",
+        "structure_digest",
+        "indexed_paths_digest",
+        "scope_digest",
+        "tool_version",
+        "policy_version",
+        "evidence_digest"
+      ],
+      "properties": {
+        "commit": { "type": "string", "minLength": 1 },
+        "profile_digest": { "type": "string", "minLength": 1 },
+        "bundle_digest": { "type": "string", "minLength": 1 },
+        "structure_digest": { "type": "string", "minLength": 1 },
+        "indexed_paths_digest": { "type": "string", "minLength": 1 },
+        "scope_digest": { "type": "string", "minLength": 1 },
+        "tool_version": { "type": "string", "minLength": 1 },
+        "policy_version": { "type": "string", "minLength": 1 },
+        "evidence_digest": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "https://project-change-router.dev/schemas/typed-finding.schema.json" }
+    },
+    "clean_worktree": { "type": "boolean" },
+    "evidence_complete": { "type": "boolean" },
+    "source": { "type": "string" },
+    "promoted_at": { "type": "string" },
+    "promotion_authority": { "type": "string" }
+  },
+  "additionalProperties": true
+}

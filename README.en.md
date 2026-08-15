@@ -20,12 +20,12 @@ This skill provides a low-token, verifiable, calibratable project direction inde
 
 Design principles:
 
-- Guess less before trying to guess better. If evidence is weak, prefer `review` over a fake conclusion.
+- Guess less before trying to guess better. If evidence is weak, preserve `unknown` and use `execution_gate=blocked` instead of fabricating certainty.
 - Prefer profile data over pure heuristics. Real owners, public entries, capability boundaries, and path patterns should be added to `.project-change-router.yaml` over time.
 - Prefer structural evidence over name similarity. Paths, owners, public APIs, dependencies, and test bindings are more reliable than semantic similarity.
 - Be conservative for early repositories. `seed` and `emerging` repositories should not automatically `extend` or `extract` too easily.
-- `review` is not a failure. It is a safety mechanism: automatic writes are unsafe, but read-only analysis and human confirmation can continue.
-- Route output is an integrated contract. Mandatory guardrail fields must be followed; `action` and unblock suggestions guide the agent but do not replace source-code analysis.
+- `review` is not a failure or a write gate. It is an investigation direction in the advisory action layer; `execution_gate` decides whether writing is currently permitted.
+- Route output is an integrated contract. The execution gate, safety envelope, and typed findings are mandatory; `action` and unblock suggestions guide the agent but do not replace source-code analysis.
 - Results must get better over time. Human overrides, misroutes, profile fixes, and real cases should be written back into feedback and evaluation data.
 
 ## Two-Layer Usage Model
@@ -34,16 +34,18 @@ PCR output has two layers. Do not interpret them as the same thing.
 
 Mandatory guardrail layer:
 
+- Read `execution_gate.state` first. `pass`, `conditional`, and `blocked` are the only authoritative write states.
 - Respect `allowed_write_paths`, `forbidden_write_paths`, and `must_read_before_edit`.
 - Identify and protect existing owners, public entries, canonical roots, and dependency direction.
 - Do not create a second parallel implementation center when an existing capability may already exist.
-- When `veto_reasons`, lifecycle review, low routing confidence, provisional boundaries, or high-risk overlaps appear, stop for confirmation, read-only analysis, or profile repair before writing product code.
+- `blocked` forbids product-code writes. `conditional` requires every `required_command` and the bounded envelope. `pass` still cannot exceed that envelope.
+- Trace vetoes, unknown evidence, lifecycle findings, high-risk overlap, and provisional boundaries to typed findings and policy rules; never hide them with an action label.
 
 Advisory direction layer:
 
 - `action` is the router's current processing tendency, not a final engineering command.
 - `recommended_next_steps`, `safe_next_steps`, `analysis_directions`, `why_not_actions`, and `profile_repair_hints` are unblock directions and investigation prompts.
-- `action=review` does not mean the task is impossible. It means the current evidence is insufficient for automatic product-code writes, so the agent should gather evidence, repair profile data, read source code, request a scoped override, or pass through a higher gate.
+- `action=review` does not mean the task is impossible and does not automatically mean blocked. It prioritizes evidence gathering, profile repair, source reading, or coordination; `execution_gate` remains authoritative.
 - The final implementation plan must still come from real source analysis, dependency tracing, tests, and user confirmation.
 
 ## Scope
@@ -53,6 +55,10 @@ This skill can:
 - Bootstrap a repository-local `project-change-router/` bundle.
 - Discover modules, capabilities, owners, public entries, path ownership, and dependency direction.
 - Produce a route report from a request and changed path hints, including mandatory guardrails and advisory actions.
+- Orchestrate route, freshness, dependency, public API, structure, governance, and reuse checks through `run_change_flow.py`, returning a compact safety envelope by default while persisting full evidence as a content-addressed artifact.
+- Normalize gate evidence into traceable typed findings and reduce one authoritative gate through a single versioned policy table.
+- Reuse trusted global snapshots through a changed-path-driven forward/reverse dependency closure instead of dropping global invariants.
+- Split reuse coverage into independent intra-capability, cross-capability, and new/extract/lifecycle extended channels.
 - Run guardrails for duplicate implementation, wrong boundaries, public API bypasses, reversed dependencies, and runtime cycles; TypeScript type-only edges are not misclassified as runtime edges.
 - Check freshness from the current commit, a content-derived structure digest, indexed paths, stale entries, and actual changed-path coverage.
 - Use exact baselines to stop net-new central-file growth, 800/1200-line threshold crossings, forbidden implementation roots, and second canonical owners.
@@ -66,7 +72,7 @@ It should not:
 
 - Replace detailed code reading, dependency tracing, test design, or architecture analysis.
 - Treat `action` as a final command that can be executed without analysis.
-- Continue writing product code automatically after `review` without evidence gathering, user confirmation, or a scoped override.
+- Treat `action=review` itself as permission or denial; write authority comes only from `execution_gate`.
 - Treat a generated-only bundle as mature architecture fact.
 - Reuse or extend a capability only because its name looks similar.
 - Create a second implementation center before confirming the canonical root.
@@ -79,9 +85,9 @@ It should not:
 - `extend`: add behavior through an existing shared capability or compatible extension point.
 - `extract`: move repeated logic into a shared capability before callers reuse it.
 - `new`: create a new isolated capability boundary because no safe reuse target exists.
-- `review`: gather evidence, repair profile data, request confirmation, or use a scoped override before writing because evidence is weak, risk is high, or multiple capabilities are involved.
+- `review`: prioritize evidence gathering, profile repair, cross-capability coordination, or human confirmation. It neither grants nor removes write authority.
 
-`review` needs special interpretation. It does not mean the system is useless, and it is not a permanent block. It means the system is confident that automatic writing is unsafe. In an empty or early repository, a valid route can look like:
+`review` needs special interpretation. It does not mean the system is useless, it is not a permanent block, and it is not a gate state. In an empty or early repository, a valid route can look like:
 
 ```json
 {
@@ -93,7 +99,7 @@ It should not:
 }
 ```
 
-This means the router has no confidence about which capability should receive the change, but high confidence that the agent should pause for evidence or confirmation before writing. The agent can still perform read-only analysis, propose profile repairs, trace callers, and ask for confirmation.
+This means the router has no confidence about which capability should receive the change, but high confidence in its advisory action. Read `execution_gate.state` separately to determine write authority: an unindexed relevant path is `blocked`, while only trusted unrelated and non-expanding historical debt may be `conditional`.
 
 ## Repository Stage Policy
 
@@ -140,6 +146,14 @@ A route report is not just an action. It is a complete route contract. Core fiel
 - `risk_signals`
 - `authorization_context`
 - `route_fingerprint`
+- `runtime_identity`
+- `typed_findings`
+- `execution_gate`
+- `gate_shadow`
+- `must_read_targets`
+- `inventory_targets`
+- `unresolved_read_targets`
+- `authorization_request`
 
 The seven governance output groups are first-class fields in the same route report, not an external add-on:
 
@@ -154,6 +168,29 @@ The seven governance output groups are first-class fields in the same route repo
 See [references/governance-outputs.md](./references/governance-outputs.md) for the detailed contract.
 
 ![Integrated route contract](./assets/readme-route-contract.svg)
+
+### 0.4 Execution Gate and Evidence Model
+
+PCR 0.4 separates routing advice from write authority:
+
+| Field | Meaning |
+| --- | --- |
+| `action` | `reuse / extend / extract / new / review`; engineering investigation and handling direction only |
+| `execution_gate.state=pass` | Relevant evidence is complete and no task-relevant blocker exists; the read/write envelope still applies |
+| `execution_gate.state=conditional` | Only proven unrelated or non-expanding trusted historical debt remains; run prerequisites and keep writes bounded |
+| `execution_gate.state=blocked` | Unknown/incomplete evidence, relevant P0/P1 findings, owner/canonical/public API/lifecycle/high-risk issues, or a hard invariant conflict exists |
+
+The gate performs no repository scan and no second routing pass. One versioned policy table deterministically reduces schema-valid typed findings. Every finding carries a stable ID, origin, severity, invariant class, delta, task relevance, evidence status, policy rule, paths/capabilities, relevance trace, and evidence digest.
+
+`gate_shadow` retains the old/new gate comparison for diagnostics only. In 0.4, `execution_gate.authoritative=true`; the legacy gate no longer grants or denies writes. `output_complete=false` or schema-v1 input that cannot provide required precision must produce an unknown/incomplete finding and block rather than receive optimistic defaults.
+
+Unified entry point:
+
+```powershell
+python scripts/run_change_flow.py --repo <repo-root> --request "Add invoice refund support" --changed-path services/billing/refund.py --format compact-json
+```
+
+Default compact output always retains the non-projectable safety envelope: `execution_gate`, `veto_reasons`, `allowed_write_paths`, `forbidden_write_paths`, `unknown_evidence`, `artifact_path`, `artifact_digest`, and `output_complete`. The complete route, checks, findings, and cache/baseline evidence are stored in a content-addressed artifact. Use `--format full-json` for the full report or `--format artifact-reference` for the minimum reference. `--field` can add ordinary fields; `--exclude-field` cannot hide safety fields.
 
 ## Installation
 
@@ -224,7 +261,7 @@ Harness community discovery uses the `dsh-plugin` topic on public GitHub reposit
 
 The installer uses staging, a recursive payload hash, recursive Python compilation, governance API probes, and atomic replacement. It replaces the old skill only after the new copy passes all checks, and restores the old copy on failure. This prevents top-level scripts, `router_support`, schemas, documentation, or the DSH provider from being installed as a mixed version.
 
-The source checkout and destination must be different paths. If this Git checkout already lives at any target's `skills/project-change-router` path, do not install over itself; use a separate checkout to install multiple targets, or install only the other targets. `--verify-only` requires the trusted manifest created by an atomic 0.3 installation. A legacy copy without that manifest must be reinstalled once before hash verification is meaningful.
+The source checkout and destination must be different paths. If this Git checkout already lives at any target's `skills/project-change-router` path, do not install over itself; use a separate checkout to install multiple targets, or install only the other targets. `--verify-only` requires the trusted manifest created by an atomic installation. A legacy copy without that manifest must be reinstalled once before hash verification is meaningful.
 
 ## Safely Upgrade an Existing PCR Installation
 
@@ -259,6 +296,7 @@ python <new-skill-root>\scripts\check_public_api.py --repo <existing-repo> --com
 python <new-skill-root>\scripts\check_structure.py --repo <existing-repo> --comparison-commit <trusted-base-commit> --format json
 python <new-skill-root>\scripts\run_evaluation.py --repo <existing-repo> --format json
 python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-path <known-path> --strict-completeness --format json
+python <new-skill-root>\scripts\run_change_flow.py --repo <existing-repo> --request "Compatibility check only" --changed-path <known-path> --format compact-json
 ```
 
 5. Continue using the existing bundle after those checks. Do not run `bootstrap_router.py` or `rebuild_index.py` merely because the installed skill changed.
@@ -266,11 +304,13 @@ python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-
 Compatibility guarantees:
 
 - The new skill continues to read bundle schema v1.
-- Version 0.3 adds architecture governance API v1 while preserving reuse engine API v2.
+- Version 0.4 uses architecture governance API v2 plus typed-finding, gate, change-flow, and authorization API v1 while preserving reuse engine API v2.
+- Every current report carries one `runtime_identity` binding skill version, Git commit when available, installed payload digest, and schema/API/policy/parser versions. Cache, baseline, finding, authorization, and artifact identity all bind to it.
 - New evaluation fields in schema v1 remain optional. Safe runtime defaults are read in memory and are not written back to old YAML during compatibility checks; missing or disabled evaluation enforcement remains `review_only` rather than granting write authority.
+- When schema v1 cannot supply the precision required for typed findings, relevance closure, or a trusted baseline, 0.4 emits `unknown` and keeps the execution gate blocked. It does not fabricate precision or write new fields into the old bundle.
 - `normal` requires at least 30 real cases named by `curated_case_ids`, the complete six-category calibration matrix, explicit capability expectations, and a valid attestation. Thresholds may only be tightened; generated or legacy cases without provenance remain `review_only`.
 - If an old bundle lacks `reuse_scan_scope`, `reuse_scan_runtime`, or `reuse_scan_retention`, code defaults apply without writing those defaults back to YAML.
-- New fingerprints, checkpoints, canonical reports, and diagnostics live in the user cache by default. They do not modify the target repository or require a new `.gitignore` entry.
+- New fingerprints, checkpoints, canonical reports, diagnostics, flow artifacts, baselines, and authorization manifests live in the user cache by default. They do not modify the target repository or require a new `.gitignore` entry.
 - The installer does not search project directories and does not modify profiles, manual feedback, evaluation cases, owners, or lifecycle metadata.
 - An incorrect repository-wide `** -> concrete capability` entry in an old bundle cannot expand a reuse scan when a more specific mapping exists. Governance audit still reports that metadata debt.
 - Read compatibility does not mean every historical report satisfies the current output schema. Regenerate reports that are kept as current examples or CI fixtures.
@@ -398,21 +438,25 @@ DeepSeek Harness uses the same whitespace-bounded slash invocation, or the model
 /project-change-router resolve the correct capability entry for this change
 ```
 
-Resolve one change from the command line:
+Prefer the unified flow for one route plus its governed checks:
 
 ```powershell
-python scripts/resolve_entry.py --repo <repo-root> --request "Add invoice refund support" --changed-path services/billing/refund.py --format json
+python scripts/run_change_flow.py --repo <repo-root> --request "Add invoice refund support" --changed-path services/billing/refund.py --format compact-json
 ```
 
-Or read the request from a file:
+It can read a request file. Use the compatible `resolve_entry.py` separately only for focused route diagnostics:
 
 ```powershell
+python scripts/run_change_flow.py --repo <repo-root> --request-file request.md --changed-path services/billing/refund.py --format artifact-reference --output flow-report.json
 python scripts/resolve_entry.py --repo <repo-root> --request-file request.md --changed-path services/billing/refund.py --format json --output route-report.json
 ```
 
 Execution rules after resolution:
 
-- If `action=review`: do not automatically write product code; run `safe_next_steps`, gather evidence, perform read-only analysis, and ask for a scoped override if needed.
+- If `execution_gate.state=blocked`: do not write product code; resolve decisive findings and unknown evidence through required commands or a source-backed authorization workflow where policy permits it.
+- If `execution_gate.state=conditional`: run every required command and write only inside allowed paths. Conditional applies only to proven unrelated or non-expanding trusted historical debt.
+- If `execution_gate.state=pass`: complete precise must-reads and proceed inside the envelope.
+- `action=review` prioritizes investigation, profile repair, or coordination; it does not block by itself. No other action can override the gate.
 - If `action=reuse`: treat it as a reuse tendency; read `must_read_before_edit` and `required_reads` first, and do not modify the core implementation.
 - If `action=extend`: treat it as an extension tendency; write only inside `allowed_write_paths` and avoid bypassing public entries.
 - If `action=extract`: treat it as an extraction tendency; confirm repeated surfaces, callers, and tests before extracting a shared capability.
@@ -423,23 +467,23 @@ Execution rules after resolution:
 Recommended text for unattended plans or long-running tasks:
 
 ```text
-Before any feature-level create, modify, delete, merge, deprecate, or migration work, invoke project-change-router for the target repository. Use it as a direction index and guardrail system, not as an automatic architecture decision engine.
+Before any feature-level create, modify, delete, merge, deprecate, or migration work, invoke project-change-router and run run_change_flow.py for the target repository. Use PCR as a direction index and guardrail system, not as an automatic architecture decision engine.
 
-Treat mandatory guardrails as binding: must_read_before_edit, allowed_write_paths, forbidden_write_paths, veto_reasons, canonical root, owner, public entry, lifecycle review, and duplicate-implementation warnings must be respected before product-code writes.
+Read execution_gate before action. execution_gate.state is the authoritative write decision. For blocked, do not write product code. For conditional, run every required_command and keep writes inside the bounded envelope. For pass, still obey the envelope and precise must-read targets.
 
-Treat action, recommended_next_steps, safe_next_steps, analysis_directions, profile_repair_hints, and why_not_actions as structured guidance for source-code analysis and user-confirmed decisions, not final architecture commands.
+Treat action, including action=review, as advisory direction only. Use recommended_next_steps, safe_next_steps, analysis_directions, profile_repair_hints, and why_not_actions for source analysis and user-confirmed decisions; never turn action into a second gate.
 
-If action=review, do not implement product code automatically. Continue only with safe_next_steps, read-only analysis, profile repair proposals, or a scoped user override for the current task, phase, or changed paths. Do not reuse an override from an earlier phase.
+Never ignore veto_reasons, unknown_evidence, canonical owner/root, public entry, lifecycle findings, duplicate risk, or unresolved closure evidence. Trace them to typed findings and policy rules. Bounded or incomplete evidence cannot prove absence.
 
 Do not create a second implementation center when an existing capability or canonical root may exist. If routing evidence is weak, repair the profile or ask for confirmation instead of guessing.
 
-After routed changes, run the required closeout checks and record feedback/evaluation cases when a review, override, lifecycle change, or routing correction occurred.
+Use must_read_targets by path, symbol, and content digest. Treat directories only as inventory_targets. Run unresolved_read_targets queries and keep the target unresolved until a unique implementation is proven.
 
-Run dependency, public API, structure, freshness, evaluation, and strict-completeness reuse checks when their routed boundary is affected. Static checks supplement rather than replace logic, data, integration, and customer-flow verification.
+For an override, create an authorization_request and require explicit user confirmation before creating a grant. Bind it to task, paths, owner, route, pre-change snapshot, mutation envelope, runtime/policy identity, expiry, and use count. Never revive a consumed or invalidated grant.
 
-If evaluation is below threshold or its attestation is missing or stale, keep PCR in review-only mode even when the capability match itself looks correct.
+After routed changes, execute post_change_closeout, rerun the affected flow/checks, and record feedback/evaluation cases after review, override, lifecycle change, false route, or routing correction.
 
-When running check_reuse, inspect result_status, completion_status, evidence_complete, and summary.scan.scope together. Only completion_status=complete with evidence_complete=true closes the duplicate check for that capability scope. A bounded, incomplete, timeout, cancelled, or error result requires targeted source analysis and must not be reported as proof that no duplicate implementation exists.
+Keep full diagnostics in the content-addressed artifact. In the main context retain the compact safety envelope, decisive delta, exact reads, and next command. Never hide a safety-envelope field through projection.
 ```
 
 A fuller copyable version is available in [examples/agent-workflows/unattended-plan-prompt.md](./examples/agent-workflows/unattended-plan-prompt.md).
@@ -452,7 +496,9 @@ Upgrading the skill does not require an automatic bundle refresh. Use [examples/
 | --- | --- |
 | First repository onboarding | `python scripts/bootstrap_router.py --repo <repo-root> --format json` |
 | Major repository structure change | `python scripts/rebuild_index.py --repo <repo-root> --format json` |
+| Unified route, checks, and closeout plan | `python scripts/run_change_flow.py --repo <repo-root> --request "<request>" --changed-path <path> --format compact-json` |
 | Resolve route before editing | `python scripts/resolve_entry.py --repo <repo-root> --request "<request>" --changed-path <path> --format json` |
+| Create/grant/consume authorization | `python scripts/manage_authorization.py --repo <repo-root> <request|grant|consume|inspect> ...` |
 | Pre-commit bundle validation | `python scripts/validate_router_bundle.py --repo <repo-root> --format json` |
 | Check duplicate implementation | `python scripts/check_reuse.py --repo <repo-root> --changed-path <path> --format json` |
 | Check dependency direction | `python scripts/check_deps.py --repo <repo-root> --format json` |
@@ -465,7 +511,7 @@ Upgrading the skill does not require an automatic bundle refresh. Use [examples/
 
 ## Architecture Governance
 
-PCR 0.3 turns structure constraints that previously depended on manual review into repository-neutral regression guardrails:
+PCR 0.4 adds typed findings, incremental global evidence, trusted baselines, and an authoritative execution gate to the existing regression guardrails:
 
 - The Python and TypeScript/JavaScript import graph separates runtime from type-only edges and reports runtime cycles, resolver diagnostics, and dependency direction.
 - `architecture_baseline` records exact existing debt. Registered debt can remain visible without blocking, while new findings or net growth fail. It is never a wildcard exemption.
@@ -479,6 +525,8 @@ PCR 0.3 turns structure constraints that previously depended on manual review in
 - Missing, stale, or below-threshold evaluation attestation keeps PCR in `review_only`; a correct capability match alone does not prove that the action or write authority is reliable.
 
 Baseline existing debt exactly, stop new growth first, and reduce the baseline in later governance work. Do not gain a pass by enlarging ignore patterns, weakening rules, or fabricating evaluation cases. See [references/architecture-governance.md](./references/architecture-governance.md) for field contracts, exit metadata, and the recommended CI sequence.
+
+Flow evidence baselines use a stricter provenance contract. A first scan, dirty worktree, or bounded/incomplete result can only be a `candidate_snapshot` or `unknown`. Only a complete candidate on a clean commit, a trusted CI snapshot, or an exact user-accepted fingerprint can become a `trusted_baseline`. Baselines bind commit, profile, bundle, structure, indexed paths, scope, tool/runtime, policy, and evidence digests. Identity changes invalidate them, and superseded versions move to history instead of being overwritten. Deltas explicitly report new, expanded, unchanged, reduced, and resolved findings.
 
 ## Reuse Scan Runtime
 
@@ -505,6 +553,8 @@ Key behavior:
 - Test paths prefer same-capability related tests, test bindings, and owner surfaces instead of every product module.
 - A file pair is computed once. If multiple capabilities reference it, one finding merges all capability IDs and retains the strongest severity.
 - Large pairs that cannot use exact comparison but have strong fingerprints produce a P2 `duplicate-fingerprint-candidate`. It requires targeted source analysis and is not exact duplicate proof.
+- Every flow reports independent `intra_capability`, `cross_capability`, and `extended` channels. `new`, `extract`, and lifecycle requests require extended coverage; shared/canonical surfaces still trigger cross-capability checks.
+- Each channel carries its own scope digest, coverage, budget, completion status, skipped reasons, and evidence digest. If any required channel is bounded or incomplete, the global duplicate conclusion is only `not_proven`.
 
 ### Fingerprint Cache
 
@@ -604,6 +654,17 @@ Default exit behavior:
 - P2: maintenance recommendation, not blocking.
 
 ## Manual Feedback and Continuous Calibration
+
+### Bounded Authorization Manifest
+
+An `authorization_request` is only a draft bound to the current task/path/owner/route/pre-change snapshot/mutation envelope; it cannot create authority. After explicit user confirmation, record a grant with `manage_authorization.py grant`. Grants default to one use and 24-hour expiry; explicit bounded grants can allow at most 100 uses and 30 days. Every transition enters a digest-chained audit event. Any context, runtime/policy, or mutation change invalidates the grant, and a consumed, expired, invalidated, or rejected grant can never revive from matching input.
+
+```powershell
+python scripts/manage_authorization.py --repo <repo-root> request --route-report <full-flow-report.json>
+python scripts/manage_authorization.py --repo <repo-root> grant --request-id <request-id> --authorization-source user --confirmation "<exact confirmation>"
+python scripts/manage_authorization.py --repo <repo-root> consume --grant-id <grant-id> --route-report <current-full-flow-report.json>
+python scripts/manage_authorization.py --repo <repo-root> inspect --grant-id <grant-id>
+```
 
 ![Continuous router calibration loop](./assets/readme-feedback-loop.svg)
 
@@ -705,6 +766,7 @@ Reference documents:
 - [references/schema-overview.md](./references/schema-overview.md)
 - [references/architecture-governance.md](./references/architecture-governance.md)
 - [references/reuse-scan-runtime.md](./references/reuse-scan-runtime.md)
+- [references/typed-findings-gate-todo.md](./references/typed-findings-gate-todo.md)
 
 ## Scripts
 
@@ -720,6 +782,8 @@ Reference documents:
 - `scripts/check_index_freshness.py`
 - `scripts/check_bundle_governance.py`
 - `scripts/run_evaluation.py`
+- `scripts/run_change_flow.py`
+- `scripts/manage_authorization.py`
 - `scripts/sync_feedback.py`
 - `scripts/validate_router_bundle.py`
 
@@ -746,6 +810,7 @@ The GitHub Actions workflow is in [.github/workflows/ci.yml](./.github/workflows
 - central-growth, 800/1200-line file-size, forbidden-root, and exclusive-owner structure checks.
 - route evaluation.
 - capability-scoped reuse scan, isolated worker, and strict completeness check.
+- typed-finding schema, execution-gate replay, trusted-baseline, incremental-cache, three-channel reuse, compact-flow, and authorization-state-machine regression coverage.
 - atomic installation and `--verify-only` validation from a temporary installation root.
 
 ## Boundaries and Risks
@@ -756,11 +821,11 @@ Be explicit about these limits:
 - Without a profile, results intentionally skew conservative.
 - Generated-only evaluation only proves system self-consistency, not architecture maturity.
 - A correct capability match does not prove that action, secondary-contract, or write-authority prediction is reliable; below-threshold evaluation remains `review_only`.
-- When `review_required=true` or `forbidden_write_paths=["**"]`, agents should not automatically write product code; they may perform read-only analysis, gather evidence, propose profile repairs, or request a scoped override.
-- `decision_confidence=high` does not mean writing is allowed; it may mean the router is highly confident that the agent should stop.
-- `action` is advisory direction, not a final engineering command; write boundaries, vetoes, owners, canonical roots, and lifecycle constraints have higher priority.
+- Only `execution_gate.state` decides current write authority. `action=review`, `review_required`, and confidence are not independent gates.
+- `decision_confidence=high` only describes action/decision-basis stability and provides no write authority.
+- `action` is advisory direction, not a final engineering command; the execution gate, safety envelope, typed findings, owners, canonical roots, and lifecycle constraints have higher priority.
 - `check_reuse` `result_status=pass` represents a completed target scope only when `completion_status=complete` and `evidence_complete=true`; bounded, timeout, and incomplete results are targeted-analysis evidence only.
-- Lifecycle operations such as delete, merge, deprecate, replace, and migrate must be review-first.
+- Lifecycle operations such as delete, merge, deprecate, replace, and migrate produce mandatory lifecycle evidence/gates; `review` is only the advisory investigation direction.
 - This skill provides direction, evidence, and constraints. The final implementation plan still must come from real code analysis, tests, and user confirmation.
 
 ## License

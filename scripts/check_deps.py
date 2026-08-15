@@ -7,6 +7,7 @@ from pathlib import Path
 
 from router_core import gather_dependency_findings, guardrail_status, route_bundle_from_repo
 from router_support.architecture_baseline import filter_architecture_baseline_by_provenance
+from router_support.runtime_identity import runtime_identity
 
 
 def main() -> int:
@@ -42,6 +43,7 @@ def main() -> int:
         "blocking": blocking,
         "summary": {"finding_count": len(findings)},
         "findings": findings,
+        "runtime_identity": runtime_identity(),
     }
     if args.output:
         Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

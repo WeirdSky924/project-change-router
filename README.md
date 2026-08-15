@@ -20,12 +20,12 @@
 
 这个项目的设计原则是：
 
-- 少乱猜优先于更聪明地猜。证据不足时宁可 `review`，不要伪装成确定结论。
+- 少乱猜优先于更聪明地猜。证据不足时宁可保留 `unknown` 并让 `execution_gate=blocked`，不要伪装成确定结论。
 - profile 优先于纯启发式。真实 owner、public entry、capability 边界和 path pattern 应逐步写入 `.project-change-router.yaml`。
 - 结构证据优先于名字相似。路径、owner、public API、依赖关系、测试绑定比语义相似更可靠。
 - 早期仓库默认保守。`seed` / `emerging` 阶段不应轻易自动 `extend` 或 `extract`。
-- `review` 不是失败。它是保护机制，表示当前不能安全自动写代码，但可以进行只读分析和人工确认。
-- 路由输出是一体化契约。强约束字段必须遵守，`action` 和解阻建议用于辅助判断，不能替代源码分析。
+- `review` 不是失败，也不是写入门禁；它是 action 建议层的调查方向。真正决定当前是否可写的是 `execution_gate`。
+- 路由输出是一体化契约。`execution_gate`、安全信封和 typed findings 必须遵守，`action` 和解阻建议用于辅助判断，不能替代源码分析。
 - 结果必须能持续变准。人工 override、误判、profile 修正和真实案例应沉淀到 feedback 与 evaluation。
 
 ## 两层使用模型
@@ -34,16 +34,18 @@ PCR 的输出分为两层，使用时不要混在一起理解。
 
 必须执行层：
 
+- 必须先读 `execution_gate.state`：`pass`、`conditional`、`blocked` 是唯一权威写入状态。
 - 必须尊重 `allowed_write_paths`、`forbidden_write_paths` 和 `must_read_before_edit`。
 - 必须识别并保护已有 owner、public entry、canonical root 和依赖方向。
 - 不能在已有能力可能存在时新建第二套平行实现中心。
-- 出现 `veto_reasons`、生命周期 review、低路由置信度、provisional 边界、高风险重叠时，必须先停下做确认、只读分析或 profile 修复，再写产品代码。
+- `blocked` 时禁止产品代码写入；`conditional` 时必须先执行 `required_commands` 并限制在给定 envelope；`pass` 也不能越过 envelope。
+- `veto_reasons`、unknown evidence、生命周期、高风险重叠和 provisional 边界必须追溯到 typed finding 与 policy rule，不能忽略或仅凭 action 覆盖。
 
 参考建议层：
 
 - `action` 是当前证据下的处理倾向，不是最终工程命令。
 - `recommended_next_steps`、`safe_next_steps`、`analysis_directions`、`why_not_actions` 和 `profile_repair_hints` 是解阻方向和调查提示。
-- `action=review` 不等于永远不能做；它表示当前证据不足以自动写代码，需要补证据、补 profile、读源码、请求 scoped override 或进入更高级 gate。
+- `action=review` 不等于永远不能做，也不自动等于 blocked；它表示应优先补证据、补 profile、读源码或协调确认，最终仍以 `execution_gate` 为准。
 - 最终实现方案仍必须来自真实源码分析、依赖追踪、测试和用户确认。
 
 ## 能力范围
@@ -53,6 +55,10 @@ PCR 的输出分为两层，使用时不要混在一起理解。
 - 为目标仓库生成本地 `project-change-router/` bundle。
 - 识别仓库模块、capability、owner、public entry、路径归属和依赖方向。
 - 根据请求和 changed paths 输出 route report，包含强约束和建议动作。
+- 用统一 `run_change_flow.py` 编排 route、freshness、dependency、public API、structure、governance 和 reuse 检查，默认只返回 compact 安全信封并把完整证据保存为内容寻址 artifact。
+- 把所有门禁证据规范化为可追溯 typed findings，并以单一版本化规则表确定 `execution_gate`。
+- 基于 changed-path 的正反向依赖闭包增量复用可信全局快照，而不是停止全局不变量检查。
+- 将 reuse 拆为 capability 内、跨 capability 和 new/extract/lifecycle 扩展扫描三条独立覆盖通道。
 - 对重复实现、错误边界、public API 绕过、反向依赖和 runtime cycle 做 guardrail 检查；TypeScript type-only edge 不会被误算成 runtime edge。
 - 用 commit、内容结构摘要、索引路径、stale entry 和实际 changed paths 校验 freshness。
 - 用 exact baseline 阻止中央文件、800/1200 行文件、禁用实现根和第二 canonical owner 的新增净增长。
@@ -66,7 +72,7 @@ PCR 的输出分为两层，使用时不要混在一起理解。
 
 - 替代详细代码阅读、依赖追踪、测试设计和架构分析。
 - 把 `action` 当成无需分析即可执行的最终命令。
-- 在 `review` 后绕开证据补充、用户确认或 scoped override 自动继续写产品代码。
+- 把 `action=review` 本身当作放行或阻塞依据；写入状态必须读取 `execution_gate`。
 - 把 generated-only bundle 当作成熟架构事实。
 - 因为名字相似就强行复用或扩展已有 capability。
 - 在没有确认 canonical root 时创建第二套实现中心。
@@ -79,9 +85,9 @@ PCR 的输出分为两层，使用时不要混在一起理解。
 - `extend`：在已有共享 capability 或兼容扩展点上增加行为。
 - `extract`：先把重复逻辑抽到共享 capability，再让调用方复用。
 - `new`：没有合适复用目标，应建立新的隔离 capability 边界。
-- `review`：证据不足、风险过高或跨多能力，需要补证据、补 profile、人工确认或 scoped override 后再写。
+- `review`：优先补证据、补 profile、做跨能力协调或请求人工确认；它描述调查方向，不授予也不撤销写权限。
 
-`review` 需要特别理解：它不是“系统没用”，也不是永久阻塞，而是“系统很确定当前不应自动写”。在空仓或早期仓里，可能出现：
+`review` 需要特别理解：它不是“系统没用”，也不是永久阻塞，更不是门禁状态。在空仓或早期仓里，可能出现：
 
 ```json
 {
@@ -93,7 +99,7 @@ PCR 的输出分为两层，使用时不要混在一起理解。
 }
 ```
 
-这表示：系统对“应该落到哪个 capability”没有把握，但对“现在应该先停下来补证据或确认”很有把握。agent 可以继续做只读分析、profile 修复建议、调用方追踪和用户确认，但不应直接写产品代码。
+这表示：系统对“应该落到哪个 capability”没有把握，但对当前 action 建议很有把握。是否可以写产品代码必须另读 `execution_gate.state`；例如相关路径未索引时会是 `blocked`，而只有无关且不扩大的可信历史债务时可为 `conditional`。
 
 ## 仓库阶段策略
 
@@ -140,6 +146,14 @@ route report 不是只给一个 action。它是一个完整路由契约，核心
 - `risk_signals`
 - `authorization_context`
 - `route_fingerprint`
+- `runtime_identity`
+- `typed_findings`
+- `execution_gate`
+- `gate_shadow`
+- `must_read_targets`
+- `inventory_targets`
+- `unresolved_read_targets`
+- `authorization_request`
 
 七类治理输出也是同一个 route report 的一等字段，不是外挂能力：
 
@@ -154,6 +168,29 @@ route report 不是只给一个 action。它是一个完整路由契约，核心
 详细契约见 [references/governance-outputs.md](./references/governance-outputs.md)。
 
 ![Integrated route contract](./assets/readme-route-contract.svg)
+
+### 0.4 执行门禁与证据模型
+
+PCR 0.4 把“路由建议”和“是否可写”彻底拆开：
+
+| 字段 | 作用 |
+| --- | --- |
+| `action` | `reuse / extend / extract / new / review`，只提供工程调查与处理方向 |
+| `execution_gate.state=pass` | 相关证据完整且没有任务相关阻塞项；仍须遵守读写 envelope |
+| `execution_gate.state=conditional` | 只剩已证明无关或不扩大的可信历史债务；必须执行前置命令并保持有界写入 |
+| `execution_gate.state=blocked` | 存在 unknown/incomplete、任务相关 P0/P1、owner/canonical/public API/lifecycle/高风险问题或硬不变量冲突 |
+
+门禁不重新扫描仓库，也不做第二套路由推理。所有结果都由一个版本化 policy table 对 schema-valid typed findings 做确定性归约。每条 finding 包含稳定 `finding_id`、来源、严重级、全局/闭包/局部不变量分类、delta、task relevance、evidence status、policy rule、路径/能力、相关性链路与证据摘要。
+
+`gate_shadow` 仅保留旧门禁与新门禁的对照诊断；0.4 中 `execution_gate.authoritative=true`，旧门禁不再决定写入。`output_complete=false` 或无法满足新版精度的 schema-v1 输入必须形成 unknown/incomplete finding 并阻塞，不能用乐观默认值补齐。
+
+统一入口：
+
+```powershell
+python scripts/run_change_flow.py --repo <repo-root> --request "Add invoice refund support" --changed-path services/billing/refund.py --format compact-json
+```
+
+默认 compact 输出始终保留不可投影的安全信封：`execution_gate`、`veto_reasons`、`allowed_write_paths`、`forbidden_write_paths`、`unknown_evidence`、`artifact_path`、`artifact_digest`、`output_complete`。完整 route、checks、findings、cache/baseline 证据写入内容寻址 artifact；`--format full-json` 返回完整报告，`--format artifact-reference` 返回最小引用，`--field` 只能增加普通字段，`--exclude-field` 不能隐藏安全字段。
 
 ## 安装
 
@@ -224,7 +261,7 @@ Harness 官方社区发现以公开 GitHub 仓库的 `dsh-plugin` topic 为入�
 
 安装器使用 staging、完整载荷递归哈希、递归 Python 编译、治理 API probe 和原子替换。只有新副本完整通过校验后才替换旧 skill；失败时会恢复旧安装，避免顶层脚本、`router_support`、schemas、文档或 DSH provider 出现跨版本混装。
 
-源码 checkout 和安装目标必须是不同路径。如果当前 Git checkout 已位于任一目标的 `skills/project-change-router`，不要用安装器覆盖它；需要同时安装多个目标时使用独立 checkout，或只安装其他目标。`--verify-only` 必须读取 0.3 原子安装建立的可信 manifest；没有该 manifest 的旧副本需要先原子重装一次，之后哈希验证才有来源完整性意义。
+源码 checkout 和安装目标必须是不同路径。如果当前 Git checkout 已位于任一目标的 `skills/project-change-router`，不要用安装器覆盖它；需要同时安装多个目标时使用独立 checkout，或只安装其他目标。`--verify-only` 必须读取原子安装建立的可信 manifest；没有该 manifest 的旧副本需要先原子重装一次，之后哈希验证才有来源完整性意义。
 
 ## 从旧版安全升级
 
@@ -259,6 +296,7 @@ python <new-skill-root>\scripts\check_public_api.py --repo <existing-repo> --com
 python <new-skill-root>\scripts\check_structure.py --repo <existing-repo> --comparison-commit <trusted-base-commit> --format json
 python <new-skill-root>\scripts\run_evaluation.py --repo <existing-repo> --format json
 python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-path <known-path> --strict-completeness --format json
+python <new-skill-root>\scripts\run_change_flow.py --repo <existing-repo> --request "Compatibility check only" --changed-path <known-path> --format compact-json
 ```
 
 5. 验证通过后直接继续使用原 bundle。不要仅仅因为升级 skill 就运行 `bootstrap_router.py` 或 `rebuild_index.py`。
@@ -266,11 +304,13 @@ python <new-skill-root>\scripts\check_reuse.py --repo <existing-repo> --changed-
 兼容保证：
 
 - 新版本继续读取 schema v1 bundle。
-- 0.3 新增架构治理 API v1，同时保持 reuse engine API v2。
+- 0.4 使用架构治理 API v2、typed finding / gate / change flow / authorization API v1，并保持 reuse engine API v2。
+- 所有新版报告带统一 `runtime_identity`，绑定 skill version、Git commit（可用时）、安装载荷摘要、schema/API/policy/parser 版本。缓存、baseline、finding、授权与 artifact 都绑定该身份。
 - schema v1 的新增 evaluation 字段保持 optional；runtime 使用安全默认值且不写回旧 YAML，缺少或显式关闭 evaluation enforcement 都保持 `review_only`，不能授予写入权限。
+- schema v1 无法提供 typed finding、relevance closure 或 trusted baseline 所需精度时，0.4 输出 `unknown` 并让 execution gate 保持 blocked；它不会伪造精确度，也不会把新字段写回旧 bundle。
 - `normal` 只接受至少 30 个带 `curated_case_ids` 的真实案例、完整六类校准矩阵、明确 capability 期望以及合法 attestation；阈值只能收紧，生成案例和缺少 provenance 的旧案例始终保持 `review_only`。
 - 旧 bundle 没有 `reuse_scan_scope`、`reuse_scan_runtime` 或 `reuse_scan_retention` 时，代码使用新默认值，但不会写回或改动 YAML。
-- 新 fingerprint、checkpoint、canonical 和 diagnostic 默认写到用户缓存目录，不写入目标仓库，也不要求修改目标仓库 `.gitignore`。
+- 新 fingerprint、checkpoint、canonical、diagnostic、flow artifact、baseline 和 authorization manifest 默认写到用户缓存目录，不写入目标仓库，也不要求修改目标仓库 `.gitignore`。
 - 安装器不会搜索任何项目目录，不会修改已有 profile、manual feedback、evaluation case、owner 或 lifecycle 数据。
 - 旧 bundle 中错误的仓库级 `** -> concrete capability` 映射，在存在更具体映射时不会扩大 reuse 扫描范围；治理审计仍会提示修正元数据。
 - “旧 bundle 可读”不表示历史报告永远满足新版输出 schema；需要作为当前样例或 CI fixture 使用的报告应按当前报告契约重新生成。
@@ -398,21 +438,25 @@ DeepSeek Harness 中也使用 whitespace-bounded slash invocation；或者让模
 /project-change-router resolve the correct capability entry for this change
 ```
 
-命令行解析一次变更：
+推荐用统一 flow 解析并检查一次变更：
 
 ```powershell
-python scripts/resolve_entry.py --repo <repo-root> --request "Add invoice refund support" --changed-path services/billing/refund.py --format json
+python scripts/run_change_flow.py --repo <repo-root> --request "Add invoice refund support" --changed-path services/billing/refund.py --format compact-json
 ```
 
-也可以从请求文件读取：
+也可以从请求文件读取；需要单独排查路由时仍可使用兼容的 `resolve_entry.py`：
 
 ```powershell
+python scripts/run_change_flow.py --repo <repo-root> --request-file request.md --changed-path services/billing/refund.py --format artifact-reference --output flow-report.json
 python scripts/resolve_entry.py --repo <repo-root> --request-file request.md --changed-path services/billing/refund.py --format json --output route-report.json
 ```
 
 解析后执行规则：
 
-- 如果 `action=review`：不要自动写产品代码；先执行 `safe_next_steps`、补证据、做只读分析，必要时向用户请求 scoped override。
+- 如果 `execution_gate.state=blocked`：禁止产品代码写入；按 decisive finding、unknown evidence 和 required commands 补证据或进入有来源的授权流程。
+- 如果 `execution_gate.state=conditional`：先执行全部 required commands，只在返回的 allowed paths 内写入；它只适用于已证明无关或不扩大的可信历史债务。
+- 如果 `execution_gate.state=pass`：完成精确 must-read 后在 envelope 内推进。
+- `action=review` 只表示优先调查、补 profile 或协调，不自行阻塞；下面所有 action 也都不能覆盖 gate。
 - 如果 `action=reuse`：把它当成复用倾向；优先读取 `must_read_before_edit` 和 `required_reads`，不要改核心实现。
 - 如果 `action=extend`：把它当成扩展倾向；只在 `allowed_write_paths` 内扩展，避免绕过 public entry。
 - 如果 `action=extract`：把它当成抽取倾向；先确认重复面、调用方和测试，再抽共享能力。
@@ -423,23 +467,23 @@ python scripts/resolve_entry.py --repo <repo-root> --request-file request.md --c
 建议在无人值守计划或长期任务中加入：
 
 ```text
-Before any feature-level create, modify, delete, merge, deprecate, or migration work, invoke project-change-router for the target repository. Use it as a direction index and guardrail system, not as an automatic architecture decision engine.
+Before any feature-level create, modify, delete, merge, deprecate, or migration work, invoke project-change-router and run run_change_flow.py for the target repository. Use PCR as a direction index and guardrail system, not as an automatic architecture decision engine.
 
-Treat mandatory guardrails as binding: must_read_before_edit, allowed_write_paths, forbidden_write_paths, veto_reasons, canonical root, owner, public entry, lifecycle review, and duplicate-implementation warnings must be respected before product-code writes.
+Read execution_gate before action. execution_gate.state is the authoritative write decision. For blocked, do not write product code. For conditional, run every required_command and keep writes inside the bounded envelope. For pass, still obey the envelope and precise must-read targets.
 
-Treat action, recommended_next_steps, safe_next_steps, analysis_directions, profile_repair_hints, and why_not_actions as structured guidance for source-code analysis and user-confirmed decisions, not final architecture commands.
+Treat action, including action=review, as advisory direction only. Use recommended_next_steps, safe_next_steps, analysis_directions, profile_repair_hints, and why_not_actions for source analysis and user-confirmed decisions; never turn action into a second gate.
 
-If action=review, do not implement product code automatically. Continue only with safe_next_steps, read-only analysis, profile repair proposals, or a scoped user override for the current task, phase, or changed paths. Do not reuse an override from an earlier phase.
+Never ignore veto_reasons, unknown_evidence, canonical owner/root, public entry, lifecycle findings, duplicate risk, or unresolved closure evidence. Trace them to typed findings and policy rules. Bounded or incomplete evidence cannot prove absence.
 
 Do not create a second implementation center when an existing capability or canonical root may exist. If routing evidence is weak, repair the profile or ask for confirmation instead of guessing.
 
-After routed changes, run the required closeout checks and record feedback/evaluation cases when a review, override, lifecycle change, or routing correction occurred.
+Use must_read_targets by path, symbol, and content digest. Treat directories only as inventory_targets. Run unresolved_read_targets queries and keep the target unresolved until a unique implementation is proven.
 
-Run dependency, public API, structure, freshness, evaluation, and strict-completeness reuse checks when their routed boundary is affected. Static checks supplement rather than replace logic, data, integration, and customer-flow verification.
+For an override, create an authorization_request and require explicit user confirmation before creating a grant. Bind it to task, paths, owner, route, pre-change snapshot, mutation envelope, runtime/policy identity, expiry, and use count. Never revive a consumed or invalidated grant.
 
-If evaluation is below threshold or its attestation is missing/stale, keep PCR review-only even when the capability match itself looks correct.
+After routed changes, execute post_change_closeout, rerun the affected flow/checks, and record feedback/evaluation cases after review, override, lifecycle change, false route, or routing correction.
 
-When running check_reuse, inspect result_status, completion_status, evidence_complete, and summary.scan.scope together. Only completion_status=complete with evidence_complete=true closes the duplicate check for that capability scope. A bounded, incomplete, timeout, cancelled, or error result requires targeted source analysis and must not be reported as proof that no duplicate implementation exists.
+Keep full diagnostics in the content-addressed artifact. In the main context retain the compact safety envelope, decisive delta, exact reads, and next command. Never hide a safety-envelope field through projection.
 ```
 
 更完整的可复制版本见 [examples/agent-workflows/unattended-plan-prompt.md](./examples/agent-workflows/unattended-plan-prompt.md)。
@@ -452,7 +496,9 @@ When running check_reuse, inspect result_status, completion_status, evidence_com
 | --- | --- |
 | 初次接入仓库 | `python scripts/bootstrap_router.py --repo <repo-root> --format json` |
 | 仓库结构大改后 | `python scripts/rebuild_index.py --repo <repo-root> --format json` |
+| 统一路由、检查与收口计划 | `python scripts/run_change_flow.py --repo <repo-root> --request "<request>" --changed-path <path> --format compact-json` |
 | 修改前解析路由 | `python scripts/resolve_entry.py --repo <repo-root> --request "<request>" --changed-path <path> --format json` |
+| 创建/授予/消费授权 | `python scripts/manage_authorization.py --repo <repo-root> <request|grant|consume|inspect> ...` |
 | 提交前校验 bundle | `python scripts/validate_router_bundle.py --repo <repo-root> --format json` |
 | 检查重复实现 | `python scripts/check_reuse.py --repo <repo-root> --changed-path <path> --format json` |
 | 检查依赖方向 | `python scripts/check_deps.py --repo <repo-root> --format json` |
@@ -465,7 +511,7 @@ When running check_reuse, inspect result_status, completion_status, evidence_com
 
 ## 架构治理
 
-PCR 0.3 把原先容易依赖人工审查的结构约束变成可回归的通用 guardrail：
+PCR 0.4 在原有可回归 guardrail 上增加 typed findings、增量全局证据、可信 baseline 和权威 execution gate：
 
 - Python 和 TypeScript/JavaScript import graph 区分 runtime 与 type-only edge，并报告 runtime cycle、解析诊断和依赖方向。
 - `architecture_baseline` 只登记精确旧债；已登记问题可以告警，新问题或净增长失败。它不是 wildcard 豁免。
@@ -479,6 +525,8 @@ PCR 0.3 把原先容易依赖人工审查的结构约束变成可回归的通用
 - evaluation attestation 或阈值不满足时保持 `review_only`，不能因为 capability 命中正确就假定 action 和写入授权也可靠。
 
 现有债务应先建立精确 baseline 来阻止新增，再由后续治理包持续降低 baseline；不能通过扩大 ignore、弱化规则或伪造 evaluation case 获得通过。字段、退出条件和 CI 组合见 [references/architecture-governance.md](./references/architecture-governance.md)。
+
+flow 中的 evidence baseline 还有更严格的来源约束：首次扫描、脏工作树、bounded/incomplete 结果只能成为 `candidate_snapshot` 或 `unknown`。只有干净 commit 上的完整候选、可信 CI 快照，或用户明确接受的精确 fingerprint 才能晋升为 `trusted_baseline`。baseline 绑定 commit、profile、bundle、structure、indexed paths、scope、tool/runtime、policy 和 evidence digest；后续身份变化会失效，旧版本保存在 history 中而不是被覆盖。delta 会明确报告 new、expanded、unchanged、reduced 和 resolved。
 
 ## Reuse 扫描运行时
 
@@ -505,6 +553,8 @@ changed paths
 - test path 优先使用同 capability 的 related tests、test bindings 和 owner surface，不默认比较所有产品模块。
 - 相同文件对只计算一次；多个 capability 命中同一重复对时合并 capability 列表和最高严重度。
 - 超过全文比较大小限制但 fingerprint 高度相似的文件会输出 P2 `duplicate-fingerprint-candidate`，要求 agent 做定向源码分析；它不是精确重复结论。
+- 每次 flow 还会独立统计 `intra_capability`、`cross_capability` 和 `extended` 三条通道。`new`、`extract`、lifecycle 请求必须运行 extended；shared/canonical surface 仍会触发跨 capability 检查。
+- 每条通道独立携带 scope digest、coverage、预算、完成状态、跳过原因和 evidence digest。任一 required channel 为 bounded/incomplete 时，全局重复结论只能是 `not_proven`。
 
 ### Fingerprint 缓存
 
@@ -604,6 +654,17 @@ python scripts/check_reuse.py --repo <repo-root> --cleanup-only --format json
 - P2：维护建议，不阻塞。
 
 ## 人工反馈与持续校准
+
+### 有界授权 manifest
+
+`authorization_request` 只是对当前 task/path/owner/route/pre-change snapshot/mutation envelope 的请求草案，不能创造权限。用户明确确认后，使用 `manage_authorization.py grant` 记录 grant；默认单次使用、24 小时过期，可显式授权最多 100 次且最长 30 天。每次状态变化进入摘要链 audit event，任何上下文、runtime/policy 或 mutation 变化都会失效；已 consumed、expired、invalidated 或 rejected 的 grant 不能因输入相同而恢复。
+
+```powershell
+python scripts/manage_authorization.py --repo <repo-root> request --route-report <full-flow-report.json>
+python scripts/manage_authorization.py --repo <repo-root> grant --request-id <request-id> --authorization-source user --confirmation "<exact confirmation>"
+python scripts/manage_authorization.py --repo <repo-root> consume --grant-id <grant-id> --route-report <current-full-flow-report.json>
+python scripts/manage_authorization.py --repo <repo-root> inspect --grant-id <grant-id>
+```
 
 ![Continuous router calibration loop](./assets/readme-feedback-loop.svg)
 
@@ -705,6 +766,7 @@ Bundle 样例：
 - [references/schema-overview.md](./references/schema-overview.md)
 - [references/architecture-governance.md](./references/architecture-governance.md)
 - [references/reuse-scan-runtime.md](./references/reuse-scan-runtime.md)
+- [references/typed-findings-gate-todo.md](./references/typed-findings-gate-todo.md)
 
 ## 脚本列表
 
@@ -720,6 +782,8 @@ Bundle 样例：
 - `scripts/check_index_freshness.py`
 - `scripts/check_bundle_governance.py`
 - `scripts/run_evaluation.py`
+- `scripts/run_change_flow.py`
+- `scripts/manage_authorization.py`
 - `scripts/sync_feedback.py`
 - `scripts/validate_router_bundle.py`
 
@@ -746,6 +810,7 @@ GitHub Actions workflow 位于 [.github/workflows/ci.yml](./.github/workflows/ci
 - central growth、800/1200 文件规模、forbidden root 与 exclusive owner structure check。
 - route evaluation。
 - capability-scoped reuse scan、隔离 worker 和严格完整性检查。
+- typed finding schema、execution gate replay、可信 baseline、增量缓存、三通道 reuse、compact flow 与 authorization 状态机回归。
 - 临时目录中的原子安装与 `--verify-only` 完整载荷校验。
 
 ## 边界与风险
@@ -756,11 +821,11 @@ GitHub Actions workflow 位于 [.github/workflows/ci.yml](./.github/workflows/ci
 - 没有 profile 时，结果会偏保守。
 - generated-only evaluation 只能说明系统自洽，不代表架构成熟。
 - capability 命中正确不代表 action、secondary contract 或写入授权可靠；evaluation 未达阈值时仍为 `review_only`。
-- `review_required=true` 或 `forbidden_write_paths=["**"]` 时，agent 不应自动写产品代码；可以做只读分析、补证据、修 profile 建议或请求 scoped override。
-- `decision_confidence=high` 不代表可以写；它可能代表“很确定应该停”。
-- `action` 是建议动作，不是最终工程命令；写入边界、veto、owner、canonical root 和生命周期约束优先级更高。
+- 只有 `execution_gate.state` 决定当前写入状态；`action=review`、`review_required` 和 confidence 都不是独立门禁。
+- `decision_confidence=high` 只说明 action/decision basis 稳定，不提供写权限。
+- `action` 是建议动作，不是最终工程命令；execution gate、安全信封、typed findings、owner、canonical root 和生命周期约束优先级更高。
 - `check_reuse` 的 `result_status=pass` 只有在 `completion_status=complete` 且 `evidence_complete=true` 时才表示目标 scope 已完成；bounded、timeout 和 incomplete 只能作为定向分析证据。
-- 生命周期操作，例如 delete、merge、deprecate、replace、migrate，必须 review-first。
+- 生命周期操作，例如 delete、merge、deprecate、replace、migrate，会产生强制 lifecycle evidence/gate；`review` 只是建议的调查方向。
 - 这个 skill 给方向、证据和约束，最终实现方案仍应来自真实代码分析、测试和用户确认。
 
 ## 许可证

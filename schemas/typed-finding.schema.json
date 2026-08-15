@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-change-router.dev/schemas/typed-finding.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "finding_id",
+    "type",
+    "severity",
+    "invariant_class",
+    "origin",
+    "delta_state",
+    "task_relevance",
+    "evidence_status",
+    "policy_rule_id",
+    "paths",
+    "capabilities",
+    "relevance_trace",
+    "evidence_digest",
+    "evidence",
+    "message"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "finding_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "type": { "type": "string", "minLength": 1 },
+    "severity": { "enum": ["P0", "P1", "P2", "P3", "info"] },
+    "invariant_class": {
+      "enum": ["always_global", "closure_global", "task_local"]
+    },
+    "origin": { "type": "string", "minLength": 1 },
+    "delta_state": {
+      "enum": [
+        "task_local_new",
+        "task_local_expanded",
+        "baseline_unchanged",
+        "baseline_reduced",
+        "resolved",
+        "unknown"
+      ]
+    },
+    "task_relevance": { "enum": ["relevant", "unrelated", "unknown"] },
+    "evidence_status": {
+      "enum": ["complete", "bounded", "incomplete", "stale", "invalid", "unavailable"]
+    },
+    "policy_rule_id": { "type": "string", "minLength": 1 },
+    "paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "relevance_trace": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "evidence_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "evidence": { "type": "object" },
+    "message": { "type": "string" }
+  },
+  "additionalProperties": false
+}

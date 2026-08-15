@@ -1,35 +1,41 @@
 # Architecture Governance
 
-PCR 0.3 adds repository-neutral architecture checks to the existing routing contract. These checks do not choose an architecture for the user. They verify that the repository's declared owners, dependency direction, structure baselines, freshness evidence, and route calibration still match the code being changed.
+PCR 0.4 integrates repository-neutral architecture checks with typed findings and one authoritative execution gate. These checks do not choose an architecture for the user. They verify that declared owners, dependency direction, structure baselines, freshness evidence, and route calibration still match the code being changed.
 
 ## Contract and Compatibility
 
-- `skill_version`: `0.3.x`
-- `architecture_governance_api_version`: `1`
-- `evaluation_engine_version`: `1`, bound to `architecture_governance_api_version`
+- `skill_version`: `0.4.x`
+- `architecture_governance_api_version`: `2`
+- `typed_finding_schema_version`: `1`
+- `gate_policy_version`: `1`
+- `change_flow_api_version`: `1`
+- `authorization_api_version`: `1`
 - `reuse_engine_api_version`: remains `2`
 - Existing bundle schema v1 remains readable.
-- Missing 0.3 policy fields receive runtime defaults; a read-only check does not write them into the bundle.
+- Missing 0.4 precision becomes unknown/incomplete evidence; a read-only check does not write defaults into the bundle.
 - Installing the skill never bootstraps, rebuilds, or rewrites a repository-local bundle.
 
 Any routing or evaluation semantic change that can alter attested predictions must bump `evaluation_engine_version` and `architecture_governance_api_version` together. The release consistency test rejects drift between the runtime constant and `skill-version.json`.
 
-The architecture checks are part of PCR's mandatory guardrail layer. The route `action` remains advisory, but confirmed owners, write constraints, dependency violations, freshness failures, and high-risk vetoes remain binding for automatic product writes.
+Architecture checks emit typed findings in PCR's mandatory guardrail layer. The route `action` remains advisory. One deterministic policy table reduces findings to `execution_gate=pass|conditional|blocked`; only that gate and its safety envelope decide current write authority.
 
 ## Canonical Check Sequence
 
-For a routed code or boundary change, run:
+For a routed code or boundary change, use this overall sequence. `run-change-flow` orchestrates the middle route/check block; validation and evaluation remain explicit bundle-maintenance steps:
 
 ```text
-resolve-entry
-  -> validate-router-bundle
-  -> check-bundle-governance
-  -> check-index-freshness
-  -> check-deps
-  -> check-public-api
-  -> check-structure
-  -> run-evaluation
-  -> check-reuse
+validate-router-bundle
+  -> run-evaluation when route truth changed
+  -> run-change-flow
+       -> resolve-entry
+       -> check-bundle-governance
+       -> check-index-freshness
+       -> check-deps
+       -> check-public-api
+       -> check-structure
+       -> check-reuse
+       -> typed findings + baseline delta + relevance closure
+       -> execution gate + compact safety envelope
 ```
 
 The sequence is evidence aggregation, not a substitute for capability tests. Static architecture checks must be combined with the repository's logic, data, integration, and customer-flow verification where those categories apply.
@@ -84,7 +90,7 @@ Typical central owners include an application composition root, global database 
 
 - Below 800 lines: no size finding.
 - Crossing 800 or 1200 lines is blocking.
-- Net growth from an 800-1199-line comparison baseline is review-blocking and requires split evidence according to repository policy.
+- Net growth from an 800-1199-line comparison baseline is gate-blocking and requires split evidence according to repository policy.
 - Any net growth from a 1200+ comparison baseline is a hard failure unless an exact, time-bounded exception applies.
 
 Existing large files are debt baselines, not permanent exemptions. A later governance package should reduce the baseline.
@@ -157,13 +163,17 @@ Caller-supplied `--changed-path` values are unioned with real staged, unstaged, 
 
 An unmapped changed path fails freshness. Do not remove the path, enlarge ignore patterns, or rewrite evidence to make the check pass. Add or repair the correct owner/path mapping after source review.
 
-Route resolution does not erase a failing global freshness report. It derives one task-local gate from the complete delta between the indexed source, `HEAD`, the index, the worktree, and untracked files. Paths are compared with the routed capability's forward and reverse dependency closure:
+Route resolution does not erase a failing global freshness report. It derives typed findings from the complete delta between the indexed source, `HEAD`, the index, the worktree, and untracked files. Paths are compared with the routed capability's forward and reverse dependency closure:
 
 - `task_local_new`: a changed path intersects that closure and remains blocking;
+- `task_local_expanded`: a known relevant finding increased and remains blocking;
 - `baseline_unchanged`: all failing delta paths are mapped and proven outside that closure, so the global debt stays visible without blocking this route;
+- `baseline_reduced` or `resolved`: trusted historical debt decreased or disappeared;
 - `unknown`: an unmapped path, incomplete snapshot, stale entry, parser diagnostic, or other unlocalizable evidence remains blocking.
 
-The route report binds authorization to `authorization_context` and `route_fingerprint`. The fingerprint covers source and structure identity, routing truth, paths, capabilities, action, override requirements, and the mutation envelope. Feedback must carry the original fingerprint, so changed input or a rewritten route report invalidates the authorization record.
+The route report binds compatibility feedback to `authorization_context` and `route_fingerprint`. The flow separately creates an `authorization_request`; only explicit external confirmation can create a bounded grant. Grants bind source/structure/runtime/policy identity, paths, owner, canonical root, route, pre-change snapshot, and mutation envelope. Changed context invalidates them, and consumed authority never revives.
+
+Global evidence is cached, not skipped. Always-global owner/cycle/canonical/public-export/generated-pin invariants reuse a trusted snapshot only when every identity input matches. Changed paths drive recomputation of affected graph nodes and the forward/reverse closure. First scans, dirty worktrees, bounded/incomplete output, and unknown ancestry cannot become trusted baselines.
 
 ## Stable Capability Governance
 
@@ -214,10 +224,10 @@ A shadow or compatibility core is acceptable only when it records:
 - test impact;
 - measurable exit condition.
 
-Delete, merge, rename, move, or deprecate requests remain review-gated. Historical overrides are not reusable authorization for a new lifecycle transition.
+Delete, merge, rename, move, or deprecate requests remain lifecycle findings that block until required evidence and authorization are complete. `action=review` describes the investigation direction; historical overrides are not reusable authorization for a new lifecycle transition.
 
 ## CI Minimum
 
-CI should fetch sufficient Git history and pass the pull-request base commit or push `before` commit to `check_structure.py --comparison-commit`. It should run bundle validation, governance, freshness, dependency, public API, structure, evaluation, and strict-completeness reuse checks. It should also run the repository's capability tests and validate a temporary atomic installation of the skill.
+CI should fetch sufficient Git history and pass the pull-request base commit or push `before` commit to `run_change_flow.py --comparison-commit`. It should retain the digest-verified full artifact, require complete global and reuse evidence, and verify the authoritative gate plus bundle/evaluation status. It should also run repository capability tests and validate a temporary atomic installation of the skill.
 
 The checks prevent recurrence; they do not close an architecture gap by themselves. A gap closes only after the faulty path is removed or compatibly isolated, callers and imports are verified, the canonical owner is unambiguous, and a regression gate fails when the problem is reintroduced.

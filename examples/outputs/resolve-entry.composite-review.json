@@ -331,9 +331,10 @@
     "source_commit": null,
     "structure_digest": "0000000000000000000000000000000000000000000000000000000000000000",
     "routing_truth_digest": "0000000000000000000000000000000000000000000000000000000000000000",
-    "freshness_classification": "unknown"
+    "freshness_classification": "unknown",
+    "runtime_identity_digest": "f6c40637285745c88209d816e03973c1164f23e4479da36fa044dd5aa05e127c"
   },
-  "route_fingerprint": "6b1f9b5bb56a80b23025b3699aedfa3d931a1743aaf52c913fa78bad2db25dce",
+  "route_fingerprint": "b604bdb963d4057802e9f4a8d94e27b4459ec36ab486298f62195ae12f4ba38d",
   "source_of_truths": {
     "capability_catalog": {
       "generated_by": "bootstrap_router",
@@ -350,5 +351,142 @@
       "generated_at": "2026-06-11T12:40:49Z",
       "source_commit": null
     }
+  },
+  "changed_paths": [],
+  "runtime_identity": {
+    "skill_version": "0.4.0",
+    "skill_git_commit": null,
+    "installed_payload_digest": "a6d415b7b61b426b3b9b76d4f280e43303fecb02836c98f13800ea54c0ca5f73",
+    "installed_payload_source": "example_fixture",
+    "bundle_schema_compatibility": [
+      1
+    ],
+    "report_schema_version": 3,
+    "reuse_engine_api_version": 2,
+    "architecture_governance_api_version": 2,
+    "typed_finding_schema_version": 1,
+    "gate_policy_version": 1,
+    "change_flow_api_version": 1,
+    "authorization_api_version": 1,
+    "parser_versions": {
+      "python": 1,
+      "typescript": 1,
+      "java": 1
+    },
+    "identity_digest": "f6c40637285745c88209d816e03973c1164f23e4479da36fa044dd5aa05e127c"
+  },
+  "typed_findings": [
+    {
+      "schema_version": 1,
+      "finding_id": "a0ecde239185d5ecf4a40a2d781862f5d490a15a83ad6641ec7b4bd643cd67f7",
+      "type": "high_risk_surface",
+      "severity": "P0",
+      "invariant_class": "task_local",
+      "origin": "route",
+      "delta_state": "task_local_new",
+      "task_relevance": "relevant",
+      "evidence_status": "complete",
+      "policy_rule_id": "GATE-RISK-001",
+      "paths": [],
+      "capabilities": [
+        "billing-core"
+      ],
+      "relevance_trace": [
+        "capability:billing-core -> finding:high_risk_surface"
+      ],
+      "evidence_digest": "988d679525680c433f2aed01ca29fb83f06951236103a82bee702515e254bbdb",
+      "evidence": {
+        "example": "resolve-entry.composite-review",
+        "block_reason": {
+          "code": "high_risk_surface",
+          "severity": "P0",
+          "summary": "The request touches a high-risk surface."
+        }
+      },
+      "message": "The request touches a high-risk surface."
+    }
+  ],
+  "execution_gate": {
+    "state": "blocked",
+    "blocking": true,
+    "conditional": false,
+    "authoritative": true,
+    "gate_policy_version": 1,
+    "policy_rule_ids": [
+      "GATE-HARD-001",
+      "GATE-RELEVANT-001"
+    ],
+    "decisive_finding_ids": [
+      "a0ecde239185d5ecf4a40a2d781862f5d490a15a83ad6641ec7b4bd643cd67f7"
+    ],
+    "unknown_evidence": [],
+    "proposed_allowed_write_paths": [],
+    "proposed_forbidden_write_paths": [],
+    "allowed_write_paths": [],
+    "forbidden_write_paths": [
+      "**"
+    ],
+    "required_commands": [
+      "python scripts/check_reuse.py --repo <repo-root> --format json",
+      "python scripts/check_deps.py --repo <repo-root> --format json",
+      "python scripts/check_public_api.py --repo <repo-root> --format json",
+      "python scripts/check_index_freshness.py --repo <repo-root> --format json"
+    ],
+    "reason": "blocking or incomplete route evidence remains"
+  },
+  "gate_shadow": {
+    "legacy_state": "blocked",
+    "new_state": "blocked",
+    "classification": "equivalent",
+    "cutover_eligible": true,
+    "new_decisive_finding_ids": [
+      "a0ecde239185d5ecf4a40a2d781862f5d490a15a83ad6641ec7b4bd643cd67f7"
+    ],
+    "legacy_action": "review",
+    "legacy_block_reason": {
+      "code": "high_risk_surface",
+      "severity": "P0",
+      "summary": "The request touches a high-risk surface."
+    }
+  },
+  "must_read_targets": [
+    {
+      "path": "services/billing/service.py",
+      "symbol": "$entry",
+      "content_digest": "addcf9e47c55dcbca9c7b2eeb552cbe2dbf740d028056970c5922a9981f2aefe",
+      "line_hint": 1,
+      "reason": "routed required read",
+      "resolution_status": "resolved"
+    },
+    {
+      "path": "services/billing/__init__.py",
+      "symbol": "$entry",
+      "content_digest": "9498f6c56743472ff58c6b242716cf13f8b492097eb436a2b7a9240fdc11ec83",
+      "line_hint": 1,
+      "reason": "routed required read",
+      "resolution_status": "resolved"
+    }
+  ],
+  "inventory_targets": [
+    {
+      "path": "services/billing",
+      "reason": "inventory routed directory before selecting a file"
+    }
+  ],
+  "unresolved_read_targets": [],
+  "authorization_request": {
+    "state": "requested",
+    "task_id": "route-example-composite-review",
+    "route_fingerprint": "b604bdb963d4057802e9f4a8d94e27b4459ec36ab486298f62195ae12f4ba38d",
+    "pre_change_snapshot": "e2871e9368974761fa4ed25ee8e97135060baba65d7af21c0b952c456b693343",
+    "paths": [],
+    "owner": null,
+    "canonical_root": null,
+    "route": "review",
+    "mutation_envelope": {
+      "allowed_write_paths": [],
+      "forbidden_write_paths": []
+    },
+    "request_fingerprint": "ff6ede2ef97c664eda9dd5f372bd4d4e6111bb0803e6267c97d63ad999728cd4"
   }
 }

@@ -55,5 +55,27 @@
       "suggestion": "Add forbidden patterns for duplicate implementation centers, bypassed public APIs, misplaced caches, and cross-layer writes.",
       "confidence": "medium"
     }
-  ]
+  ],
+  "runtime_identity": {
+    "skill_version": "0.4.0",
+    "skill_git_commit": null,
+    "installed_payload_digest": "a6d415b7b61b426b3b9b76d4f280e43303fecb02836c98f13800ea54c0ca5f73",
+    "installed_payload_source": "example_fixture",
+    "bundle_schema_compatibility": [
+      1
+    ],
+    "report_schema_version": 3,
+    "reuse_engine_api_version": 2,
+    "architecture_governance_api_version": 2,
+    "typed_finding_schema_version": 1,
+    "gate_policy_version": 1,
+    "change_flow_api_version": 1,
+    "authorization_api_version": 1,
+    "parser_versions": {
+      "python": 1,
+      "typescript": 1,
+      "java": 1
+    },
+    "identity_digest": "f6c40637285745c88209d816e03973c1164f23e4479da36fa044dd5aa05e127c"
+  }
 }

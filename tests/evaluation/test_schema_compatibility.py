@@ -20,6 +20,7 @@ from router_support.evaluation_policy import (  # noqa: E402
 from router_support.route_authorization import (  # noqa: E402
     route_authorization_fingerprint,
 )
+from router_support.schema_validation import validator_for_schema  # noqa: E402
 
 
 def _schema(name: str) -> dict:
@@ -71,12 +72,35 @@ def test_current_output_examples_validate_against_current_report_schemas() -> No
                 encoding="utf-8"
             )
         )
-        errors = Draft202012Validator(_schema(schema_name)).iter_errors(payload)
+        errors = validator_for_schema(
+            SKILL_ROOT / "schemas" / schema_name
+        ).iter_errors(payload)
         messages = sorted(error.message for error in errors)
         if messages:
             failures[output_name] = messages
 
     assert failures == {}
+
+
+def test_precise_read_target_schema_rejects_resolved_target_without_symbol_digest() -> None:
+    validator = validator_for_schema(
+        SKILL_ROOT / "schemas" / "precise-read-targets.schema.json"
+    )
+    target_schema = validator.schema["$defs"]["mustReadTarget"]
+    errors = list(
+        Draft202012Validator(target_schema).iter_errors(
+            {
+                "path": "app/service.py",
+                "symbol": None,
+                "content_digest": None,
+                "line_hint": None,
+                "reason": "routed required read",
+                "resolution_status": "resolved",
+            }
+        )
+    )
+
+    assert errors
 
 
 def test_route_output_examples_have_self_consistent_authorization_fingerprints() -> None:

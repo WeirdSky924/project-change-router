@@ -5,10 +5,11 @@
     "report_schema_version",
     "report_class",
     "run_id",
-    "timestamp"
+    "timestamp",
+    "runtime_identity"
   ],
   "properties": {
-    "report_schema_version": { "type": "integer", "const": 2 },
+    "report_schema_version": { "type": "integer", "const": 3 },
     "report_class": {
       "type": "string",
       "enum": ["canonical", "checkpoint", "diagnostic"]
@@ -29,7 +30,8 @@
     "summary": { "type": "object" },
     "scan": { "type": "object" },
     "artifacts": { "type": "object" },
-    "findings": { "type": "array", "items": { "type": "object" } }
+    "findings": { "type": "array", "items": { "type": "object" } },
+    "runtime_identity": { "$ref": "https://project-change-router.dev/schemas/runtime-identity.schema.json" }
   },
   "allOf": [
     {

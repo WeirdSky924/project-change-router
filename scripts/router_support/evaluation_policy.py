@@ -52,7 +52,7 @@ _REQUIRED_CALIBRATION_CATEGORIES = {
 }
 
 # Bump whenever route or evaluation semantics can change attested predictions.
-EVALUATION_ENGINE_VERSION = 1
+EVALUATION_ENGINE_VERSION = 2
 
 
 def _calibration_category_is_consistent(

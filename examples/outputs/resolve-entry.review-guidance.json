@@ -302,9 +302,10 @@
     "source_commit": null,
     "structure_digest": "0000000000000000000000000000000000000000000000000000000000000000",
     "routing_truth_digest": "0000000000000000000000000000000000000000000000000000000000000000",
-    "freshness_classification": "unknown"
+    "freshness_classification": "unknown",
+    "runtime_identity_digest": "f6c40637285745c88209d816e03973c1164f23e4479da36fa044dd5aa05e127c"
   },
-  "route_fingerprint": "3254c4aae54f9766f743b8c3b14773d558352668ebb08de286f559fc51d25eb7",
+  "route_fingerprint": "597bff8ced862f38805d4a3416404f8fbd953dcac855003e9d5191fc94adb922",
   "source_of_truths": {
     "capability_catalog": {
       "generated_by": "bootstrap_router",
@@ -321,5 +322,137 @@
       "generated_at": "2026-06-11T12:05:30Z",
       "source_commit": "f4b7c90b77828d5cad306acf7ec8d84962926744"
     }
+  },
+  "changed_paths": [],
+  "runtime_identity": {
+    "skill_version": "0.4.0",
+    "skill_git_commit": null,
+    "installed_payload_digest": "a6d415b7b61b426b3b9b76d4f280e43303fecb02836c98f13800ea54c0ca5f73",
+    "installed_payload_source": "example_fixture",
+    "bundle_schema_compatibility": [
+      1
+    ],
+    "report_schema_version": 3,
+    "reuse_engine_api_version": 2,
+    "architecture_governance_api_version": 2,
+    "typed_finding_schema_version": 1,
+    "gate_policy_version": 1,
+    "change_flow_api_version": 1,
+    "authorization_api_version": 1,
+    "parser_versions": {
+      "python": 1,
+      "typescript": 1,
+      "java": 1
+    },
+    "identity_digest": "f6c40637285745c88209d816e03973c1164f23e4479da36fa044dd5aa05e127c"
+  },
+  "typed_findings": [
+    {
+      "schema_version": 1,
+      "finding_id": "5e4ebf9953523ea2a8c67f68e4d36ec5e9c84bf74896e7d49169a91f67226aca",
+      "type": "owner_unknown",
+      "severity": "P0",
+      "invariant_class": "always_global",
+      "origin": "ownership",
+      "delta_state": "unknown",
+      "task_relevance": "relevant",
+      "evidence_status": "incomplete",
+      "policy_rule_id": "GATE-OWNER-001",
+      "paths": [],
+      "capabilities": [
+        "scripts"
+      ],
+      "relevance_trace": [
+        "capability:scripts -> finding:owner_unknown"
+      ],
+      "evidence_digest": "fdf1301e178316ccc6dfb114b292d0451b6f19f856f280b1c43f7e27e3be039d",
+      "evidence": {
+        "example": "resolve-entry.review-guidance",
+        "block_reason": {
+          "code": "early_repo_policy_guardrail",
+          "severity": "P1",
+          "summary": "Early repository policy blocks automatic routing."
+        }
+      },
+      "message": "Early repository policy blocks automatic routing."
+    }
+  ],
+  "execution_gate": {
+    "state": "blocked",
+    "blocking": true,
+    "conditional": false,
+    "authoritative": true,
+    "gate_policy_version": 1,
+    "policy_rule_ids": [
+      "GATE-UNKNOWN-001",
+      "GATE-HARD-001",
+      "GATE-RELEVANT-001"
+    ],
+    "decisive_finding_ids": [
+      "5e4ebf9953523ea2a8c67f68e4d36ec5e9c84bf74896e7d49169a91f67226aca"
+    ],
+    "unknown_evidence": [
+      "5e4ebf9953523ea2a8c67f68e4d36ec5e9c84bf74896e7d49169a91f67226aca"
+    ],
+    "proposed_allowed_write_paths": [],
+    "proposed_forbidden_write_paths": [],
+    "allowed_write_paths": [],
+    "forbidden_write_paths": [
+      "**"
+    ],
+    "required_commands": [
+      "python scripts/check_reuse.py --repo <repo-root> --format json",
+      "python scripts/check_deps.py --repo <repo-root> --format json",
+      "python scripts/check_public_api.py --repo <repo-root> --format json",
+      "python scripts/check_index_freshness.py --repo <repo-root> --format json"
+    ],
+    "reason": "blocking or incomplete route evidence remains"
+  },
+  "gate_shadow": {
+    "legacy_state": "blocked",
+    "new_state": "blocked",
+    "classification": "equivalent",
+    "cutover_eligible": true,
+    "new_decisive_finding_ids": [
+      "5e4ebf9953523ea2a8c67f68e4d36ec5e9c84bf74896e7d49169a91f67226aca"
+    ],
+    "legacy_action": "review",
+    "legacy_block_reason": {
+      "code": "early_repo_policy_guardrail",
+      "severity": "P1",
+      "summary": "Early repository policy blocks automatic routing."
+    }
+  },
+  "must_read_targets": [
+    {
+      "path": "bootstrap_router.py",
+      "symbol": "$entry",
+      "content_digest": "d4749b6bec6fac1253dd67daeb3693afaf20128f7cb93aa50a17ef06e1621725",
+      "line_hint": 1,
+      "reason": "routed required read",
+      "resolution_status": "resolved"
+    }
+  ],
+  "inventory_targets": [
+    {
+      "path": "scripts",
+      "reason": "inventory routed directory before selecting a file"
+    }
+  ],
+  "unresolved_read_targets": [],
+  "authorization_request": {
+    "state": "requested",
+    "task_id": "route-20260611-122846-cf37f769",
+    "route_fingerprint": "597bff8ced862f38805d4a3416404f8fbd953dcac855003e9d5191fc94adb922",
+    "pre_change_snapshot": "e2871e9368974761fa4ed25ee8e97135060baba65d7af21c0b952c456b693343",
+    "paths": [],
+    "owner": null,
+    "canonical_root": null,
+    "route": "review",
+    "mutation_envelope": {
+      "allowed_write_paths": [],
+      "forbidden_write_paths": []
+    },
+    "request_fingerprint": "45cfa603216483ddffff5b92fcac4fd4e2573ffd927fc36d2020014af1e4a9d7"
   }
 }

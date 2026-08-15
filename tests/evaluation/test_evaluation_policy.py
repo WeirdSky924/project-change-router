@@ -605,7 +605,7 @@ def _bundle(tmp_path: Path) -> tuple[dict[str, object], Path]:
     return bundle, bundle_root
 
 
-def test_missing_attestation_forces_write_route_to_review(tmp_path: Path) -> None:
+def test_missing_attestation_blocks_gate_without_rewriting_action(tmp_path: Path) -> None:
     bundle, bundle_root = _bundle(tmp_path)
     request = "Extend routing governance tooling with evaluation metrics."
     paths = ["tools/router/router_core.py"]
@@ -620,7 +620,8 @@ def test_missing_attestation_forces_write_route_to_review(tmp_path: Path) -> Non
     enforced = router_core.resolve_request(request, paths, bundle, bundle_root)
 
     assert advisory.action == "extend"
-    assert enforced.action == "review"
+    assert enforced.action == "extend"
+    assert enforced.execution_gate["state"] == "blocked"
     assert enforced.block_reason["code"] == "evaluation_threshold_not_met"
     assert enforced.allowed_write_paths == []
     assert "**" in enforced.forbidden_write_paths
@@ -640,7 +641,8 @@ def test_valid_attestation_preserves_advisory_action_and_stale_digest_blocks(
     stale = router_core.resolve_request(request, paths, bundle, bundle_root)
 
     assert valid.action == "extend"
-    assert stale.action == "review"
+    assert stale.action == "extend"
+    assert stale.execution_gate["state"] == "blocked"
     assert stale.block_reason["code"] == "evaluation_threshold_not_met"
 
 
@@ -711,7 +713,8 @@ def test_untrusted_capability_owner_blocks_advisory_write_route(
         enforce_evaluation_policy=False,
     )
 
-    assert decision.action == "review"
+    assert decision.action == "extend"
+    assert decision.execution_gate["state"] == "blocked"
     assert decision.block_reason["code"] == "unclear_owner"
     assert decision.allowed_write_paths == []
     assert "**" in decision.forbidden_write_paths
